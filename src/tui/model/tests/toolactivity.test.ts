@@ -64,6 +64,30 @@ describe("toolActivityRow", () => {
     expect(view(done!)).toMatchObject({ running: false });
   });
 
+  it("reads an OpenCode subagent call an interrupt aborted as stopped, and one that failed as failed", () => {
+    const subagent = (errorType: string, error: string) =>
+      toolActivityRow(
+        event({
+          provider: "opencode",
+          type: "tool.execute.completed",
+          tool: "subagent",
+          raw: {
+            callID: "call_sub",
+            tool: "subagent",
+            state: { status: "error", input: { agent: "general", description: "Sleep 30 seconds" }, error, errorType },
+          },
+        }),
+      )!;
+    const aborted = subagent("aborted", "Step interrupted");
+    expect((aborted.payload.data as { state: { stopped?: boolean } }).state.stopped).toBe(true);
+    expect(view(aborted)).toMatchObject({ kind: "agent", subject: "Sleep 30 seconds", state: "stopped", running: false });
+    const failed = subagent("tool.execution", "Unable to start the subagent");
+    expect((failed.payload.data as { state: { stopped?: boolean } }).state.stopped).toBeUndefined();
+    expect(view(failed)).toMatchObject({ kind: "agent", state: "failed" });
+    // The two differ in the ledger too: a stopped call is a different row from a failed one.
+    expect(aborted.signature).not.toBe(failed.signature);
+  });
+
   it("maps a Claude PowerShell call to the same command row as Bash", () => {
     const row = toolActivityRow(
       event({
@@ -81,90 +105,6 @@ describe("toolActivityRow", () => {
       event({ provider: "claude", tool: "Read", raw: { toolUseId: "toolu_2", input: { file_path: "/repo/src/app.ts" } } }),
     );
     expect(view(row!)).toMatchObject({ kind: "read", path: "src/app.ts" });
-  });
-
-  it("maps a Codex commandExecution item, including its exit code", () => {
-    const row = toolActivityRow(
-      event({
-        provider: "codex",
-        type: "tool.execute.completed",
-        raw: {
-          item: {
-            id: "item_1",
-            type: "commandExecution",
-            command: "bun test",
-            cwd: "/repo",
-            exitCode: 1,
-            durationMs: 1200,
-            aggregatedOutput: "1 failed",
-            status: "completed",
-          },
-        },
-      }),
-    );
-    expect(view(row!)).toMatchObject({
-      kind: "command",
-      command: "bun test",
-      exit: 1,
-      failed: true,
-      running: false,
-    });
-  });
-
-  it("maps a Codex fileChange item to a file row carrying the real diff", () => {
-    const row = toolActivityRow(
-      event({
-        provider: "codex",
-        type: "tool.execute.completed",
-        raw: {
-          item: {
-            id: "item_2",
-            type: "fileChange",
-            status: "completed",
-            changes: [{ path: "/repo/src/app.ts", kind: "edit", diff: "@@ -1 +1 @@\n-old\n+new\n" }],
-          },
-        },
-      }),
-    );
-    const mapped = view(row!);
-    expect(mapped.kind).toBe("file");
-    // The provider's own patch must reach the renderer, not just sit in
-    // `files[]` — asserting only the path let a dropped diff pass.
-    expect(mapped).toMatchObject({ path: "src/app.ts", running: false, added: 1, removed: 1 });
-    expect((mapped as { diff: string | null }).diff).toContain("+new");
-  });
-
-  it("ignores Codex items that are not tool calls", () => {
-    expect(toolActivityRow(event({ provider: "codex", raw: { item: { id: "i", type: "reasoning" } } }))).toBeNull();
-    expect(toolActivityRow(event({ provider: "codex", raw: {} }))).toBeNull();
-  });
-
-  it("maps a Grok ACP tool call, taking the path from its locations", () => {
-    const row = toolActivityRow(
-      event({
-        provider: "grok",
-        tool: "read",
-        raw: {
-          toolCallId: "call_7",
-          title: "Reading app.ts",
-          kind: "read",
-          status: "in_progress",
-          locations: [{ path: "/repo/src/app.ts" }],
-          rawInput: {},
-        },
-      }),
-    );
-    expect(view(row!)).toMatchObject({ kind: "read", path: "src/app.ts", running: true });
-  });
-
-  it("maps a Grok execute call to a command row", () => {
-    const row = toolActivityRow(
-      event({
-        provider: "grok",
-        raw: { toolCallId: "call_8", kind: "execute", status: "completed", rawInput: { command: "ls" } },
-      }),
-    );
-    expect(view(row!)).toMatchObject({ kind: "command", command: "ls", running: false });
   });
 
   it("maps an OpenCode tool part, reading status from the part's own state", () => {
@@ -207,6 +147,87 @@ describe("toolActivityRow", () => {
     expect(view(done!)).toMatchObject({ kind: "command", exit: 0, durationMs: 1000, running: false });
   });
 
+  describe("OpenCode v2 tools (shapes captured from a live v2.0.19 server)", () => {
+    const completed = (tool: string, input: Record<string, unknown>, output: string) =>
+      view(
+        toolActivityRow(
+          event({
+            provider: "opencode",
+            type: "tool.execute.completed",
+            tool,
+            raw: { id: `call_${tool}`, callID: `call_${tool}`, type: "tool", tool, state: { status: "completed", input, output } },
+          }),
+        )!,
+      );
+
+    it("reads the file from `path`, and a directory read as a listing", () => {
+      expect(completed("read", { path: "/repo/src/app.ts" }, "1\timport x")).toMatchObject({ kind: "read", path: "src/app.ts" });
+      expect(completed("read", { path: "/repo/src/server/mcp" }, "Read directory /repo/src/server/mcp, entries 1-5\ntests/")).toMatchObject({
+        kind: "list",
+        path: "src/server/mcp",
+      });
+    });
+
+    it("names the file `write` and `edit` change, from `path`", () => {
+      expect(completed("write", { path: "/repo/notes.txt", content: "a\nb\n" }, "Created file successfully")).toMatchObject({
+        kind: "file",
+        verb: "Write",
+        path: "repo/notes.txt",
+        added: 2,
+      });
+      expect(
+        completed("edit", { path: "/repo/notes.txt", oldString: "a\nb", newString: "a" }, "Edited notes.txt (1 replacement)"),
+      ).toMatchObject({ kind: "file", verb: "Update", path: "repo/notes.txt", removed: 1 });
+    });
+
+    it("names every file a `patch` touches", () => {
+      const row = toolActivityRow(
+        event({
+          provider: "opencode",
+          type: "tool.execute.completed",
+          tool: "patch",
+          raw: {
+            callID: "call_p",
+            tool: "patch",
+            state: { status: "completed", input: { patchText: "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-x\n+y\n*** Add File: src/b.ts\n+z\n*** End Patch" } },
+          },
+        }),
+      );
+      expect((row!.payload.data as { files: unknown }).files).toEqual([{ path: "src/a.ts" }, { path: "src/b.ts" }]);
+      expect(view(row!)).toMatchObject({ kind: "file", path: "src/a.ts", fileCount: 2 });
+    });
+
+    it("shows Code Mode's `execute` as the tools it called, not a shell command", () => {
+      const code = 'const r1 = search({query: "moxen"});\nconst r2 = search({query: "browser"});\nawait tools.moxen.delegate({});\ntools.opencode.models({});';
+      expect(completed("execute", { code }, "{}")).toEqual({ kind: "tool", tool: "Ran code", detail: "search ×2, moxen.delegate, models", running: false });
+    });
+
+    it("keeps moxen's lent checklist out of the transcript, called directly or from Code Mode", () => {
+      expect(completed("moxen_todos", { todos: [{ content: "Write tests", status: "in_progress" }] }, '{"recorded":1}')).toMatchObject({
+        kind: "todos",
+        items: [{ content: "Write tests", status: "in_progress" }],
+      });
+      expect(completed("execute", { code: 'await tools.moxen.todos({todos: []});\nawait tools.moxen.todos({todos: []});' }, "{}")).toMatchObject({ kind: "todos" });
+      expect(completed("execute", { code: "await tools.moxen.todos({todos: []}); search({query: 'x'})" }, "{}")).toMatchObject({ kind: "tool" });
+    });
+
+    it("shows a `subagent` call as the native subagent it started", () => {
+      expect(
+        completed(
+          "subagent",
+          { agent: "general", description: "Report research guidance text", prompt: "Read-only task: …" },
+          '<subagent sessionID="ses_1" state="completed">\nRESEARCH_GUIDANCE at line 51\n</subagent>',
+        ),
+      ).toMatchObject({ kind: "agent", source: "native", title: "general", subject: "Report research guidance text", state: null, running: false });
+      expect(completed("subagent", { agent: "explore", description: "Map auth", prompt: "…", background: true }, '<subagent sessionID="ses_2" state="running">')).toMatchObject({
+        kind: "agent",
+        title: "explore",
+        state: "sent to the background",
+        running: false,
+      });
+    });
+  });
+
   it("keeps a signature that changes only when the row says something new", () => {
     const base = {
       provider: "opencode" as const,
@@ -232,7 +253,6 @@ describe("toolActivityRow", () => {
   it("returns null rather than throwing on a shape it cannot read", () => {
     expect(toolActivityRow(event({ provider: "claude", raw: undefined }))).toBeNull();
     expect(toolActivityRow(event({ provider: "claude", raw: { input: {} } }))).toBeNull();
-    expect(toolActivityRow(event({ provider: "grok", raw: { status: "completed" } }))).toBeNull();
     expect(toolActivityRow(event({ provider: "opencode", raw: { tool: "bash" } }))).toBeNull();
   });
 });

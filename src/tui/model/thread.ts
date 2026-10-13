@@ -199,7 +199,7 @@ function decodeContextUsage(raw: Record<string, unknown>): ContextUsage | null {
  * `snapshotContextUsage` below expects. The turn runner writes one as each
  * turn settles (`core/threads/execute.ts` `recordContextUsage`); cache and
  * auto-compact fields are present when the provider reports them
- * (Claude: all of them; Codex: cache only) and null otherwise.
+ * (Claude: all of them; OpenCode: cache only) and null otherwise.
  */
 function decodeContextWindowActivity(activity: ActivityEnvelope): ContextUsage | null {
   const payload = asRecord(activity.payload);
@@ -605,12 +605,32 @@ const AGENT_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task"]);
 function withSubagentState(activities: readonly ActivityEnvelope[]): ActivityEnvelope[] {
   const agentCalls = new Set<string>();
   const status = new Map<string, string>();
+  // OpenCode: a background `subagent` call names its child session in its
+  // result, and the child's own start/stop rows say where it stands.
+  const children = new Map<string, string>();
+  const childStatus = new Map<string, string>();
   for (const activity of activities) {
     const payload = asRecord(activity.payload);
-    const tool = asRecord(payload?.data)?.tool;
+    const data = asRecord(payload?.data);
+    const tool = data?.tool;
     if (typeof tool === "string" && AGENT_TOOLS.has(tool) && typeof payload?.toolCallId === "string") agentCalls.add(payload.toolCallId);
     if (activity.kind.startsWith("background.") && typeof payload?.toolUseId === "string" && typeof payload.status === "string") {
       status.set(payload.toolUseId, payload.status);
+    }
+    const state = asRecord(data?.state);
+    if (tool === "subagent" && asRecord(state?.input)?.background === true && typeof payload?.toolCallId === "string") {
+      const child = opencodeChildOf(state, payload);
+      if (child !== null) children.set(child, payload.toolCallId);
+    }
+    if (activity.kind === "subagent" && typeof payload?.agentId === "string" && typeof payload.status === "string") {
+      childStatus.set(payload.agentId, payload.status === "stopped" ? "completed" : "started");
+    }
+  }
+  for (const [child, callId] of children) {
+    const said = childStatus.get(child);
+    if (said !== undefined) {
+      agentCalls.add(callId);
+      status.set(callId, said);
     }
   }
   if (agentCalls.size === 0) return [...activities];
@@ -621,6 +641,17 @@ function withSubagentState(activities: readonly ActivityEnvelope[]): ActivityEnv
     if (typeof callId !== "string" || !agentCalls.has(callId) || !status.has(callId)) return [activity];
     return [{ ...activity, payload: { ...payload, backgroundStatus: status.get(callId) } }];
   });
+}
+
+/**
+ * The child session a background OpenCode `subagent` call started, named in
+ * its result: `<subagent sessionID="ses_…" state="running">` in one shape,
+ * `The subagent is working in the background (sessionID: ses_…)` in the one a
+ * live v2 server sends. Either form, from the call's output or its detail.
+ */
+function opencodeChildOf(state: Record<string, unknown> | null, payload: Record<string, unknown> | null): string | null {
+  const text = stringOf(state?.output) ?? stringOf(payload?.detail) ?? "";
+  return /\bsessionID(?:=["']|:\s*)(ses_[A-Za-z0-9]+)/u.exec(text)?.[1] ?? null;
 }
 
 /** A JSON string field from a tool result, even one the ledger cut short. */
@@ -662,6 +693,8 @@ function withDelegatedTitles(activities: readonly ActivityEnvelope[]): ActivityE
 
 /** How long a wake-up may follow a subagent's end and still be the one it caused. */
 const WAKE_WINDOW_MS = 60_000;
+/** How long one may precede the end's row (the end is recorded after the child's report is read). */
+const EARLY_WAKE_MS = 10_000;
 
 /**
  * A native background subagent finishing wakes the provider (Claude Code
@@ -687,6 +720,23 @@ function nativeSubagentNotices(activities: readonly ActivityEnvelope[]): Message
       agentCalls.set(payload.toolCallId, { type: stringOf(input.subagent_type), description: stringOf(input.description) });
     }
     if (activity.kind === "subagent" && typeof payload.agentId === "string" && typeof payload.agentType === "string") types.set(payload.agentId, payload.agentType);
+    // OpenCode: a background `subagent` call names its child in its result, and the child's own rows
+    // carry its start and stop (there are no `background.*` task rows).
+    if (data?.tool === "subagent") {
+      const input = asRecord(asRecord(data.state)?.input) ?? {};
+      const child = opencodeChildOf(asRecord(data.state), payload);
+      if (input.background === true && child !== null) {
+        agentCalls.set(`opencode:${child}`, { type: stringOf(input.agent), description: stringOf(input.description) });
+      }
+    }
+    if (activity.kind === "subagent" && typeof payload.agentId === "string" && typeof payload.status === "string") {
+      if (payload.status === "started") started.set(payload.agentId, activity.createdAt);
+      else if (payload.status === "stopped") {
+        // A child that ends with a last word finished; one that ends with none was stopped.
+        const report = stringOf(payload.lastMessage);
+        ends.push({ taskId: payload.agentId, toolUseId: `opencode:${payload.agentId}`, at: activity.createdAt, status: report === null ? "stopped" : "completed", summary: report });
+      }
+    }
     if (activity.kind === "turn.background" && activity.turnId !== null) wakes.push({ turnId: activity.turnId, at: activity.createdAt });
     const taskId = stringOf(payload.taskId);
     const toolUseId = stringOf(payload.toolUseId);
@@ -700,7 +750,11 @@ function nativeSubagentNotices(activities: readonly ActivityEnvelope[]): Message
   for (const end of ends) {
     const call = agentCalls.get(end.toolUseId);
     if (call === undefined) continue;
-    const wake = wakes.find((candidate) => candidate.at >= end.at && Date.parse(candidate.at) - Date.parse(end.at) <= WAKE_WINDOW_MS);
+    const wake =
+      wakes.find((candidate) => candidate.at >= end.at && Date.parse(candidate.at) - Date.parse(end.at) <= WAKE_WINDOW_MS) ??
+      // OpenCode wakes the parent the moment the child ends, and the driver's own "stopped" row follows once it has read the
+      // child's last word: the wake can land a moment first.
+      wakes.find((candidate) => candidate.at < end.at && Date.parse(end.at) - Date.parse(candidate.at) <= EARLY_WAKE_MS);
     if (wake === undefined) continue;
     const type = call.type ?? types.get(end.taskId) ?? "Subagent";
     const since = started.get(end.taskId);
@@ -1029,6 +1083,15 @@ export function isUsageContinue(message: MessageEnvelope | null): boolean {
   return message.origin === "usage-continue" || (message.role === "user" && message.text === USAGE_CONTINUE_PROMPT);
 }
 
+/**
+ * The bare `/compact` maintenance command: a turn that asks the provider to
+ * summarise its context, not a message to answer — the transcript shows it as
+ * one line (see `CompactBlock`) instead of a prompt card with a fold of work.
+ */
+export function isCompactPrompt(message: MessageEnvelope | null): boolean {
+  return message !== null && message.role === "user" && message.text.trim() === "/compact";
+}
+
 /** One message the agent has not been sent yet, for the Queued panel. */
 export interface QueuedMessage {
   readonly turnId: string;
@@ -1038,6 +1101,19 @@ export interface QueuedMessage {
   /** When it will be sent, if it waits for a time rather than for the turn. */
   readonly scheduledFor: string | null;
   readonly reason: "user" | "usage-reset" | "usage-hold" | null;
+  /** Set when the message is moxen's own "your delegated tasks settled" note. */
+  readonly tasks?: readonly TaskNotificationView[];
+}
+
+/** What the Queued panel shows for a message: its first line, or a summary for a task notification (whose text is a tag the user never typed). */
+export function queuedLabel(item: Pick<QueuedMessage, "text" | "tasks">): string {
+  const tasks = item.tasks;
+  if (tasks !== undefined && tasks.length > 0) {
+    if (tasks.length > 1) return `${tasks.length} delegated tasks settled`;
+    const task = tasks[0]!;
+    return `${task.title} ${task.status === "completed" ? "finished" : task.status}`;
+  }
+  return item.text.split("\n")[0]?.trim() ?? "";
 }
 
 /**
@@ -1052,6 +1128,7 @@ export function queuedMessages(state: ThreadState): QueuedMessage[] {
     const message = byId.get(queued.messageId);
     if (message === undefined || queued.scheduleReason === "usage-reset" || isUsageContinue(message)) return [];
     const attachments = Array.isArray(message.attachments) ? message.attachments.length : 0;
+    const tasks = taskNotifications(message);
     return [
       {
         turnId: queued.turnId,
@@ -1060,6 +1137,7 @@ export function queuedMessages(state: ThreadState): QueuedMessage[] {
         attachments,
         scheduledFor: queued.scheduledFor,
         reason: queued.scheduleReason,
+        ...(tasks === null ? {} : { tasks }),
       },
     ];
   });

@@ -5,8 +5,15 @@ import { workingMs, type TurnWaits, type WaitSpan } from "./waits.js";
 export interface TurnGroup {
   id: string;
   turnId: string | null;
-  /** Prompts that opened the turn. */
+  /** Prompts that opened the turn, then any sent while it ran (`nudges`). */
   prompts: TimelineEntry[];
+  /**
+   * The prompts that arrived once the turn was already working — a steer
+   * sent mid-run, a delegated task's notification. A subset of `prompts`;
+   * the expanded transcript places them where they landed in the work
+   * instead of above it.
+   */
+  nudges: TimelineEntry[];
   /** Tool calls and intermediate replies, hidden until the group is expanded. */
   work: TimelineEntry[];
   /** The finished reply that closed the turn, always shown. */
@@ -44,6 +51,16 @@ function elapsed(entries: readonly TimelineEntry[], waits: readonly WaitSpan[]):
   return { durationMs: workingMs(waits, first, last), startedAt: new Date(first).toISOString() };
 }
 
+/** Whether an entry is something the turn *did* — a tool call, a thought, a subagent, another message — rather than bookkeeping. */
+function landsAfterText(entry: TimelineEntry): boolean {
+  if (entry.kind === "assistant") return true;
+  if (entry.kind !== "activity" || entry.activity === null) return false;
+  const kind = entry.activity.kind;
+  if (kind === "reasoning" || kind === "subagent") return true;
+  const payload = entry.activity.payload as Record<string, unknown> | null | undefined;
+  return typeof payload?.toolCallId === "string";
+}
+
 /**
  * The transcript keeps a turn's prompt and closing reply visible and folds
  * everything between them into one "worked for" row; this groups the flat
@@ -65,6 +82,7 @@ export function groupTurns(entries: readonly TimelineEntry[], waits: TurnWaits =
       id: entry.turnId ?? entry.id,
       turnId: entry.turnId,
       prompts: [],
+      nudges: [],
       work: [],
       reply: null,
       live: null,
@@ -116,6 +134,13 @@ export function groupTurns(entries: readonly TimelineEntry[], waits: TurnWaits =
         current = open(entry);
       } else {
         demoteStaleReply(current, entry);
+        // A message sent mid-turn comes after whatever was streaming: that
+        // text stays where it was written, not under the new prompt.
+        if (current.live !== null && current.live.id !== entry.id) {
+          current.work.push(current.live);
+          current.live = null;
+        }
+        if (current.work.length > 0 || current.reply !== null || current.live !== null) current.nudges.push(entry);
       }
       current.prompts.push(entry);
       continue;
@@ -125,6 +150,15 @@ export function groupTurns(entries: readonly TimelineEntry[], waits: TurnWaits =
       // null-turn prompts flush into it via `open` above. Entries with no
       // turnId of their own (system rows) still ride along.
       current = open(entry);
+    }
+    // Streaming text is the *last* thing the turn has shown. Once a tool call,
+    // a thought or another message lands after it, the model has moved on and
+    // the text is finished: it takes its place among the work instead of
+    // staying pinned under it with a caret (the stored note replaces it, by
+    // id, when it arrives).
+    if (current.live !== null && entry.id !== current.live.id && !(entry.kind === "assistant" && entry.streaming) && landsAfterText(entry)) {
+      current.work.push(current.live);
+      current.live = null;
     }
     if (entry.kind === "turn-diff") {
       // A diff belongs to its own turn: a foreign group (e.g. one opened by
@@ -394,6 +428,14 @@ export interface WorkSegment {
    * no message has landed after these tools yet.
    */
   message: TimelineEntry | null;
+  /**
+   * Folds behind a one-line summary. Summaries are there to backtrack
+   * through the messages the agent wrote while it worked, so only a turn
+   * with at least one such message folds its segments; one that only ran
+   * tools before its reply shows them flat — the Worked fold already hid
+   * them once, a second click to reach them says nothing.
+   */
+  folds: boolean;
 }
 
 /**
@@ -409,7 +451,7 @@ export function segmentWork(
   const segments: WorkSegment[] = [];
   let tools: TimelineEntry[] = [];
   const flush = (message: TimelineEntry | null): void => {
-    if (tools.length > 0 || message !== null) segments.push({ tools, message });
+    if (tools.length > 0 || message !== null) segments.push({ tools, message, folds: false });
     tools = [];
   };
   for (const entry of work) {
@@ -423,6 +465,8 @@ export function segmentWork(
       last.message = closing;
     }
   }
+  const interim = segments.some((segment) => segment.message !== null && segment.message !== closing);
+  for (const segment of segments) segment.folds = interim && segment.message !== null;
   return segments;
 }
 

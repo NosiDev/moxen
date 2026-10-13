@@ -4,24 +4,20 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { selectModel, selectProvider } from "../summary.js";
-import { buildDirectProviders, CODEX_REASONING_EFFORTS, type NativeModelLister } from "../direct.js";
+import { buildDirectProviders } from "../direct.js";
 import { tempDir } from "../../testing/tmp.js";
-
-function fakeLister(models: Array<{ id: string }>, failWith?: string): () => NativeModelLister {
-  const lister: NativeModelLister = {
-    start: async () => undefined,
-    models: async () => {
-      if (failWith) throw new Error(failWith);
-      return models;
-    },
-    stop: async () => undefined,
-  };
-  return () => lister;
-}
 
 function binDir(names: string[]): string {
   const dir = tempDir("moxen-bin-");
   for (const name of names) fs.writeFileSync(path.join(dir, name), "#!/bin/sh\n");
+  return dir;
+}
+
+/** A stub `opencode` whose `auth list --format json` prints `list` (v2 shape). */
+function opencodeBin(list: unknown[]): string {
+  const dir = tempDir("moxen-bin-");
+  const file = path.join(dir, "opencode");
+  fs.writeFileSync(file, `#!/bin/sh\necho '${JSON.stringify(list)}'\n`, { mode: 0o755 });
   return dir;
 }
 
@@ -51,13 +47,12 @@ describe("buildDirectProviders", () => {
       storeRoot: tmpStore(),
       modelsDev: async () => MODELS_DEV,
     });
-    for (const instanceId of ["claudeAgent", "codex", "grok"]) {
-      const provider = providers.find((entry) => entry.instanceId === instanceId);
-      expect(provider?.installed).toBe(false);
-      expect(provider?.enabled).toBe(false);
-      expect(provider?.status).toBe("not installed");
-    }
-    expect(providers.find((entry) => entry.instanceId === "codex")?.models).toEqual([]);
+    const claude = providers.find((entry) => entry.instanceId === "claudeAgent");
+    expect(claude?.installed).toBe(false);
+    expect(claude?.enabled).toBe(false);
+    expect(claude?.status).toBe("not installed");
+    expect(providers.map((entry) => entry.driver)).not.toContain("codex");
+    expect(providers.map((entry) => entry.driver)).not.toContain("grok");
     const opencode = providers.find((entry) => entry.instanceId === "opencode");
     expect(opencode?.installed).toBe(false);
     expect(opencode?.enabled).toBe(false);
@@ -82,51 +77,11 @@ describe("buildDirectProviders", () => {
     expect(opus?.efforts.map((effort) => effort.id)).toContain("effort");
   });
 
-  it("lists native models live and attaches codex efforts", async () => {
-    const dir = binDir(["codex", "grok", "claude", "opencode"]);
-    const providers = await buildDirectProviders({
-      env: { PATH: dir },
-      listers: {
-        codex: fakeLister([{ id: "gpt-5.4" }]),
-        grok: fakeLister([{ id: "grok-4-1" }]),
-      },
-      storeRoot: tmpStore(),
-      modelsDev: async () => ({ catalog: [], source: "live" }),
-    });
-    const codex = providers.find((entry) => entry.instanceId === "codex");
-    expect(codex?.authStatus).toBe("authenticated");
-    expect(codex?.models.map((model) => model.slug)).toEqual(["gpt-5.4"]);
-    expect(codex?.models[0]?.efforts[0]?.choices.map((choice) => choice.id)).toEqual([...CODEX_REASONING_EFFORTS]);
-    const grok = providers.find((entry) => entry.instanceId === "grok");
-    expect(grok?.models.map((model) => model.slug)).toEqual(["grok-4-1"]);
-    expect(grok?.models[0]?.efforts).toEqual([]);
-  });
-
-  it("degrades native failures into status without hiding other providers", async () => {
-    const dir = binDir(["codex", "grok"]);
-    const providers = await buildDirectProviders({
-      env: { PATH: dir },
-      listers: {
-        codex: fakeLister([], "Not logged in. Run codex login"),
-        grok: fakeLister([{ id: "grok-4-1" }]),
-      },
-      storeRoot: tmpStore(),
-      modelsDev: async () => ({ catalog: [], source: "live" }),
-    });
-    const codex = providers.find((entry) => entry.instanceId === "codex");
-    expect(codex?.models).toEqual([]);
-    expect(codex?.authStatus).toBe("unauthenticated");
-    expect(codex?.enabled).toBe(false);
-    expect(codex?.status).toContain("codex login");
-    expect(providers.find((entry) => entry.instanceId === "grok")?.models.length).toBe(1);
-  });
-
   it("merges all models.dev providers into one addressed opencode instance", async () => {
     const live = await buildDirectProviders({
       env: {
-        PATH: binDir(["opencode"]),
+        PATH: opencodeBin([{ id: "anthropic", name: "Anthropic", connections: [{ type: "oauth" }] }]),
         ANTHROPIC_API_KEY: "k",
-        OPENCODE_AUTH_CONTENT: JSON.stringify({ anthropic: { type: "oauth" } }),
       },
       storeRoot: tmpStore(),
       modelsDev: async () => MODELS_DEV,

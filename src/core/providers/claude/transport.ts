@@ -12,6 +12,7 @@ import {
   getSessionInfo as sdkGetSessionInfo,
   getSessionMessages as sdkGetSessionMessages,
   query as sdkQuery,
+  renameSession as sdkRenameSession,
   type CanUseTool,
   type EffortLevel,
   type HookCallbackMatcher,
@@ -35,6 +36,8 @@ export interface ClaudeQueryOptions {
   readonly allowDangerouslySkipPermissions?: boolean;
   readonly resume?: string;
   readonly mcpServers?: Record<string, McpServerConfig>;
+  /** Local plugins to load for this session (the `agent-skills` mod). */
+  readonly plugins?: Array<{ type: "local"; path: string }>;
   /** Claude Code's own prompt with moxen's runtime instructions appended. */
   readonly systemPrompt?: { readonly type: "preset"; readonly preset: "claude_code"; readonly append?: string };
   readonly env?: Record<string, string>;
@@ -89,6 +92,11 @@ export interface ClaudeQuery extends AsyncIterable<SDKMessage> {
   close?(): void;
   /** Stop a background task; a `task_notification` with status `stopped` follows. */
   stopTask?(taskId: string): Promise<void>;
+  /**
+   * Replace the servers moxen handed the session, mid-session: removed ones
+   * disconnect, new ones connect. The user's own servers are not touched.
+   */
+  setMcpServers?(servers: Record<string, McpServerConfig>): Promise<unknown>;
 }
 
 export interface ClaudeTransport {
@@ -195,6 +203,14 @@ export interface ClaudeSessionApi {
    * lost fails the first turn, so a persisted id is checked before use.
    */
   sessionExists(sessionId: string): Promise<boolean>;
+  /**
+   * The title Claude Code gave the session (its `ai-title`, or a `/rename`
+   * name), null when it has none yet. The SDK's `summary` falls back to the
+   * last or first prompt, so only `customTitle` — which is exactly the
+   * custom-or-ai title — counts.
+   */
+  sessionTitle(sessionId: string, dir: string): Promise<string | null>;
+  renameSession(sessionId: string, title: string, dir: string): Promise<void>;
 }
 
 export class SdkSessionApi implements ClaudeSessionApi {
@@ -210,9 +226,13 @@ export class SdkSessionApi implements ClaudeSessionApi {
   async sessionExists(sessionId: string): Promise<boolean> {
     return (await sdkGetSessionInfo(sessionId)) !== undefined;
   }
+
+  async sessionTitle(sessionId: string, dir: string): Promise<string | null> {
+    return (await sdkGetSessionInfo(sessionId, { dir }))?.customTitle?.trim() || null;
+  }
+
+  async renameSession(sessionId: string, title: string, dir: string): Promise<void> {
+    await sdkRenameSession(sessionId, title, { dir });
+  }
 }
 
-/**
- * Title/summary side-channel (`claude -p --output-format json`) is
- * intentionally deferred to cutover, when thread-title generation needs it.
- */

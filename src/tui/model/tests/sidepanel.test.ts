@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ActivityEnvelope, MessageEnvelope, ThreadEnvelope } from "../../../core/types.js";
-import { agentThreads, contextShares, effectiveContextBreakdown, estimateContextBreakdown, nativeSubagents, planUsageGauges } from "../sidepanel.js";
+import { agentThreads, contextShares, effectiveContextBreakdown, estimateContextBreakdown, nativeSubagents, planUsageGauges, subagentPreview } from "../sidepanel.js";
 import type { ContextUsage } from "../thread.js";
 
 function thread(id: string, extra: Partial<ThreadEnvelope> = {}): ThreadEnvelope {
@@ -115,6 +115,26 @@ describe("nativeSubagents", () => {
       a3: "Find call sites",
       a4: null,
     });
+  });
+
+  it("lists OpenCode's subagents, named by the description they start with", () => {
+    const at = "2026-09-25T09:00:00.000Z";
+    const row = (id: string, payload: Record<string, unknown>) =>
+      ({ id, kind: "subagent", summary: "", tone: "info", turnId: "t", createdAt: at, payload }) as unknown as ActivityEnvelope;
+    const rows = nativeSubagents([
+      {
+        id: "0",
+        kind: "tool-call.started",
+        summary: "subagent",
+        tone: "tool",
+        turnId: "t",
+        createdAt: at,
+        payload: { toolCallId: "call_sub", data: { tool: "subagent", state: { input: { agent: "explore", description: "From the call" } } } },
+      } as unknown as ActivityEnvelope,
+      row("1", { agentId: "ses_child", agentType: "explore", status: "started", description: "Find one file in /tmp" }),
+      row("2", { agentId: "ses_child", agentType: "explore", status: "stopped", lastMessage: "Found /tmp/x" }),
+    ]);
+    expect(rows).toMatchObject([{ agentId: "ses_child", agentType: "explore", description: "Find one file in /tmp", running: false, lastMessage: "Found /tmp/x" }]);
   });
 });
 
@@ -270,5 +290,12 @@ describe("effectiveContextBreakdown", () => {
     const estimated = effectiveContextBreakdown(live, usage({ usedTokens: 500, maxTokens: 1000 }), [message("m1", "user", "hello world")], []);
     expect(estimated?.estimated).toBe(true);
     expect(estimated?.categories.length).toBeGreaterThan(0);
+  });
+});
+
+describe("subagentPreview", () => {
+  it("strips markdown marks so a report reads as plain prose", () => {
+    const report = "I have everything I need. Here is the factual report.\n\n---\n\n# Moxen-chat Electron app: process model\n\n- **IPC** surface, `frame` transform\n> quoted";
+    expect(subagentPreview(report)).toBe("I have everything I need. Here is the factual report. Moxen-chat Electron app: process model IPC surface, frame transform quoted");
   });
 });

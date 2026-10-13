@@ -79,6 +79,33 @@ describe("claude driver turns", () => {
     expect(transport.created[1]!.options.systemPrompt).toEqual({ type: "preset", preset: "claude_code" });
   });
 
+  it("loads the agent-skills mod into a session, and points it at moxen's own skills, only when asked and allowed", async () => {
+    const skillsMod = { path: "/pkg/mods/agent-skills", bundledSkillsDir: "/pkg/skills" };
+    const on = new FakeTransport([[initMessage()]]);
+    await Effect.runPromise(new ClaudeDriver({ transport: on, skillsMod }).startSession(START));
+    expect(on.created[0]!.options.plugins).toEqual([{ type: "local", path: "/pkg/mods/agent-skills" }]);
+    expect(on.created[0]!.options.env?.["MOXEN_SKILLS_DIR"]).toBe("/pkg/skills");
+
+    // Off by default, so a session without it is exactly what it was.
+    const absent = new FakeTransport([[initMessage()]]);
+    await Effect.runPromise(new ClaudeDriver({ transport: absent }).startSession(START));
+    expect(absent.created[0]!.options.plugins).toBeUndefined();
+    expect(absent.created[0]!.options.env?.["MOXEN_SKILLS_DIR"]).toBeUndefined();
+
+    // Installed in the project already, or a delegated task: nothing points the mod at the bundled folder.
+    for (const moxenSkills of ["project", "none"] as const) {
+      const quiet = new FakeTransport([[initMessage()]]);
+      await Effect.runPromise(new ClaudeDriver({ transport: quiet, skillsMod }).startSession({ ...START, moxenSkills }));
+      expect(quiet.created[0]!.options.plugins).toEqual([{ type: "local", path: "/pkg/mods/agent-skills" }]);
+      expect(quiet.created[0]!.options.env?.["MOXEN_SKILLS_DIR"]).toBeUndefined();
+    }
+
+    // The setting turns it off even where the package has the mod.
+    const off = new FakeTransport([[initMessage()]]);
+    await Effect.runPromise(new ClaudeDriver({ transport: off, skillsMod, settings: { agentSkills: false } }).startSession(START));
+    expect(off.created[0]!.options.plugins).toBeUndefined();
+  });
+
   it("takes the final answer from the result, not every interim note", async () => {
     const transport = new FakeTransport([[initMessage()]]);
     const driver = new ClaudeDriver({ transport });
@@ -393,7 +420,13 @@ describe("claude driver compaction, limits, rollback", () => {
   });
 
   it("rolls back via fork and validates input", async () => {
-    const api = new FakeSessionApi([historyUser("u-1", "one"), historyToolResult("tr-1"), historyUser("u-2", "two")]);
+    // The trailing `/rename` is a logged local command (native title regeneration), not a prompt.
+    const api = new FakeSessionApi([
+      historyUser("u-1", "one"),
+      historyToolResult("tr-1"),
+      historyUser("u-2", "two"),
+      historyUser("u-cmd", "<command-name>/rename</command-name>"),
+    ]);
     const transport = new FakeTransport([[initMessage()]]);
     const driver = new ClaudeDriver({ transport, sessionApi: api });
     await Effect.runPromise(driver.startSession(START));
@@ -685,5 +718,63 @@ describe("claude MCP injection", () => {
     const driver = new ClaudeDriver({ transport, sessionApi: new FakeSessionApi() });
     await Effect.runPromise(driver.startSession(START));
     expect(transport.created[0]!.options.mcpServers).toBeUndefined();
+  });
+});
+
+describe("claude MCP changes on a live session", () => {
+  async function live(servers = MCP) {
+    const transport = new FakeTransport([[initMessage({ session_id: "session-1" })]]);
+    const driver = new ClaudeDriver({ transport, sessionApi: new FakeSessionApi() });
+    await Effect.runPromise(driver.startSession({ ...START, mcpServers: servers }));
+    return { driver, query: transport.created[0]! };
+  }
+
+  it("hands the SDK the whole new set when one was added, removed or changed", async () => {
+    const { driver, query } = await live();
+    const added = { name: "git", type: "stdio" as const, command: "git-mcp", args: [], env: {} };
+    await driver.updateMcpServers("thread-1", [...MCP, added]);
+    expect(Object.keys(query.mcpServerSets[0]!)).toEqual(["docs", "fs", "git"]);
+    // A server taken out of the config goes too: the SDK replaces the set it was given.
+    await driver.updateMcpServers("thread-1", [MCP[0]!, added]);
+    expect(Object.keys(query.mcpServerSets[1]!)).toEqual(["docs", "git"]);
+    await driver.updateMcpServers("thread-1", []);
+    expect(query.mcpServerSets[2]).toEqual({});
+  });
+
+  it("does nothing when the set is the same, in any order", async () => {
+    const { driver, query } = await live();
+    await driver.updateMcpServers("thread-1", [...MCP].reverse());
+    expect(query.mcpServerSets).toEqual([]);
+  });
+
+  it("does nothing for a thread with no live session", async () => {
+    const { driver, query } = await live();
+    await driver.updateMcpServers("elsewhere", []);
+    expect(query.mcpServerSets).toEqual([]);
+  });
+});
+
+describe("claude driver native session titles", () => {
+  it("reads and renames the session title, and regenerates it through a bare /rename", async () => {
+    const api = new FakeSessionApi();
+    const transport = new FakeTransport([[successResult("")]]);
+    const driver = new ClaudeDriver({ transport, sessionApi: api });
+
+    expect(await driver.sessionTitle("session-1", "/work")).toBeNull();
+    await driver.renameSession("session-1", "/work", "Mine");
+    expect(api.renames).toEqual([{ sessionId: "session-1", title: "Mine", dir: "/work" }]);
+    expect(await driver.sessionTitle("session-1", "/work")).toBe("Mine");
+
+    // The CLI answers `/rename` itself and writes the new title to the session file.
+    api.titles.set("session-1", "Auto title");
+    expect(await driver.regenerateSessionTitle("session-1", "/work")).toBe("Auto title");
+    const query = transport.created[0]!;
+    expect(transport.stringPrompts).toEqual(["/rename"]);
+    expect(query.options).toMatchObject({ cwd: "/work", resume: "session-1", tools: [], maxTurns: 1 });
+    expect(query.options.forkSession).toBeUndefined();
+    expect(query.closed).toBe(true);
+
+    const failing = new ClaudeDriver({ transport: new FakeTransport([[errorResult("error_max_turns")]]), sessionApi: api });
+    await expect(failing.regenerateSessionTitle("session-1", "/work")).rejects.toThrow("could not retitle");
   });
 });

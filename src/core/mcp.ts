@@ -1,8 +1,7 @@
 /**
  * MCP servers moxen injects into every provider session: one declaration,
  * translated by each driver into its provider's native form (Claude SDK
- * `mcpServers`, Codex `mcp_servers.*` config overrides, OpenCode
- * `mcp.add`, ACP `session/new` `mcpServers`).
+ * `mcpServers`, OpenCode `mcp.add`).
  *
  * Declared under `mcpServers` in the global config and in a project's
  * `moxen.json`, in the shape `.mcp.json` uses:
@@ -76,20 +75,50 @@ export interface InProcessMcpServerSpec {
   readonly tools: readonly InProcessMcpTool[];
   readonly call: (tool: string, args: Record<string, unknown>) => Promise<{ readonly text: string; readonly isError: boolean }>;
   readonly fallback: OutOfProcessMcpServerSpec;
+  /**
+   * `fallback` also offering a checklist tool, for a provider that keeps no
+   * checklist of its own (OpenCode v2 has no `todowrite`). Absent when the
+   * server has none to offer.
+   */
+  readonly checklist?: OutOfProcessMcpServerSpec;
   readonly alwaysLoad?: boolean;
 }
 
 /** One resolved server, as drivers receive it. */
 export type McpServerSpec = OutOfProcessMcpServerSpec | InProcessMcpServerSpec;
 
+/**
+ * What makes a set of servers the same set, for deciding whether a live
+ * session needs telling. An in-process server (moxen's own tools) is rebuilt
+ * on every send, with fresh closures and a fallback that changes once the
+ * loopback server is up; none of that is a change for a session already
+ * hosting it, so it counts by name, tools and flags only. Order is not one.
+ */
+export function mcpSignature(servers: readonly McpServerSpec[]): string {
+  return JSON.stringify(
+    [...servers]
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map((server) =>
+        server.type === "in-process"
+          ? { name: server.name, type: server.type, alwaysLoad: server.alwaysLoad === true, instructions: server.instructions ?? null, tools: server.tools.map((tool) => tool.name) }
+          : server,
+      ),
+  );
+}
+
 /** The out-of-process form of a server, for a provider that cannot host one in-process. */
 export function outOfProcess(spec: McpServerSpec): OutOfProcessMcpServerSpec {
   return spec.type === "in-process" ? spec.fallback : spec;
 }
 
+/** `outOfProcess` for a provider with no checklist of its own: the form that lends one, where there is one. */
+export function outOfProcessWithChecklist(spec: McpServerSpec): OutOfProcessMcpServerSpec {
+  return spec.type === "in-process" ? (spec.checklist ?? spec.fallback) : spec;
+}
+
 /**
- * Names become tool prefixes (`mcp__<name>__tool`) and Codex config paths
- * (`mcp_servers.<name>`), so a dot or space would break one or the other.
+ * Names become tool prefixes (`mcp__<name>__tool`) and OpenCode config keys,
+ * so a dot or space would break one or the other.
  */
 const NAME = /^[A-Za-z0-9_-]{1,64}$/;
 

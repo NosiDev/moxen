@@ -275,15 +275,55 @@ export function buildSidebarSections(state: ShellState, options: SidebarOptions)
   for (const thread of live) {
     (threadStatus(thread, options.now) === "settled" ? settled : active).push(thread);
   }
-  active.sort(byRecency);
-  settled.sort(byRecency);
+  // An active subthread whose parent is settled (legacy data, or a task
+  // delegated from a settled thread) would otherwise surface as a top-level
+  // row that reads as an unrelated thread. Rule: the settled ancestors are
+  // pulled into the active list as dim header rows, so the family stays
+  // nested and visibly belongs to something settled. While they head a live
+  // family they are not repeated in the Settled section.
+  const byId = new Map(live.map((thread) => [thread.id, thread]));
+  const anchors = new Set<string>();
+  for (const thread of active) {
+    const seen = new Set([thread.id]);
+    for (let up = byId.get(thread.parentThreadId ?? ""); up !== undefined && !seen.has(up.id); up = byId.get(up.parentThreadId ?? "")) {
+      seen.add(up.id);
+      if (threadStatus(up, options.now) === "settled") anchors.add(up.id);
+    }
+  }
+  const anchored = settled.filter((thread) => anchors.has(thread.id));
+  // A settled task is put away: while its parent is still live (active, or a
+  // header kept for a live family) it has no row of its own, in Settled or
+  // anywhere. It reappears nested under its parent once the parent settles.
+  const parentStillLive = (thread: ThreadEnvelope): boolean => {
+    const parent = byId.get(thread.parentThreadId ?? "");
+    return parent !== undefined && (threadStatus(parent, options.now) !== "settled" || anchors.has(parent.id));
+  };
+  const settledRest = settled.filter((thread) => !anchors.has(thread.id) && !parentStillLive(thread));
+  const listed = [...active, ...anchored];
+  listed.sort(byRecency);
+  settledRest.sort(byRecency);
 
   const projectId = mode === "project" ? (options.projectId ?? options.fallbackProjectId ?? null) : null;
-  const visible = mode === "project" && projectId !== null ? active.filter((thread) => thread.projectId === projectId) : active;
+  const visible = mode === "project" && projectId !== null ? listed.filter((thread) => thread.projectId === projectId) : listed;
   // `project` mode claims to show one project's threads; the settled section
   // must honor that too, or it silently leaks every other project's history.
-  const visibleSettled =
-    mode === "project" && projectId !== null ? settled.filter((thread) => thread.projectId === projectId) : settled;
+  const inProject = mode === "project" && projectId !== null ? settledRest.filter((thread) => thread.projectId === projectId) : settledRest;
+  // The Settled section counts and pages families, not threads: a delegated
+  // task rides under its settled parent, so a runaway loop of 150 tasks is
+  // one row to expand, not 150 to page through.
+  const settledIds = new Set(inProject.map((thread) => thread.id));
+  const settledTop = (thread: ThreadEnvelope): string => {
+    const seen = new Set([thread.id]);
+    let top = thread;
+    for (let up = settledIds.has(top.parentThreadId ?? "") ? inProject.find((c) => c.id === top.parentThreadId) : undefined; up !== undefined && !seen.has(up.id); ) {
+      seen.add(up.id);
+      top = up;
+      up = settledIds.has(top.parentThreadId ?? "") ? inProject.find((c) => c.id === top.parentThreadId) : undefined;
+    }
+    return top.id;
+  };
+  const tops = new Map(inProject.map((thread) => [thread.id, settledTop(thread)]));
+  const visibleSettled = inProject.filter((thread) => tops.get(thread.id) === thread.id);
 
   let groups: SidebarGroup[] = [];
   if (mode === "grouped") {
@@ -311,7 +351,14 @@ export function buildSidebarSections(state: ShellState, options: SidebarOptions)
   return {
     active: nestDelegated(visible, options.now).map(({ thread, depth, last, natives }) => toSidebarThread(thread, projects, options.now, depth, last, natives)),
     // Settled threads list their delegated tasks only; their subagents are history.
-    settled: nestDelegated(options.settledExpanded ? visibleSettled.slice(0, options.settledLimit) : []).map(({ thread, depth, last }) =>
+    settled: nestDelegated(
+      options.settledExpanded
+        ? (() => {
+            const shown = new Set(visibleSettled.slice(0, options.settledLimit).map((thread) => thread.id));
+            return inProject.filter((thread) => shown.has(tops.get(thread.id) ?? ""));
+          })()
+        : [],
+    ).map(({ thread, depth, last }) =>
       toSidebarThread(thread, projects, options.now, depth, last),
     ),
     settledTotal: visibleSettled.length,

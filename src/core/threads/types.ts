@@ -5,7 +5,7 @@
  * model selection, and its environment; turns, messages, activity rows,
  * and checkpoint refs live in per-thread append-only JSONL ledgers.
  * The CLI projection to envelope shapes happens at the boundary, not here.
- * See ARCHITECTURE.md §9.
+ * See docs/threads.md.
  */
 import type { ImageAttachmentUpload } from "../attachments.js";
 import type { TaskNotification } from "./notify.js";
@@ -26,10 +26,19 @@ export interface ThreadEnv {
   readonly branch: string | null;
 }
 
+/**
+ * Where a thread's title came from: `seed` is moxen's own (a placeholder or
+ * the first message's line), `provider` the provider's native session title,
+ * `user` an explicit name. A provider title never replaces a `user` one.
+ */
+export type ThreadTitleSource = "seed" | "provider" | "user";
+
 export interface StoredThread {
   readonly id: string;
   readonly projectId: string;
   readonly title: string;
+  /** Absent on threads stored before titles were tracked; read as `seed`. */
+  readonly titleSource?: ThreadTitleSource;
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: InteractionMode;
@@ -48,12 +57,21 @@ export interface StoredThread {
   readonly hasPendingUserInput: boolean;
   /**
    * Native provider session handle per provider instance (Claude session
-   * id, Codex thread id, ACP session id, OpenCode session id), so a thread
+   * id, OpenCode session id), so a thread
    * resumes its provider-side history after the process that started the
    * session exits. Keyed by instance so switching providers and back
    * resumes rather than restarts. Absent on threads that never ran.
    */
   readonly providerSessions?: Readonly<Record<string, string>>;
+  /**
+   * The runtime instructions each provider's conversation was given, keyed
+   * like `providerSessions`: `baseline` is what its system prompt carries —
+   * fixed when the conversation began, so every resume rebuilds the same
+   * prompt and the provider's cached prefix stays valid — and `delivered` is
+   * the latest the model has seen (the baseline, or the last update appended
+   * after the history). See `planInstructions`.
+   */
+  readonly instructionState?: Readonly<Record<string, { readonly baseline: string; readonly delivered: string }>>;
   /** The provider's own subagents, running and latest finished (`subagents.ts`). Absent until the first. */
   readonly nativeSubagents?: readonly StoredNativeSubagent[];
 }
@@ -230,6 +248,8 @@ export interface CreateThreadInput {
   readonly id?: string;
   readonly projectId: string;
   readonly title: string;
+  /** `user` for a title someone chose, which the provider's own title then leaves alone. */
+  readonly titleSource?: ThreadTitleSource;
   readonly modelSelection: ModelSelection;
   readonly runtimeMode?: RuntimeMode;
   readonly interactionMode?: InteractionMode;

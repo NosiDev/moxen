@@ -5,21 +5,20 @@
  * `provider/Services/ProviderAdapter.ts` (capabilities, lifecycle, state,
  * streaming) without lifting its Layers or host services. Imports only our
  * own root types plus `effect` type-level modules, so drivers stay
- * dependency-clean. See ARCHITECTURE.md §4.
+ * dependency-clean. See docs/providers.md.
  */
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 
 import type { McpServerSpec } from "../mcp.js";
+import type { WorktreeIsolation } from "../threads/isolation.js";
 import type { InteractionMode, ModelSelection, RuntimeMode } from "../types.js";
 
 /** Provider surfaces we own. Cursor and Antigravity are out of scope. */
-export type ProviderDriverKind = "claude" | "codex" | "grok" | "opencode";
+export type ProviderDriverKind = "claude" | "opencode";
 
 export const PROVIDER_DRIVER_KINDS: readonly ProviderDriverKind[] = [
   "claude",
-  "codex",
-  "grok",
   "opencode",
 ];
 
@@ -62,6 +61,21 @@ export interface ProviderSessionStartInput {
    * none apply; a driver must then leave the prompt exactly as it is.
    */
   readonly instructions?: string;
+  /**
+   * Set when the session runs in its own worktree (`core/threads/isolation.ts`).
+   * A driver must refuse tool calls that reach the checkout the worktree was
+   * cut from, through whatever its provider offers natively; its standing
+   * instruction is already part of `instructions`.
+   */
+  readonly isolation?: WorktreeIsolation;
+  /**
+   * Where moxen's own skills come from for this session. `project`: they were
+   * installed in the project's skills folder, which the provider reads itself,
+   * so nothing else may offer them (they would load twice). `served`: the
+   * provider is pointed at the bundled folder (the default when absent).
+   * `none`: a delegated task, which has none of moxen's tools to use them with.
+   */
+  readonly moxenSkills?: "project" | "served" | "none";
 }
 
 /**
@@ -166,6 +180,15 @@ export type ProviderCompaction<TError> =
       ) => Effect.Effect<void, TError>;
     }
   | { readonly type: "slash-command"; readonly command: `/${string}` };
+
+/**
+ * Whether a prompt is the bare `/compact` maintenance command (what every
+ * client sends). A native driver runs it as the provider's own compaction
+ * inside an ordinary turn; text after the command is not a bare command.
+ */
+export function isCompactCommand(prompt: string): boolean {
+  return prompt.trim() === "/compact";
+}
 
 export interface ProviderAdapterCapabilities {
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
@@ -385,9 +408,9 @@ export type ProviderRuntimeEvent =
     }
   | {
       /**
-       * A provider-native subagent (Claude's Agent tool) starting or
-       * stopping, with the last thing it said. Moxen's own delegated threads
-       * are threads, not this.
+       * A provider-native subagent (Claude's Agent tool, OpenCode's
+       * `subagent` tool) starting or stopping, with the last thing it said.
+       * Moxen's own delegated threads are threads, not this.
        */
       readonly type: "subagent.updated";
       readonly provider: ProviderDriverKind;
@@ -397,6 +420,8 @@ export type ProviderRuntimeEvent =
       readonly agentType: string;
       readonly status: "started" | "stopped";
       readonly lastMessage: string | null;
+      /** What it was sent to do, where the provider says so as it starts (OpenCode). */
+      readonly description?: string | null;
     }
   | {
       /**
@@ -435,6 +460,16 @@ export type ProviderRuntimeEvent =
     };
 
 /** A live background task, as a driver reports it. */
+/**
+ * One entry of a native subagent's conversation, oldest first, as a driver
+ * that keeps it elsewhere than Claude's on-disk transcripts reads it back
+ * (OpenCode: the child session). Tool entries carry the provider's own tool
+ * payload, mapped by `toolActivityRow` exactly as live calls are.
+ */
+export type SubagentHistoryItem =
+  | { readonly kind: "prompt" | "text" | "reasoning"; readonly id: string; readonly at: string | null; readonly text: string }
+  | { readonly kind: "tool"; readonly id: string; readonly at: string | null; readonly tool: string; readonly raw: Record<string, unknown> };
+
 export interface BackgroundTaskSummary {
   readonly taskId: string;
   readonly taskType: string | null;
@@ -446,7 +481,23 @@ export interface BackgroundTaskSummary {
   readonly startedAt?: string | null;
 }
 
-export interface ProviderAdapter<TError = unknown> {
+/**
+ * The provider's own session title, for the drivers whose provider keeps
+ * one (Claude Code, OpenCode). `cursor` is the native session handle
+ * (`resumeCursor`); `workingDirectory` is where that session lives. Each
+ * method is omitted where the provider lacks the capability: moxen never
+ * generates a title itself, it reads or asks the provider to.
+ */
+export interface ProviderSessionTitles {
+  /** The session's title, or null while the provider has not titled it. Never a first-prompt fallback. */
+  readonly sessionTitle?: (cursor: string, workingDirectory: string) => Promise<string | null>;
+  /** Set the session's title natively. */
+  readonly renameSession?: (cursor: string, workingDirectory: string, title: string) => Promise<void>;
+  /** Have the provider title the session again from its conversation; resolves to the new title, null when it made none. */
+  readonly regenerateSessionTitle?: (cursor: string, workingDirectory: string) => Promise<string | null>;
+}
+
+export interface ProviderAdapter<TError = unknown> extends ProviderSessionTitles {
   readonly provider: ProviderDriverKind;
   readonly capabilities: ProviderAdapterCapabilities;
 
