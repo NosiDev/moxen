@@ -212,6 +212,12 @@ export type CommandBody =
   | { readonly type: "settings.set"; readonly key: string; readonly value: string }
   /** Copy one entry of a list setting (`key` is the list's, e.g. `providers.harness.profiles`) under a new id. */
   | { readonly type: "settings.duplicate"; readonly key: string; readonly id: string; readonly newId: string }
+  /**
+   * Add a harness profile from an exported document (`harness.profile.export`). `text` is the file's
+   * contents; the server checks it as it checks the config file. A saved key or probe results in it
+   * are ignored. `onConflict`: a taken id is an error, a new `-2` id, or overwritten.
+   */
+  | { readonly type: "harness.profile.import"; readonly text: string; readonly id?: string; readonly onConflict?: "error" | "rename" | "replace" }
   /** One tiny request to a harness profile's endpoint: does it work at all. Spends a request, so never retried. */
   | { readonly type: "harness.profile.test"; readonly profileId: string; readonly model?: string }
   /** Starts one configured MCP server, lists its tools and stops it again. Never retried. */
@@ -302,6 +308,7 @@ export interface CommandResults {
   "model.visibility.set": { readonly hidden: boolean };
   "settings.set": SettingsSnapshot & Accepted;
   "settings.duplicate": SettingsSnapshot & Accepted;
+  "harness.profile.import": SettingsSnapshot & Accepted & { readonly id: string; readonly fileId: string };
   "harness.profile.test": HarnessTestResult;
   "mcp.server.test": McpTestResult;
   "harness.profile.probe": ProbeReport & { readonly saved: boolean };
@@ -391,6 +398,8 @@ export type Query =
    * actually honours.
    */
   | { readonly type: "settings.read" }
+  /** One harness profile as a shareable JSON document (no saved key, no probe results); see `profileio.ts`. */
+  | { readonly type: "harness.profile.export"; readonly profileId: string }
   /** The newest Claude Code and OpenCode the registry offers (read when `updates.checkLatest` is on). */
   | { readonly type: "provider.latest" }
   /**
@@ -447,6 +456,7 @@ export interface QueryResults {
   "usage.limits": { readonly providers: Readonly<Record<string, ProviderUsageLimits>> };
   "thread.background.output": { readonly available: boolean; readonly lines: readonly string[] };
   "settings.read": SettingsSnapshot;
+  "harness.profile.export": { readonly id: string; readonly text: string };
   "provider.latest": LatestVersions;
   "git.overview": GitOverview;
   "git.commit.diff": { readonly sha: string; readonly diff: string | null };
@@ -955,6 +965,14 @@ export function decodeCommand(value: unknown): Command {
       return { ...meta, type, key: requireField(record.key, type, "key"), id: requireField(record.id, type, "id"), newId: requireField(record.newId, type, "newId") };
     case "mcp.server.test":
       return { ...meta, type, name: requireField(record.name, type, "name") };
+    case "harness.profile.import":
+      return {
+        ...meta,
+        type,
+        text: requireField(record.text, type, "text"),
+        ...optionalString(record, "id"),
+        ...(record.onConflict === "error" || record.onConflict === "rename" || record.onConflict === "replace" ? { onConflict: record.onConflict } : {}),
+      };
     case "harness.profile.test":
       return { ...meta, type, profileId: requireField(record.profileId, type, "profileId"), ...(asString(record.model) !== null ? { model: asString(record.model)! } : {}) };
     case "harness.profile.probe":
@@ -1107,6 +1125,8 @@ export function decodeQuery(value: unknown): Query {
     case "settings.read":
     case "provider.latest":
       return { type };
+    case "harness.profile.export":
+      return { type, profileId: requireField(record.profileId, type, "profileId") };
     case "git.overview":
       return {
         type,

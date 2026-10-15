@@ -125,6 +125,22 @@ describe("a session's baseline", () => {
     expect(await pendingRuleUpdate(owner, "t3", "claude", root)).toBeNull();
   });
 
+  it("tells the Moxen Harness about an AGENTS.md edit as a patch, and leaves a compaction's baseline alone", async () => {
+    const root = await project({ "AGENTS.md": "- Use bun." });
+    await mkdir(path.join(root, ".git"), { recursive: true });
+    const owner = {};
+    await captureRuleBaseline(owner, "t5", "harness", root);
+    expect(await pendingRuleUpdate(owner, "t5", "harness", root)).toBeNull();
+    await writeFile(path.join(root, "AGENTS.md"), "- Use bun.\n- Never force-push.");
+    // The harness keeps the prompt it began with through a compaction, so it is still owed the change.
+    await refreshRuleBaseline(owner, "t5");
+    const pending = await pendingRuleUpdate(owner, "t5", "harness", root);
+    expect(pending?.text).toContain("+- Never force-push.");
+    expect(pending?.text).toContain('kind="modified"');
+    pending!.commit();
+    expect(await pendingRuleUpdate(owner, "t5", "harness", root)).toBeNull();
+  });
+
   it("leaves OpenCode alone: it watches AGENTS.md itself", async () => {
     const root = await project({ "AGENTS.md": "one" });
     const owner = {};

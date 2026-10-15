@@ -207,13 +207,31 @@ describe("HarnessDriver", () => {
       await start(driver);
       const first = await run(driver.sendTurn({ threadId: "t1", prompt: "plan it", interactionMode: "plan" }));
       await driver.awaitTurn("t1", first.turnId);
-      expect(names(requests[0]!)).toEqual(["ask", "exit_plan_mode", "glob", "grep", "read", "subagent", "task_output", "web_fetch", "web_search"]);
+      expect(names(requests[0]!)).toEqual(["ask", "enter_plan_mode", "exit_plan_mode", "glob", "grep", "read", "subagent", "task_output", "web_fetch", "web_search"]);
       const second = await run(driver.sendTurn({ threadId: "t1", prompt: "now do it", interactionMode: "default" }));
       await driver.awaitTurn("t1", second.turnId);
       expect(names(requests[1]!)).toEqual(expect.arrayContaining(["edit", "bash", "todo", "enter_plan_mode"]));
-      expect(names(requests[1]!)).not.toContain("exit_plan_mode");
+      // Both plan tools stay listed outside plan mode, so the list never changes under the model.
+      expect(names(requests[1]!)).toContain("exit_plan_mode");
       const reminders = requests[1]!.messages.filter((m) => typeof m.content === "string" && m.content.includes("Plan mode is"));
       expect(reminders.length).toBeGreaterThan(0);
+    });
+
+    it("lets the model enter and exit plan mode in one reply, and tells it plainly when there is nothing to exit", async () => {
+      const both: ModelEvent[] = [
+        { type: "tool.call", call: { id: "c1", name: "enter_plan_mode", arguments: "{}" } },
+        { type: "tool.call", call: { id: "c2", name: "exit_plan_mode", arguments: JSON.stringify({ plan: "Write a.txt." }) } },
+        { type: "finish", reason: "tool-calls" },
+      ];
+      const { driver, requests } = driverWith([both, answer("planned"), call("c3", "exit_plan_mode", { plan: "again" }), answer("fine")]);
+      await start(driver);
+      const first = await run(driver.sendTurn({ threadId: "t1", prompt: "try both" }));
+      await expect(driver.awaitTurn("t1", first.turnId)).resolves.toMatchObject({ status: "completed", text: "planned" });
+      const results = requests[1]!.messages.filter((m) => m.role === "tool").map((m) => String(m.content));
+      expect(results.join("\n")).toContain("plan mode is off");
+      const second = await run(driver.sendTurn({ threadId: "t1", prompt: "exit with no plan mode" }));
+      await driver.awaitTurn("t1", second.turnId);
+      expect(requests[3]!.messages.filter((m) => m.role === "tool").map((m) => String(m.content)).join("\n")).toContain("nothing to exit");
     });
 
     it("ends the turn with the plan as its reply when the user asked for plan mode, and leaves the mode on", async () => {

@@ -8,7 +8,9 @@
  * from the old rules. Moxen tells it: the change goes ahead of the next prompt
  * as a patch, not the whole file, so what the provider has cached stays cached.
  *
- * Only Claude is covered, on purpose:
+ * Claude and the Moxen Harness are covered, on purpose (the harness reads
+ * `AGENTS.md`/`CLAUDE.md` into its system prompt when a conversation begins and
+ * never again, so an edit in between is just as invisible to it):
  * - OpenCode v2 watches `AGENTS.md` itself and adds its own instruction update
  *   before the next request (docs/external/opencode-v2/instructions.md); a second one
  *   from here would say it twice.
@@ -28,7 +30,7 @@ import path from "node:path";
 import { createPatch } from "diff";
 
 /** Providers whose conversations are told about rule-file edits (see the header for why only these). */
-const WATCHED_PROVIDERS: ReadonlySet<string> = new Set(["claude"]);
+const WATCHED_PROVIDERS: ReadonlySet<string> = new Set(["claude", "harness"]);
 
 /** A file bigger than this is not tracked: it could not be shown as a patch anyway. */
 const MAX_FILE_BYTES = 64 * 1024;
@@ -87,6 +89,33 @@ function ancestorsOf(cwd: string): string[] {
     current = parent;
   }
   return dirs;
+}
+
+/**
+ * The rule files the Moxen Harness put in its system prompt: from the working
+ * directory up to the nearest git root (or the home directory), one per folder,
+ * `AGENTS.md` before `CLAUDE.md`, trimmed. Mirrors `readProjectRules` in the
+ * harness's `prompt.ts`; a difference would invent changes.
+ */
+export async function readHarnessRuleFiles(cwd: string): Promise<RuleFiles> {
+  const files = new Map<string, string>();
+  const home = os.homedir();
+  let dir = path.resolve(cwd);
+  for (let depth = 0; depth < MAX_ANCESTORS; depth += 1) {
+    for (const name of ["AGENTS.md", "CLAUDE.md"]) {
+      const file = path.join(dir, name);
+      const text = (await readTracked(file))?.trim();
+      if (text) {
+        files.set(file, text);
+        break;
+      }
+    }
+    if (await stat(path.join(dir, ".git")).then(() => true, () => false) || dir === home) break;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return files;
 }
 
 /** The rule files Claude Code would load for a session in `cwd`, with their text. */
@@ -193,6 +222,7 @@ export function withRuleUpdate(prompt: string, update: string | null): string {
 // -- what each live session last read ------------------------------------------
 
 interface Baseline {
+  readonly provider: string;
   readonly cwd: string;
   readonly files: RuleFiles;
 }
@@ -216,14 +246,15 @@ function recordsOf(owner: object): Map<string, Baseline> {
  */
 export async function captureRuleBaseline(owner: object, threadId: string, provider: string, cwd: string): Promise<void> {
   if (!WATCHED_PROVIDERS.has(provider)) return;
-  const files = await readRuleFiles(cwd).catch(() => null);
-  if (files !== null) recordsOf(owner).set(threadId, { cwd, files });
+  const files = await (provider === "harness" ? readHarnessRuleFiles(cwd) : readRuleFiles(cwd)).catch(() => null);
+  if (files !== null) recordsOf(owner).set(threadId, { provider, cwd, files });
 }
 
 /** After a compaction: Claude re-read the files from disk, so what it holds is what is there now. */
 export async function refreshRuleBaseline(owner: object, threadId: string): Promise<void> {
   const record = baselines.get(owner)?.get(threadId);
-  if (record === undefined) return;
+  // Only Claude re-reads the files on a compaction; the harness keeps the prompt it began with.
+  if (record === undefined || record.provider !== "claude") return;
   await captureRuleBaseline(owner, threadId, "claude", record.cwd);
 }
 
@@ -246,9 +277,9 @@ export async function pendingRuleUpdate(owner: object, threadId: string, provide
     await captureRuleBaseline(owner, threadId, provider, cwd);
     return null;
   }
-  const current = await readRuleFiles(cwd).catch(() => null);
+  const current = await (provider === "harness" ? readHarnessRuleFiles(cwd) : readRuleFiles(cwd)).catch(() => null);
   if (current === null) return null;
   const text = describeRuleChanges(record.files, current, cwd);
   if (text === null) return null;
-  return { text, commit: () => void recordsOf(owner).set(threadId, { cwd, files: current }) };
+  return { text, commit: () => void recordsOf(owner).set(threadId, { provider, cwd, files: current }) };
 }

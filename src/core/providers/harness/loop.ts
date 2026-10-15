@@ -203,6 +203,14 @@ export async function runTurn(
     let finish: string = "stop";
     let emitted = false;
     let repeated = false;
+    // Reasoning ends where the answer starts: closing it then keeps its row above the text instead of "running" under it.
+    let reasoningClosedAt = -1;
+    const closeReasoning = () => {
+      if (reasoningStartedAt === null || reasoningClosedAt === reasoning.length) return;
+      reasoningClosedAt = reasoning.length;
+      emit({ type: "reasoning.done", reasoningId, text: reasoning, startedAt: new Date(reasoningStartedAt).toISOString(), durationMs: Date.now() - reasoningStartedAt });
+    };
+    const watchText = config.loopGuard?.text !== false;
     const textWatch = new RepeatWatch(config.loopGuard?.textRepeats);
     const reasoningWatch = new RepeatWatch(config.loopGuard?.textRepeats);
 
@@ -231,15 +239,16 @@ export async function runTurn(
             reasoning += event.text;
             emitted = true;
             emit({ type: "reasoning.delta", reasoningId, text: event.text });
-            if (reasoningWatch.push(event.text)) {
+            if (watchText && reasoningWatch.push(event.text)) {
               repeated = true;
               break;
             }
           } else if (event.type === "text.delta") {
+            if (event.text !== "") closeReasoning();
             text += event.text;
             emitted = true;
             emit({ type: "text", messageId, text: event.text });
-            if (textWatch.push(event.text)) {
+            if (watchText && textWatch.push(event.text)) {
               repeated = true;
               break;
             }
@@ -291,9 +300,7 @@ export async function runTurn(
       }
     }
 
-    if (reasoningStartedAt !== null) {
-      emit({ type: "reasoning.done", reasoningId, text: reasoning, startedAt: new Date(reasoningStartedAt).toISOString(), durationMs: Date.now() - reasoningStartedAt });
-    }
+    closeReasoning();
     if (repeated) return done("failed", "Stopped: the model got stuck repeating the same text. Send another message to continue; rewording the request or compacting the conversation usually clears it.");
     transcript.append({ role: "assistant", content: text, ...(reasoning.trim() ? { reasoning } : {}), ...(reasoningItems.length > 0 ? { reasoningItems } : {}), ...(calls.length > 0 ? { toolCalls: calls } : {}) });
     if (reportedFresh) {

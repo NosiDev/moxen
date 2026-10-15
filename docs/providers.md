@@ -81,11 +81,20 @@ moxen harness profile add colab --base-url https://tunnel.example.com \
 moxen harness profile edit colab --set 'models[qwen3.8-flash-next].contextWindow=262144' \
   --set sampling.topK=20 --set quirks.systemFirstOnly=false
 moxen harness profile list | show <id> | duplicate <id> <new-id> | remove <id>
+moxen harness profile export <id> [--out file]      # a JSON document to share
+moxen harness profile import <file> [--id <id>] [--replace]
 moxen harness profile test <id> [--model <id>]     # one tiny request
 moxen harness probe <id> [--model <id>] [--dry-run] # the battery; saves what it settles
 moxen config get 'providers.harness.profiles[colab].sampling.topK'
 moxen config set 'providers.harness.profiles[colab].baseUrl' http://localhost:8080
 ```
+
+An exported profile never holds a saved key or probe results (a probe describes one
+server's chat template): the receiver sets their own key and probes for themselves.
+Import checks the file as the config file is checked, and a taken id is an error
+unless `--id` picks another or `--replace` overwrites it. The Settings page has the
+same: `e` exports the open profile, and "Import from a file" on the list adds one
+(a taken id gets a `-2`).
 
 `config set` on `providers.harness.profiles[<id>]` takes a JSON object (creates or
 replaces), on a field takes its text; an empty value removes the entry or
@@ -104,6 +113,13 @@ A check the server could not answer (timeout, 429/503) writes nothing. It
 refuses to start while a llama.cpp slot is busy. On a one-slot server the
 requests still take the slot, which replaces the cached prompt of your last
 conversation. `--dry-run` reports without saving.
+
+A model's `efforts` (`low,medium,high`, comma-separated in the editor) puts an
+Effort choice in the model picker; a chat server receives the pick only when its
+family has an effort setting (Qwen does, or set `quirks.effortParam` /
+`effortKwarg`), while the Responses and Anthropic formats always send it. The
+repeat guards (`loopGuard.calls` for identical tool calls, `loopGuard.text` for a
+reply or its reasoning looping) can each be turned off per profile.
 
 Approvals follow the runtime mode: reading is always allowed; edits ask in
 `approval-required`; commands ask in `approval-required` and `auto-accept-edits`
@@ -177,6 +193,7 @@ fakes and local fixture sites (no live API, search service or real site), a
 finished background command does not wake an idle session (the model hears of it
 at its next step), a subagent has no MCP tools and cannot run in the background,
 there is no PDF reading, MCP gives tools only (no resources, prompts, sampling or OAuth
-sign-in; a bearer token in `headers` works), edits to a project's rule files
-mid-conversation are not noticed, and a resumed session starts with no session
+sign-in; a bearer token in `headers` works), a rule file edited while the thread
+was closed is not noticed on resume (an edit while it is open reaches the model as a
+patch ahead of its next message), and a resumed session starts with no session
 approvals and an empty checklist.

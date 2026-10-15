@@ -46,20 +46,23 @@ export async function runHarnessProfiles(): Promise<void> {
       onTest={() => {}}
       onTestMcp={() => {}}
       onProbe={(id, model) => probed.push(`${id}/${model}`)}
+      onExport={() => {}}
+      onImport={() => {}}
+      notice={null}
       versions={null}
       latest={null}
       updating={new Set()}
       onUpdate={() => {}}
       providers={[]}
       screenWidth={100}
-      screenHeight={40}
+      screenHeight={46}
       left={2}
       top={1}
       width={96}
-      height={38}
+      height={44}
       onClose={() => {}}
     />,
-    { width: 100, height: 40, exitOnCtrlC: false },
+    { width: 100, height: 46, exitOnCtrlC: false },
   );
   await setup.flush();
   await act(async () => new Promise((resolve) => setTimeout(resolve, 200)));

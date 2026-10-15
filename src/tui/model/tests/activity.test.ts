@@ -609,6 +609,25 @@ describe("describeActivity", () => {
     expect(toolSearch).toMatchObject({ kind: "tool", tool: "Searching for tools", detail: "WebFetch" });
   });
 
+  it("names the harness's background-task and web tools by what they did", () => {
+    const row = (tool: string, input: Record<string, unknown>, detail: string, status = "completed") =>
+      describeActivity(
+        activity("tool.completed", {
+          itemType: "dynamic_tool_call",
+          toolCallId: `h_${tool}`,
+          status,
+          title: tool,
+          detail,
+          data: { tool, state: { status, input, output: detail } },
+        }),
+      );
+    expect(row("task_output", { task_id: "bg_1" }, "tick 1")).toMatchObject({ kind: "tool", tool: "Output of bg_1", detail: "tick 1" });
+    expect(row("task_stop", { task_id: "bg_1" }, "bg_1 had already finished (exit code 0).")).toMatchObject({ kind: "tool", tool: "Stopped bg_1" });
+    expect(row("task_stop", { task_id: "bg_1" }, "", "inProgress")).toMatchObject({ tool: "Stopping bg_1", running: true });
+    expect(row("web_fetch", { url: "https://example.com" }, "")).toMatchObject({ kind: "web", tool: "web_fetch", query: "https://example.com" });
+    expect(row("web_search", { query: "qwen tools" }, "")).toMatchObject({ kind: "web", tool: "web_search", query: "qwen tools" });
+  });
+
   it("reads a ToolSearch query instead of echoing its wire syntax", () => {
     const row = (query: string, status = "completed") =>
       describeActivity(

@@ -161,6 +161,8 @@ interface HarnessSession {
   readonly skillTool: HarnessTool<never> | null;
   /** Commands started with `run_in_background`; they end with the session. */
   readonly background: BackgroundShells;
+  /** Every running subagent's switch, so one can be stopped by id whether it runs in the foreground or not. */
+  readonly subagents: Map<string, AbortController>;
   /** The timer that wakes an idle session for a finished background task, and how many wakes in a row there have been since the user last spoke. */
   wakeTimer: ReturnType<typeof setTimeout> | null;
   wakeStreak: number;
@@ -364,6 +366,7 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
         mcpSignature: fingerprint(servers),
         mcpNoticed: fingerprint(servers),
         skillTool: skillTool(discoverSkills({ cwd: input.workingDirectory, mode, bundledDir: this.bundledSkillsDir, ...(this.home !== undefined ? { home: this.home } : {}) })),
+        subagents: new Map(),
         background: new BackgroundShells({ artifactDir, onEvent: (event) => this.onBackgroundEvent(session, event) }),
         wakeTimer: null,
         wakeStreak: 0,
@@ -591,13 +594,12 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
       });
   }
 
-  /** The tools the model may call right now: plan mode keeps reading and asking, and swaps `enter_plan_mode` for `exit_plan_mode`. */
+  /** The tools the model may call right now: plan mode keeps reading, asking and the two plan tools (both are always listed, so the list's start never changes). */
   private toolsFor(session: HarnessSession, turn: HarnessTurn | null): readonly HarnessTool<never>[] {
     const planning = session.interactionMode === "plan";
     return this.allTools(session, turn).filter((tool) => {
       const name = tool.definition.name;
-      if (name === "exit_plan_mode") return planning;
-      if (name === "enter_plan_mode") return !planning;
+      if (name === "exit_plan_mode" || name === "enter_plan_mode") return true;
       return !planning || tool.readOnly || tool.allowedInPlan === true;
     });
   }
@@ -608,12 +610,13 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
     if (session.interactive) extra.push(askTool((questions, signal) => this.askUser(session, turn, questions, signal)));
     extra.push(
       enterPlanModeTool({
+        planning: () => session.interactionMode === "plan",
         enter: () => {
           session.interactionMode = "plan";
           session.planSource = "agent";
         },
       }),
-      exitPlanModeTool({ propose: (plan) => this.proposePlan(session, turn, plan) }),
+      exitPlanModeTool({ planning: () => session.interactionMode === "plan", propose: (plan) => this.proposePlan(session, turn, plan) }),
     );
     if (session.skillTool) extra.push(session.skillTool);
     // Last, and in a fixed order: the part of the list that depends on configuration comes after the part that does not.
@@ -900,6 +903,7 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
     // In the foreground the turn's interrupt stops it too; in the background nothing but task_stop or the session ending does.
     const signal = background ? controller.signal : AbortSignal.any([context.signal, controller.signal]);
     const owner: HarnessTurn = background ? { ...turn, controller } : turn;
+    session.subagents.set(agentId, controller);
     const transcript = HarnessTranscript.open(this.subagentFile(session.sessionId, agentId));
     const tools = (): readonly HarnessTool<never>[] => subagentTools(this.toolsFor(session, owner));
     transcript.append({
@@ -920,6 +924,7 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
       try {
         handle = session.background.startExternal({ id: agentId, tool: "subagent", description: args.description, toolUseId: context.callId ?? null, stop: () => controller.abort() });
       } catch (error) {
+        session.subagents.delete(agentId);
         this.publish({ ...base, type: "subagent.updated", status: "stopped", lastMessage: null });
         return { content: (error as Error).message, isError: true };
       }
@@ -978,7 +983,10 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
       }
       return { content: outcome.report === "" ? "The subagent finished without writing a report." : untrustedContext(outcome.report, "subagent"), ...(outcome.report === "" ? { isError: true } : {}) };
     };
-    const stopped = (report: string): void => this.publish({ ...base, type: "subagent.updated", status: "stopped", lastMessage: report === "" ? null : report.slice(0, 2000) });
+    const stopped = (report: string): void => {
+      session.subagents.delete(agentId);
+      this.publish({ ...base, type: "subagent.updated", status: "stopped", lastMessage: report === "" ? null : report.slice(0, 2000) });
+    };
 
     if (handle !== null) {
       const running = handle;
@@ -1066,6 +1074,13 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
   readonly stopBackgroundTask = (threadId: ThreadId, taskId: string): Effect.Effect<void, CliError> =>
     this.attempt("HARNESS_TASK_STOP_FAILED", `Could not stop background task ${taskId}`, async () => {
       const session = this.requireSession(threadId);
+      // A foreground subagent is no background task; its own switch ends it, and its row settles when it unwinds.
+      const subagent = session.subagents.get(taskId);
+      if (subagent && !(await session.background.stop(taskId))) {
+        subagent.abort();
+        return;
+      }
+      if (subagent) return;
       if (!(await session.background.stop(taskId))) {
         throw new CliError("BACKGROUND_TASK_NOT_FOUND", `No background task ${taskId} is running on thread ${threadId}.`, { exitCode: 3, details: { threadId, taskId } });
       }

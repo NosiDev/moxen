@@ -43,6 +43,13 @@ const MODEL_FIELDS: readonly ListField[] = [
     group: "Model",
     kind: { type: "enum", choices: FAMILY_CHOICES },
   },
+  {
+    path: "efforts",
+    label: "Reasoning efforts",
+    description: "Levels the model picker offers, comma-separated (low, medium, high). Unset: none. A chat server gets the pick only if its family has an effort setting (Qwen does).",
+    group: "Model",
+    kind: { type: "words", separator: "comma" },
+  },
 ];
 
 const QUIRK_BOOLEANS: ReadonlyArray<readonly [string, string, string]> = [
@@ -206,8 +213,10 @@ export const HARNESS_PROFILE_FIELDS: readonly ListField[] = [
     group: "Behaviour",
     kind: { type: "boolean" },
   },
+  { path: "loopGuard.calls", label: "Catch repeated tool calls", description: "Warn, then end the turn, when the model makes the same tool call (or the same few calls in turn) again and again. Unset: on.", group: "Behaviour", kind: { type: "boolean" } },
   { path: "loopGuard.repeatWarn", label: "Warn after identical calls", description: "The same tool call this many times in one turn gets a warning. Unset: 4.", group: "Behaviour", kind: { type: "integer", presets: [3, 4, 5, 8] } },
   { path: "loopGuard.repeatStop", label: "Stop after identical calls", description: "…and this many ends the turn. Unset: 6.", group: "Behaviour", kind: { type: "integer", presets: [5, 6, 8, 12] } },
+  { path: "loopGuard.text", label: "Catch repeated text", description: "Cut a reply off when it, or its reasoning, repeats one stretch of text over and over. Turn it off if it ends replies that were fine. Unset: on.", group: "Behaviour", kind: { type: "boolean" } },
   { path: "loopGuard.textRepeats", label: "Stop repeated text after", description: "A reply repeating one stretch of text this many times is cut off. Unset: 10.", group: "Behaviour", kind: { type: "integer", presets: [6, 10, 20] } },
   {
     path: "systemPromptAppend",
@@ -225,6 +234,6 @@ export const HARNESS_PROFILES_SETTING: SettingDescriptor = {
   description: "The endpoints the Moxen Harness talks to. Each is a server address, the models on it, and anything its chat template needs.",
   section: "provider:harness",
   group: "Model servers",
-  kind: { type: "list", noun: "profile", lowercaseIds: true, add: "harness-profile", fields: HARNESS_PROFILE_FIELDS, actions: ["duplicate", "test", "probe"] },
+  kind: { type: "list", noun: "profile", lowercaseIds: true, add: "harness-profile", fields: HARNESS_PROFILE_FIELDS, actions: ["duplicate", "test", "probe", "transfer"] },
   defaultValue: undefined,
 };

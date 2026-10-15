@@ -12,6 +12,11 @@ describe("LoopGuard", () => {
     expect(guard.record("read", '{"path":"a"}')).toBe("stop");
   });
 
+  it("does nothing when the call check is off", () => {
+    const guard = new LoopGuard({ calls: false });
+    expect(Array.from({ length: 12 }, () => guard.record("read", "{}")).every((verdict) => verdict === "ok")).toBe(true);
+  });
+
   it("notices a rotation of different calls", () => {
     const guard = new LoopGuard();
     const out: string[] = [];

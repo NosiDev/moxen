@@ -9,6 +9,8 @@
 import type { HarnessTool } from "./types.js";
 
 export interface PlanHooks {
+  /** Whether the session is in plan mode right now. Both tools are always offered (a list that changes mid-turn breaks the server's prompt cache, and a reply that calls both in a row needs both), so each checks. */
+  planning(): boolean;
   /** Switch the session to plan mode for the rest of this turn. */
   enter(): void;
   /** Show the plan to the user. Says whether the turn ends here. */
@@ -19,7 +21,7 @@ interface ExitArgs {
   plan: string;
 }
 
-export function enterPlanModeTool(hooks: Pick<PlanHooks, "enter">): HarnessTool<Record<string, never>> {
+export function enterPlanModeTool(hooks: Pick<PlanHooks, "enter" | "planning">): HarnessTool<Record<string, never>> {
   return {
     readOnly: false,
     definition: {
@@ -33,6 +35,7 @@ export function enterPlanModeTool(hooks: Pick<PlanHooks, "enter">): HarnessTool<
     },
     intent: () => ({ action: "read", paths: [] }),
     async run() {
+      if (hooks.planning()) return { content: "Plan mode is already on. Finish the plan and call exit_plan_mode with it." };
       hooks.enter();
       return {
         content:
@@ -42,7 +45,7 @@ export function enterPlanModeTool(hooks: Pick<PlanHooks, "enter">): HarnessTool<
   };
 }
 
-export function exitPlanModeTool(hooks: Pick<PlanHooks, "propose">): HarnessTool<ExitArgs> {
+export function exitPlanModeTool(hooks: Pick<PlanHooks, "propose" | "planning">): HarnessTool<ExitArgs> {
   return {
     readOnly: false,
     allowedInPlan: true,
@@ -61,6 +64,7 @@ export function exitPlanModeTool(hooks: Pick<PlanHooks, "propose">): HarnessTool
     },
     intent: () => ({ action: "read", paths: [] }),
     async run(args) {
+      if (!hooks.planning()) return { content: "Plan mode is not on, so there is nothing to exit. Call enter_plan_mode first if you want to plan before changing anything.", isError: true };
       const plan = args.plan.trim();
       if (plan === "") return { content: "The plan is empty. Write the plan and call exit_plan_mode again.", isError: true };
       const { endTurn } = hooks.propose(plan);

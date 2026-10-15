@@ -1,4 +1,8 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { useCallback, useEffect, useRef, useState } from "react";
+
 
 import type { ClientApi, CommandResult, SettingsSnapshot } from "../../../server/api.js";
 import type { UiConfig } from "../../../core/types.js";
@@ -28,6 +32,11 @@ export interface SettingsState {
   /** Start one MCP server and list its tools. */
   readonly testMcp: (name: string) => void;
   readonly probe: (profileId: string, model?: string) => void;
+  /** Write a harness profile to a file (no key, no probe results), or add one from such a file. */
+  readonly exportProfile: (profileId: string, file: string) => void;
+  readonly importProfile: (file: string) => void;
+  /** What the last export or import did, in a line. */
+  readonly notice: { readonly text: string; readonly error: boolean } | null;
   readonly reload: () => void;
 }
 
@@ -43,6 +52,7 @@ export function useSettings(client: ClientApi, open: boolean): SettingsState {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ readonly text: string; readonly error: boolean } | null>(null);
   // Guards a response arriving after the page closed (or after a newer
   // request overtook it) from overwriting what is on screen.
   const generation = useRef(0);
@@ -165,7 +175,47 @@ export function useSettings(client: ClientApi, open: boolean): SettingsState {
   );
   const probe = useCallback((profileId: string, model?: string) => start("probe", profileId, model), [start]);
 
-  return { snapshot, loading, saving, error, set, duplicate, run, test, testMcp, probe, reload: load };
+  const exportProfile = useCallback(
+    (profileId: string, file: string) => {
+      setNotice(null);
+      void client
+        .query({ type: "harness.profile.export", profileId })
+        .then(async ({ text }) => {
+          const target = resolveFile(file);
+          await mkdir(path.dirname(target), { recursive: true });
+          await writeFile(target, text, "utf8");
+          setNotice({ text: `Exported ${profileId} to ${target}. It holds no saved key.`, error: false });
+        })
+        .catch((cause: unknown) => setNotice({ text: cause instanceof Error ? cause.message : String(cause), error: true }));
+    },
+    [client],
+  );
+
+  const importProfile = useCallback(
+    (file: string) => {
+      setNotice(null);
+      const mine = (generation.current += 1);
+      void readFile(resolveFile(file), "utf8")
+        .catch(() => {
+          throw new Error(`Cannot read ${file}.`);
+        })
+        .then(async (text) => {
+          const result = await client.dispatch({ type: "harness.profile.import", text, onConflict: "rename" });
+          if (generation.current === mine) setSnapshot({ path: result.path, exists: result.exists, settings: result.settings });
+          setNotice({ text: `Imported as ${result.id}${result.id === result.fileId ? "" : ` (${result.fileId} was taken)`}. Set its key if the server needs one.`, error: false });
+        })
+        .catch((cause: unknown) => setNotice({ text: cause instanceof Error ? cause.message : String(cause), error: true }));
+    },
+    [client],
+  );
+
+  return { snapshot, loading, saving, error, set, duplicate, run, test, testMcp, probe, exportProfile, importProfile, notice, reload: load };
+}
+
+/** A path as typed: `~/` is the home directory, a relative one is from where Moxen was started. */
+function resolveFile(file: string): string {
+  const trimmed = file.trim();
+  return path.resolve(trimmed.startsWith("~/") ? path.join(os.homedir(), trimmed.slice(2)) : trimmed);
 }
 
 /**

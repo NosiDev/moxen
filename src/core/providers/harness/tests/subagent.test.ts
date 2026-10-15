@@ -167,6 +167,27 @@ describe("the subagent tool", () => {
     await expect(driver.awaitTurn("t1", turnId)).resolves.toMatchObject({ status: "interrupted" });
     await until(() => events.some((event) => event.type === "subagent.updated" && event.status === "stopped"));
   });
+
+  it("stops one foreground subagent by its id, closes its entry, and lets the parent carry on", async () => {
+    let nestedStarted = false;
+    const { driver, events } = driverWith([
+      call("p1", "subagent", { description: "slow", prompt: "Wait" }),
+      (request) =>
+        (async function* () {
+          nestedStarted = true;
+          await new Promise<void>((resolve) => request.signal?.addEventListener("abort", () => resolve(), { once: true }));
+          throw Object.assign(new Error("aborted"), { name: "AbortError" });
+          yield* [] as ModelEvent[];
+        })(),
+      say("the subagent was stopped"),
+    ]);
+    const { turnId } = await begin(driver);
+    await until(() => nestedStarted);
+    const started = events.find((event) => event.type === "subagent.updated" && event.status === "started");
+    await run(driver.stopBackgroundTask("t1", started?.type === "subagent.updated" ? started.agentId : "missing"));
+    await expect(driver.awaitTurn("t1", turnId)).resolves.toMatchObject({ status: "completed" });
+    expect(events.some((event) => event.type === "subagent.updated" && event.status === "stopped")).toBe(true);
+  });
 });
 
 describe("subagents beside each other and in the background", () => {

@@ -1,6 +1,6 @@
 {
   "note": "Claude models the Agent SDK can be asked for. The SDK exposes no model-listing API, so this list is maintained by hand; slugs drift as Anthropic ships, and `updatedAt` makes staleness visible.",
-  "updatedAt": "2026-10-07",
+  "updatedAt": "2026-10-15",
   "default": "claude-fable-5-1",
   "models": [
     {
@@ -401,6 +401,43 @@
             {
               "id": "high",
               "label": "High"
+            },
+            {
+              "id": "max",
+              "label": "Max"
+            },
+            {
+              "id": "ultrathink",
+              "label": "Ultrathink"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "claude-haiku-5-5",
+      "name": "Claude Haiku 5.5",
+      "options": [
+        {
+          "id": "effort",
+          "label": "Reasoning",
+          "default": "medium",
+          "choices": [
+            {
+              "id": "low",
+              "label": "Low"
+            },
+            {
+              "id": "medium",
+              "label": "Medium"
+            },
+            {
+              "id": "high",
+              "label": "High"
+            },
+            {
+              "id": "xhigh",
+              "label": "Extra High"
             },
             {
               "id": "max",

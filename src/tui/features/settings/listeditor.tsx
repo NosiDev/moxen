@@ -38,6 +38,9 @@ export function ListEditor({
   run,
   onTest,
   onProbe,
+  onExport,
+  onImport,
+  notice,
   width,
   onExit,
 }: {
@@ -49,6 +52,9 @@ export function ListEditor({
   run: HarnessRun | null;
   onTest: (profileId: string, model?: string) => void;
   onProbe: (profileId: string, model?: string) => void;
+  onExport: (profileId: string, file: string) => void;
+  onImport: (file: string) => void;
+  notice: { readonly text: string; readonly error: boolean } | null;
   width: number;
   onExit: () => void;
 }) {
@@ -69,10 +75,13 @@ export function ListEditor({
   const model = screen.model === null ? undefined : profile?.fields.find((field) => field.path === "models")?.items?.find((entry) => entry.id === screen.model);
 
   // An entry that vanished (removed here or by another client) sends the screen back up.
+  // Not while a save is in flight: a new entry is opened the moment it is added, before
+  // the server's answer has put it in `items`.
   useEffect(() => {
+    if (saving !== null) return;
     if (screen.profile !== null && profile === undefined) setScreen({ profile: null, model: null });
     else if (screen.model !== null && model === undefined) setScreen({ profile: screen.profile, model: null });
-  }, [screen, profile, model]);
+  }, [screen, profile, model, saving]);
 
   const rows = useMemo<readonly EditorRow[]>(() => {
     if (profile === undefined) return [];
@@ -80,7 +89,8 @@ export function ListEditor({
     return itemRows(profileFields, profile);
   }, [profile, model, profileFields, modelFields]);
   // The profiles screen has its own rows: one per profile, then "add".
-  const listCount = items.length + 1;
+  const canTransfer = kind.type === "list" && kind.actions.includes("transfer");
+  const listCount = items.length + 1 + (canTransfer ? 1 : 0);
   const stops = useMemo(() => (profile === undefined ? [] : rows.map((row, index) => (selectable(row) ? index : -1)).filter((index) => index >= 0)), [profile, rows]);
   const count = profile === undefined ? listCount : stops.length;
   const at = Math.min(cursor, Math.max(0, count - 1));
@@ -209,6 +219,14 @@ export function ListEditor({
       onProbe(selectedProfileId, screen.model ?? profile?.fields.find((f) => f.path === "models")?.items?.[0]?.id);
     } else setConfirm({ action: "probe", id: selectedProfileId });
   };
+  const doExport = () => {
+    if (!canTransfer || selectedProfileId === null) return;
+    ask("Export to a file", "Writes this profile as JSON. A saved key and probe results are left out, so the file is safe to share. `~/` is your home directory.", (file) => file.trim() !== "" && onExport(selectedProfileId, file), `~/${selectedProfileId}.moxen-profile.json`);
+  };
+  const doImport = () => {
+    if (!canTransfer) return;
+    ask("Import from a file", "A file made by Export (or `moxen harness profile export`). If its id is taken, it is added under a new one. Set the key afterwards if the server needs one.", (file) => file.trim() !== "" && onImport(file), "", "~/colab.moxen-profile.json");
+  };
   const doCopy = () => {
     if (selectedProfileId === null) return;
     ask("Copy to a new id", "The copy keeps everything except probe results, which describe one server.", (newId) => onDuplicate(selectedProfileId, newId.trim()));
@@ -247,12 +265,15 @@ export function ListEditor({
     if (plain && key.name === "a" && profile === undefined) return startAdd();
     if (plain && key.name === "t") return doTest();
     if (plain && key.name === "p") return doProbe();
+    if (plain && key.name === "e") return doExport();
+    if (plain && key.name === "i" && profile === undefined) return doImport();
     if (plain && key.name === "d") return doCopy();
     if (plain && key.name === "x") return doRemove();
     if (enter || key.name === "space" || key.name === "right") {
       if (profile === undefined) {
         const target = items[at];
-        if (target === undefined) startAdd();
+        if (canTransfer && at === items.length + 1) doImport();
+        else if (target === undefined) startAdd();
         else go({ profile: target.id, model: null });
         return;
       }
@@ -283,8 +304,8 @@ export function ListEditor({
         : confirm !== null
           ? `Press x again to remove ${confirm.id} · esc cancels`
           : profile === undefined
-            ? `enter opens · a adds ${noun} · d copies${canTest ? " · t tests" : ""}${canProbe ? " · p probes" : ""} · x removes · esc back`
-            : `enter edits${canTest ? " · t test" : ""}${canProbe ? " · p probe" : ""} · d copy · x remove · esc back · applies from the next ${kind.type === "list" && kind.add === "mcp-server" ? "session" : "message"}`;
+            ? `enter opens · a adds ${noun} · d copies${canTest ? " · t tests" : ""}${canProbe ? " · p probes" : ""}${canTransfer ? " · e exports · i imports" : ""} · x removes · esc back`
+            : `enter edits${canTest ? " · t test" : ""}${canProbe ? " · p probe" : ""}${canTransfer ? " · e export" : ""} · d copy · x remove · esc back · applies from the next ${kind.type === "list" && kind.add === "mcp-server" ? "session" : "message"}`;
 
   return (
     <box style={{ flexDirection: "column", flexGrow: 1 }} backgroundColor={SURFACE.raised}>
@@ -301,6 +322,7 @@ export function ListEditor({
           <box style={{ flexDirection: "row", height: 1, flexShrink: 0, marginTop: 1 }} backgroundColor={SURFACE.raised}>
             {canTest ? <Chip label="Test" keyHint="t" onPress={doTest} disabled={run?.running === true} /> : null}
             {canProbe ? <Chip label="Probe" keyHint="p" onPress={doProbe} disabled={run?.running === true} /> : null}
+            {canTransfer ? <Chip label="Export" keyHint="e" onPress={doExport} /> : null}
             <Chip label="Copy" keyHint="d" onPress={doCopy} />
             <Chip label={confirm?.action === "remove-profile" || confirm?.action === "remove-model" ? "Remove: click again" : "Remove"} keyHint="x" onPress={doRemove} danger />
           </box>
@@ -341,6 +363,7 @@ export function ListEditor({
               <Line key={item.id} id={`list-row-${index}`} left={`${index === at ? "▌ " : "  "}${item.title}`} right={item.status ? `! ${item.status}` : item.summary} rightColor={item.status ? COLOR.warn : COLOR.dim} active={index === at} width={width} onPress={() => go({ profile: item.id, model: null })} />
             ))}
             <Line id={`list-row-${items.length}`} left={`${items.length === at ? "▌ " : "  "}+ Add ${noun}`} right="" active={items.length === at} width={width} accent onPress={startAdd} />
+            {canTransfer ? <Line id={`list-row-${items.length + 1}`} left={`${items.length + 1 === at ? "▌ " : "  "}↓ Import from a file`} right="" active={items.length + 1 === at} width={width} accent onPress={doImport} /> : null}
           </>
         ) : (
           rows.map((row, index) => (
@@ -352,6 +375,7 @@ export function ListEditor({
             }} />
           ))
         )}
+        {overlay === null && notice !== null ? <text fg={notice.error ? COLOR.warn : COLOR.dim} bg={SURFACE.raised} wrapMode="word" selectable={false}>{notice.text}</text> : null}
         {overlay === null && run !== null && (screen.profile === null || run.profileId === screen.profile) ? <RunPanel run={run} width={width} /> : null}
       </scrollbox>
       <box style={{ flexDirection: "row", flexShrink: 0, marginTop: 1, ...(confirm?.action === "probe" ? {} : { height: 1 }) }} backgroundColor={SURFACE.raised}>

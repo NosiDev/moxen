@@ -65,6 +65,9 @@ export function SettingsModal({
   onTest,
   onTestMcp,
   onProbe,
+  onExport,
+  onImport,
+  notice,
   versions,
   latest,
   updating,
@@ -90,6 +93,9 @@ export function SettingsModal({
   /** Start an MCP server and list its tools. */
   onTestMcp: (name: string) => void;
   onProbe: (profileId: string, model?: string) => void;
+  onExport: (profileId: string, file: string) => void;
+  onImport: (file: string) => void;
+  notice: { readonly text: string; readonly error: boolean } | null;
   /** Each updatable provider's install, from the doctor query; null until it answers. */
   versions: { readonly claude: ProviderCheckView; readonly opencode: ProviderCheckView } | null;
   /** The newest release of each, from the registry; null until it answers. */
@@ -299,6 +305,9 @@ export function SettingsModal({
                   run={run}
                   onTest={(id, model) => (listItem.descriptor.key === "mcpServers" ? onTestMcp(id) : onTest(id, model))}
                   onProbe={onProbe}
+                  onExport={onExport}
+                  onImport={onImport}
+                  notice={notice}
                   width={paneWidth}
                   onExit={() => setListOpen(null)}
                 />

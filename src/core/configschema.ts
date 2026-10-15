@@ -135,7 +135,7 @@ export interface ListKind {
   /** How a client walks a user through adding one. */
   readonly add: "harness-profile" | "mcp-server";
   readonly fields: readonly ListField[];
-  readonly actions: readonly ("duplicate" | "test" | "probe")[];
+  readonly actions: readonly ("duplicate" | "test" | "probe" | "transfer")[];
 }
 
 /** One list entry as a client draws it: values, where they come from, and plain-language state. */

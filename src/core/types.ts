@@ -145,6 +145,8 @@ export interface HarnessModelConfig {
   vision?: boolean;
   /** Picks the quirk preset (`qwen3`, `mistral`, …) when the id does not say. */
   family?: string;
+  /** Reasoning-effort levels the model picker offers (`low`, `high`, …); unset offers none. Sent through the family's effort setting (`quirks.effortParam` / `effortKwarg`) on a chat server. */
+  efforts?: string[];
   /** What `moxen harness probe` found out about this model on its server. Written by the probe, never by hand. */
   probed?: HarnessProbedConfig;
 }
@@ -194,7 +196,7 @@ export interface HarnessProfileConfig {
   compaction?: HarnessCompactionConfig;
   systemPromptAppend?: string;
   /** Thresholds of the repeat guards; unset uses the defaults (4 / 6 identical calls, 10 repeats of a stretch of text). */
-  loopGuard?: { repeatWarn?: number; repeatStop?: number; textRepeats?: number };
+  loopGuard?: { repeatWarn?: number; repeatStop?: number; textRepeats?: number; calls?: boolean; text?: boolean };
   /** Make a title for each thread with this model (default on). Reasoning models can spend the small title budget before answering; turn it off for those. */
   titles?: boolean;
   /**

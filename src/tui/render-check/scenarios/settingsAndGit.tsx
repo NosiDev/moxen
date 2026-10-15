@@ -63,6 +63,9 @@ async function runSettings(): Promise<void> {
         onTest={() => {}}
       onTestMcp={() => {}}
         onProbe={() => {}}
+        onExport={() => {}}
+        onImport={() => {}}
+        notice={null}
         // Claude Code older than the floor, OpenCode current: both statuses show.
         versions={{
           claude: { ok: false, installed: true, version: "2.1.280 (Claude Code)", login: "inherit", minVersion: "2.1.292" },

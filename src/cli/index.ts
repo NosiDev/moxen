@@ -16,7 +16,7 @@ import {
 } from "../core/config.js";
 import { describeSettings, isSettingKey, listTarget, readSetting, secretKeyName } from "../core/configschema.js";
 import { readListValue } from "../core/configlist.js";
-import { addProfile, duplicateProfile, editProfile, listProfiles, probeProfile, removeProfile, showProfile, testProfile } from "./harness/harness.js";
+import { addProfile, duplicateProfile, editProfile, exportProfile, importProfile, listProfiles, probeProfile, removeProfile, showProfile, testProfile } from "./harness/harness.js";
 import type { MergeStrategy } from "../server/api.js";
 import {
   commentOnForgeRequest,
@@ -528,6 +528,31 @@ harnessProfile
       const context = await commandContext();
       const result = await listProfiles(context);
       writeSuccess(result, context, result.profiles.length === 0 ? "No harness profiles. Add one with `moxen harness profile add`." : result.profiles.map((p) => `${p.id}\t${p.label}\t${p.baseUrl ?? "-"}\t${p.models.join(",")}${p.status ? `\t! ${p.status}` : ""}`).join("\n"));
+    }),
+  );
+harnessProfile
+  .command("export")
+  .argument("<id>")
+  .option("--out <file>", "Write the profile here instead of printing it.")
+  .description("A profile as a JSON document to share. It never holds a saved key or probe results.")
+  .action((id: string, options: { out?: string }) =>
+    action(async () => {
+      const context = await commandContext();
+      const result = await exportProfile(context, id, options.out !== undefined ? { out: options.out } : {});
+      writeSuccess(result, context, result.path === null ? result.text.trimEnd() : `Wrote ${result.path}`);
+    }),
+  );
+harnessProfile
+  .command("import")
+  .argument("<file>")
+  .option("--id <id>", "Import it under this id instead of the one in the file.")
+  .option("--replace", "Overwrite a profile that has the same id.")
+  .description("Add a profile from a file made by `harness profile export`. A key is never imported: set one afterwards.")
+  .action((file: string, options: { id?: string; replace?: boolean }) =>
+    action(async () => {
+      const context = await commandContext();
+      const { profile } = await importProfile(context, file, { ...(options.id !== undefined ? { id: options.id } : {}), ...(options.replace === true ? { replace: true } : {}) });
+      writeSuccess({ profile }, context, `Imported ${profile.id}. ${profile.status ?? "Set its key with `moxen config set` if the server needs one."}`);
     }),
   );
 harnessProfile

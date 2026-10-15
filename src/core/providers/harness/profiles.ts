@@ -67,6 +67,11 @@ function parseModel(raw: unknown, label: string): HarnessModelConfig {
   }
   const family = optionalString(input, "family", label);
   if (family !== undefined) model.family = family;
+  if (input.efforts !== undefined) {
+    if (!Array.isArray(input.efforts) || input.efforts.some((entry) => typeof entry !== "string" || entry.trim() === "")) fail(`${label}.efforts`, "must be a list of words.");
+    const efforts = [...new Set((input.efforts as string[]).map((entry) => entry.trim()))];
+    if (efforts.length > 0) model.efforts = efforts;
+  }
   if (input.probed !== undefined) model.probed = parseProbed(input.probed, `${label}.probed`);
   return model;
 }
@@ -177,6 +182,12 @@ function parseProfile(raw: unknown, label: string): HarnessProfileConfig {
     if (stop !== undefined) guard.repeatStop = stop;
     const text = optionalPositiveInt(raw, "textRepeats", label);
     if (text !== undefined) guard.textRepeats = text;
+    for (const name of ["calls", "text"] as const) {
+      const flag = raw[name];
+      if (flag === undefined) continue;
+      if (typeof flag !== "boolean") fail(`${label}.${name}`, "must be true or false.");
+      guard[name] = flag;
+    }
     if (Object.keys(guard).length > 0) profile.loopGuard = guard;
   }
   if (input.titles !== undefined) {

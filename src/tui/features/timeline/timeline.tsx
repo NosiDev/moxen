@@ -352,12 +352,12 @@ function ActivityRow({ entry, now, turnFiles = [], onOpenUrl, width = 80 }: { en
   }
 
   if (view.kind === "web") {
-    const name = view.tool.toLowerCase();
+    const name = view.tool.toLowerCase().replace(/[^a-z]/g, "");
     const url = /^https?:\/\//i.test(view.query) ? view.query : null;
     const title =
-      name === "webfetch"
+      name.endsWith("webfetch")
         ? `Fetched ${url === null ? truncate(view.query, 48) : hostOf(url)}`
-        : name === "websearch" || name === "mcp-websearch"
+        : name.endsWith("websearch")
           ? `Searched for "${truncate(view.query, 48)}"`
           : view.tool;
     return (

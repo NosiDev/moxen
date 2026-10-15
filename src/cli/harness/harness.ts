@@ -1,3 +1,6 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+
 import type { ListItemView } from "../../core/configschema.js";
 import { CliError } from "../../core/errors.js";
 import type { CliConfig } from "../../core/types.js";
@@ -104,6 +107,33 @@ export async function editProfile(
 export async function duplicateProfile(ctx: HarnessContext, id: string, newId: string) {
   await (await cliClient(ctx.config, undefined, ctx.configPath)).dispatch({ type: "settings.duplicate", key: PROFILES, id, newId });
   return await showProfile(ctx, newId);
+}
+
+/** A profile as an exportable JSON document: written to `out`, or returned for the caller to print. Nothing secret is in it. */
+export async function exportProfile(ctx: HarnessContext, id: string, options: { out?: string }) {
+  const { id: profileId, text } = await (await cliClient(ctx.config, undefined, ctx.configPath)).query({ type: "harness.profile.export", profileId: id });
+  if (options.out === undefined) return { id: profileId, text, path: null };
+  const target = path.resolve(options.out);
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, text, "utf8");
+  return { id: profileId, text, path: target };
+}
+
+/** Add a profile from an exported file. An id already in use is an error unless `replace` says to overwrite it. */
+export async function importProfile(ctx: HarnessContext, file: string, options: { id?: string; replace?: boolean }) {
+  let text: string;
+  try {
+    text = await readFile(path.resolve(file), "utf8");
+  } catch {
+    throw new CliError("INVALID_CONFIG", `Cannot read ${file}.`);
+  }
+  const { id } = await (await cliClient(ctx.config, undefined, ctx.configPath)).dispatch({
+    type: "harness.profile.import",
+    text,
+    ...(options.id !== undefined ? { id: options.id } : {}),
+    onConflict: options.replace === true ? "replace" : "error",
+  });
+  return await showProfile(ctx, id);
 }
 
 export async function removeProfile(ctx: HarnessContext, id: string) {

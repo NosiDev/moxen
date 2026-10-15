@@ -13,9 +13,13 @@ export interface LoopGuardSettings {
   readonly repeatStop: number;
   /** A reply repeating one 50-character stretch this many times is cut off. */
   readonly textRepeats: number;
+  /** Watch for repeated tool calls at all. */
+  readonly calls: boolean;
+  /** Watch the streamed text and reasoning for a loop at all. */
+  readonly text: boolean;
 }
 
-export const DEFAULT_LOOP_GUARD: LoopGuardSettings = { repeatWarn: 4, repeatStop: 6, textRepeats: 10 };
+export const DEFAULT_LOOP_GUARD: LoopGuardSettings = { repeatWarn: 4, repeatStop: 6, textRepeats: 10, calls: true, text: true };
 
 export type LoopVerdict = "ok" | "warn" | "stop";
 
@@ -41,6 +45,7 @@ export class LoopGuard {
   }
 
   record(name: string, rawArguments: string): LoopVerdict {
+    if (!this.#settings.calls) return "ok";
     const key = `${name}\u0000${rawArguments.replace(/\s+/g, "")}`;
     const count = (this.#seen.get(key) ?? 0) + 1;
     this.#seen.set(key, count);

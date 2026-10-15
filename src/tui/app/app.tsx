@@ -1010,8 +1010,8 @@ export function App({
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)));
   };
 
-  /** Whether the open thread's provider can stop one native subagent on its own (OpenCode's driver can; Claude's run inside the turn). */
-  const canStopSubagent = selected?.modelSelection?.instanceId.startsWith("opencode") === true;
+  /** Whether the open thread's provider can stop one native subagent on its own (the OpenCode and harness drivers can; Claude's run inside the turn). */
+  const canStopSubagent = selected?.modelSelection?.instanceId.startsWith("opencode") === true || selected?.modelSelection?.instanceId.startsWith("harness/") === true;
   const stopSubagent = (agentId: string): void => {
     if (openThreadId === null) return;
     void client
@@ -2685,6 +2685,9 @@ export function App({
           onTest={settings.test}
           onTestMcp={settings.testMcp}
           onProbe={settings.probe}
+          onExport={settings.exportProfile}
+          onImport={settings.importProfile}
+          notice={settings.notice}
           versions={providerVersions.versions}
           latest={providerVersions.latest}
           updating={providerUpdates.updating}

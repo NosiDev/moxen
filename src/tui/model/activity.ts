@@ -971,7 +971,8 @@ export function describeActivity(activity: ActivityEnvelope): ActivityView {
     // Claude's `WebFetch`/`WebSearch` normally arrive under the dedicated
     // `web_search` itemType above, but fall back here if a build ever routes
     // them through the generic tool-call path instead.
-    if (short === "webfetch" || short === "websearch") {
+    const flatName = name.replace(/[^a-z]/g, "");
+    if (short === "webfetch" || short === "websearch" || flatName.endsWith("webfetch") || flatName.endsWith("websearch")) {
       return {
         kind: "web",
         tool: display,
@@ -1087,6 +1088,17 @@ export function describeActivity(activity: ActivityEnvelope): ActivityView {
     // whatever detail the projection carried so the row says what ran —
     // unless the tool already maps to a friendly title (ExitPlanMode & co.),
     // whose raw `Name: {json}` echo would only dump wire JSON under it.
+    // The harness's background-task tools: say which task, not the tool's wire name.
+    if (name === "task_output" || name === "task_stop") {
+      const taskId = asString(input.task_id);
+      const stopping = name === "task_stop";
+      return {
+        kind: "tool",
+        tool: `${stopping ? (running ? "Stopping" : "Stopped") : running ? "Reading output of" : "Output of"} ${taskId ?? "task"}`,
+        detail: asString(payload.detail) ?? "",
+        running,
+      };
+    }
     const fallbackName = asString(input.name) ?? title;
     const fallbackTool = display === "tool" ? fallbackName : display;
     if (fallbackTool.toLowerCase() === "toolsearch") return toolSearchView(input, running);

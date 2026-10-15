@@ -1557,6 +1557,38 @@ describe("DirectConnection harness profiles", () => {
     }
   });
 
+  it("exports a profile as a document without its saved key, and says so when there is none by that id", async () => {
+    const { connection } = await openAt("export.json");
+    try {
+      await connection.dispatch({ type: "settings.set", key: `${PROFILES}[home]`, value: JSON.stringify({ baseUrl: "http://h:8080", apiKeyEnv: "HOME_KEY", models: [{ id: "m", efforts: ["low"] }] }) });
+      const exported = await connection.query({ type: "harness.profile.export", profileId: "HOME" });
+      expect(exported.id).toBe("home");
+      expect(JSON.parse(exported.text)).toMatchObject({ kind: "moxen.harness-profile", version: 1, profile: { id: "home", apiKeyEnv: "HOME_KEY", models: [{ id: "m", efforts: ["low"] }] } });
+      await expect(connection.query({ type: "harness.profile.export", profileId: "nope" })).rejects.toThrow(/No harness profile/);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("imports an exported profile, refusing a taken id unless told to rename or replace, and ignoring a key in the file", async () => {
+    const { connection } = await openAt("import.json");
+    try {
+      const file = JSON.stringify({ kind: "moxen.harness-profile", version: 1, profile: { id: "home", baseUrl: "http://h:8080", apiKey: "keychain:stolen", models: [{ id: "m" }] } });
+      const first = await connection.dispatch({ type: "harness.profile.import", text: file });
+      expect(first).toMatchObject({ id: "home", fileId: "home" });
+      await expect(connection.dispatch({ type: "harness.profile.import", text: file })).rejects.toThrow(/already exists/);
+      expect(await connection.dispatch({ type: "harness.profile.import", text: file, onConflict: "rename" })).toMatchObject({ id: "home-2", fileId: "home" });
+      expect(await connection.dispatch({ type: "harness.profile.import", text: file, id: "work" })).toMatchObject({ id: "work" });
+      const replaced = await connection.dispatch({ type: "harness.profile.import", text: file.replace("8080", "9090"), onConflict: "replace" });
+      const items = replaced.settings.find((view) => view.descriptor.key === PROFILES)?.items ?? [];
+      expect(items.map((item) => item.id)).toEqual(["home", "home-2", "work"]);
+      expect(JSON.stringify(items)).not.toContain("stolen");
+      await expect(connection.dispatch({ type: "harness.profile.import", text: "{}" })).rejects.toThrow();
+    } finally {
+      await connection.close();
+    }
+  });
+
   it("probes into the model's probed block, never its quirks, and a dry run saves nothing", async () => {
     const strict = chat((body) =>
       (body.messages as Array<{ role: string }>).some((message, index) => index > 0 && message.role === "system")

@@ -18,6 +18,7 @@
  *   effort picker) works unmodified.
  */
 import { primeProfileKey } from "../core/providers/harness/profiles.js";
+import { exportProfileDocument, freeProfileId, parseProfileDocument } from "../core/providers/harness/profileio.js";
 import { testMcpServer } from "../core/mcptest.js";
 import { searchThreadsView } from "../core/threads/search.js";
 import * as Effect from "effect/Effect";
@@ -756,6 +757,22 @@ export class DirectConnection implements ClientApi {
         const { config } = await this.readConfigFile();
         return await testMcpServer(command.name, config.mcpServers, process.cwd());
       }
+      case "harness.profile.import": {
+        const parsed = parseProfileDocument(command.text);
+        const { config, path } = await this.readConfigFile();
+        const existing = config.providers?.harness?.profiles ?? [];
+        const wanted = (command.id ?? parsed.id).toLowerCase();
+        const taken = new Set(existing.map((entry) => entry.id));
+        const mode = command.onConflict ?? "error";
+        if (taken.has(wanted) && mode === "error") {
+          throw new CliError("INVALID_CONFIG", `A harness profile "${wanted}" already exists. Import it under another id, or replace it.`, { details: { profileId: wanted } });
+        }
+        const id = taken.has(wanted) && mode === "rename" ? freeProfileId(wanted, taken) : wanted;
+        const next = { ...parsed, id };
+        const profiles = taken.has(id) ? existing.map((entry) => (entry.id === id ? next : entry)) : [...existing, next];
+        await saveConfig(path, normalizeConfig({ ...config, providers: { ...config.providers, harness: { ...config.providers?.harness, profiles } } }));
+        return { ...(await this.settingsSnapshot()), accepted: true, id, fileId: parsed.id };
+      }
       case "harness.profile.test": {
         const { profile, model } = await this.harnessModel(command.profileId, command.model, false);
         return await testProfile({ profile, model, ...(this.harnessFetch ? { fetch: this.harnessFetch } : {}) });
@@ -1173,6 +1190,12 @@ export class DirectConnection implements ClientApi {
         return { providers: usageLimitsSnapshot() };
       case "settings.read":
         return await this.settingsSnapshot();
+      case "harness.profile.export": {
+        const { config } = await this.readConfigFile();
+        const profile = config.providers?.harness?.profiles?.find((entry) => entry.id === query.profileId.toLowerCase());
+        if (!profile) throw new CliError("PROVIDER_UNKNOWN", `No harness profile "${query.profileId}".`, { details: { profileId: query.profileId } });
+        return { id: profile.id, text: `${JSON.stringify(exportProfileDocument(profile), null, 2)}\n` };
+      }
       case "git.overview": {
         const cwd = await this.workspaceFor(query.threadId);
         return await readOverview(cwd, {

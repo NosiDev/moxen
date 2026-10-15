@@ -67,6 +67,12 @@ function opencodeEfforts(model: ModelsDevModel): EffortDescriptor[] {
   }];
 }
 
+/** The picker's effort choices for a profile model; the driver reads the pick from the `effort` option. */
+function harnessEfforts(values: readonly string[] | undefined): EffortDescriptor[] {
+  if (values === undefined || values.length === 0) return [];
+  return [{ id: "effort", label: "Effort", choices: values.map((id) => ({ id, label: id, isDefault: null })), currentValue: null }];
+}
+
 /**
  * Per-provider `opencode/<id>` entries: categorized, browsable sections.
  * Credentialed providers list everything. Without a credential only
@@ -191,7 +197,7 @@ function harnessProviders(
       installed: true,
       status: keyName !== undefined && !keySet ? `${keyName} is not set` : null,
       authStatus: keySet ? "api-key" : null,
-      models: profile.models.map((model) => ({ ...baseModel(model.id, model.id), isHidden: isHidden(instanceId, model.id) })),
+      models: profile.models.map((model) => ({ ...baseModel(model.id, model.id), isHidden: isHidden(instanceId, model.id), efforts: harnessEfforts(model.efforts) })),
       supportedRuntimeModes: null,
       usageLimits: null,
       skills: [],

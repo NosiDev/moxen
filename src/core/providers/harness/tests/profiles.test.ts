@@ -28,6 +28,14 @@ describe("harness profiles", () => {
     expect(() => normalizeHarnessConfig({ profiles: [profile, profile] })).toThrow(/uses an id twice/);
   });
 
+  it("keeps a model's effort levels and the guard switches, and rejects junk", () => {
+    const config = normalizeHarnessConfig({ profiles: [{ ...profile, models: [{ id: "m", efforts: [" low ", "high", "low"] }], loopGuard: { text: false, calls: true } }] });
+    expect(config?.profiles?.[0]?.models[0]?.efforts).toEqual(["low", "high"]);
+    expect(config?.profiles?.[0]?.loopGuard).toEqual({ text: false, calls: true });
+    expect(() => normalizeHarnessConfig({ profiles: [{ ...profile, models: [{ id: "m", efforts: [3] }] }] })).toThrow(/efforts/);
+    expect(() => normalizeHarnessConfig({ profiles: [{ ...profile, loopGuard: { text: "no" } }] })).toThrow(/loopGuard\.text/);
+  });
+
   it("loads a valid profile and keeps its model facts", () => {
     const config = normalizeHarnessConfig({ profiles: [{ ...profile, sampling: { temperature: 1, topK: 20 }, slots: 1 }] });
     expect(config?.profiles?.[0]).toMatchObject({ id: "colab", apiFormat: "chat", slots: 1, sampling: { temperature: 1, topK: 20 } });
