@@ -330,6 +330,19 @@ describe("HarnessDriver", () => {
   });
 
   describe("steering", () => {
+    it("carries the images of a steer onto the user message (as a note for a model without vision)", async () => {
+      const { driver, events, requests } = driverWith([call("c1", "bash", { command: "echo hi" }), answer("Seen.")]);
+      await start(driver, { runtimeMode: "approval-required" });
+      const { turnId } = await run(driver.sendTurn({ threadId: "t1", prompt: "go" }));
+      await until(events, (event) => event.type === "permission.request.opened");
+      const image = { name: "a.png", mimeType: "image/png", data: "iVBORw0KGgo=" };
+      await run(driver.steerTurn("t1", "see this", [image]));
+      const request = events.find((event) => event.type === "permission.request.opened") as { requestId: string };
+      await run(driver.respondToRequest("t1", request.requestId, { kind: "accept" }));
+      await driver.awaitTurn("t1", turnId);
+      expect(requests[1]!.messages.at(-1)).toMatchObject({ role: "user", content: "see this\n\n[Attached image: a.png]" });
+    });
+
     it("hands text sent during a turn to the model as a user message at its next step", async () => {
       const { driver, events, requests } = driverWith([call("c1", "bash", { command: "echo hi" }), answer("Switched.")]);
       await start(driver, { runtimeMode: "approval-required" });

@@ -1347,6 +1347,28 @@ describe("DirectConnection images", () => {
       await connection.close();
     }
   });
+
+  it("sends the image of a turn that starts right away", async () => {
+    const driver = new GateDriver();
+    const harness = await testHarness({ drivers: { claude: () => driver, opencode: () => driver } });
+    const connection = new DirectConnection({ storeRoot: harness.root, drivers: harness.drivers, config: async () => harness.config });
+    try {
+      const first = await connection.dispatch({ type: "thread.handover", cwd: harness.work, prompt: "Busy" });
+      await waitFor("the first run", async () => driver.prompts.length === 1);
+      await driver.release();
+      // Sent once the first turn has settled and the thread takes a fresh one.
+      await waitFor("the thread to take a fresh turn", async () =>
+        connection
+          .dispatch({ type: "thread.turn.start", threadId: first.threadId, message: { text: "Look", attachments: [upload("shot.png")] } })
+          .then(() => true, () => false),
+      );
+      await waitFor("the second turn", async () => driver.prompts.length === 2);
+      expect(driver.images[1]).toEqual([{ name: "shot.png", mimeType: "image/png", data: "iVBORw0KGgo=" }]);
+      await driver.release();
+    } finally {
+      await connection.close();
+    }
+  });
 });
 
 describe("DirectConnection plan usage", () => {

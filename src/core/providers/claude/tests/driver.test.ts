@@ -696,6 +696,19 @@ describe("claude images", () => {
       { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } },
     ]);
   });
+
+  it("carries images on a steer into the running turn", async () => {
+    const transport = new FakeTransport([[initMessage()]]);
+    const driver = new ClaudeDriver({ transport });
+    await Effect.runPromise(driver.startSession(START));
+    await Effect.runPromise(driver.sendTurn({ threadId: "thread-1", prompt: "go" }));
+    await Effect.runPromise(driver.steerTurn("thread-1", "look at this", [{ name: "a.png", mimeType: "image/png", data: "iVBORw0KGgo=" }]));
+    await sleep(20);
+    expect(transport.created[0]!.messages[1]!.message.content).toEqual([
+      { type: "text", text: "look at this" },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } },
+    ]);
+  });
 });
 const MCP = [
   { name: "docs", type: "http" as const, url: "https://docs.example/mcp", headers: { Authorization: "Bearer t" } },

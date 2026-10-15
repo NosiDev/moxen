@@ -37,6 +37,7 @@ import type {
   ProviderAdapterCapabilities,
   ProviderApprovalDecision,
   ProviderRuntimeEvent,
+  ProviderImage,
   ProviderSendTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
@@ -1845,7 +1846,7 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
    * second one delivers it; the translator holds the idle until nothing is
    * queued, so the turn still settles once.
    */
-  readonly steerTurn = (threadId: ThreadId, text: string): Effect.Effect<void, CliError> =>
+  readonly steerTurn = (threadId: ThreadId, text: string, images: readonly ProviderImage[] = []): Effect.Effect<void, CliError> =>
     this.attempt("OPENCODE_STEER_FAILED", `Could not steer the turn on thread ${threadId}`, async () => {
       const session = this.requireSession(threadId);
       const turn = this.openTurn(session);
@@ -1860,7 +1861,12 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
       const connection = await this.connectionFor(session);
       try {
         // The session's model, agent and instructions are already those of the running turn.
-        await connection.prompt({ sessionID: session.nativeSessionId, messageID, text });
+        await connection.prompt({
+          sessionID: session.nativeSessionId,
+          messageID,
+          text,
+          files: images.map((image) => ({ uri: `data:${image.mimeType};base64,${image.data}`, name: image.name })),
+        });
       } catch (cause) {
         turn.steerMessageIds.delete(messageID);
         throw cause;

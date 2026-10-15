@@ -71,7 +71,7 @@ export interface TurnConfig {
   readonly toolContext: Omit<ToolContext, "signal">;
   readonly authorize: (call: ToolCall, intent: ToolIntent) => Promise<Authorization>;
   /** Takes the text the user sent while the turn ran; it reaches the model as a user message at the next step. */
-  readonly takeSteering?: () => readonly string[];
+  readonly takeSteering?: () => readonly { readonly text: string; readonly images: readonly ProviderImage[] }[];
   /** Things the model should know that happened outside the conversation (a background command ended); each reaches it as a system entry before the next request. */
   readonly takeNotes?: () => readonly string[];
   /** Swapped out in tests. */
@@ -171,12 +171,12 @@ export async function runTurn(
 
   /** Steering goes in as ordinary user messages, so a model that already answered still reads it. Returns whether there was any. */
   const injectSteering = (): boolean => {
-    const texts = config.takeSteering?.() ?? [];
-    for (const text of texts) {
-      transcript.append({ role: "user", content: text });
+    const steers = config.takeSteering?.() ?? [];
+    for (const { text, images } of steers) {
+      transcript.append({ role: "user", content: text, ...(images.length > 0 ? { images } : {}) });
       emit({ type: "steered", text });
     }
-    return texts.length > 0;
+    return steers.length > 0;
   };
 
   for (let round = 1; round <= maxRounds; round += 1) {

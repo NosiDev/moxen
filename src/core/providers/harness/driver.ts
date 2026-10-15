@@ -144,7 +144,7 @@ interface HarnessSession {
   /** What "allow for this session" answers cover (`permissions.ts`). */
   readonly allowed: Set<string>;
   /** Text sent mid-turn, waiting for the loop's next step. */
-  readonly steering: string[];
+  readonly steering: { readonly text: string; readonly images: readonly ProviderImage[] }[];
   /** False when the user switched the to-do list off: the model is given no `todo` tool. */
   readonly checklist: boolean;
   /** The model's checklist as it last sent it. Lives only in memory, so a compaction can carry it forward. */
@@ -485,7 +485,7 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
       if (manual) {
         void this.compactSession(session, turn, target, "manual", manual.focus)
           .then((report) => {
-            for (const text of session.steering.splice(0)) session.transcript.append({ role: "user", content: text });
+            for (const steer of session.steering.splice(0)) session.transcript.append({ role: "user", content: steer.text, ...(steer.images.length > 0 ? { images: steer.images } : {}) });
             const ok = report.status === "compacted";
             this.settle(session, turn, { status: ok ? "completed" : "failed", text: "", error: ok ? null : report.message, usage: null });
           })
@@ -586,7 +586,7 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
         // Room is made while the turn is still open, so nothing else can start on the transcript meanwhile.
         if (result.status === "completed") await this.compactAfterTurn(session, turn, target);
         // Text sent after the model's last step was never read: keep it where the next turn will.
-        for (const text of session.steering.splice(0)) session.transcript.append({ role: "user", content: text });
+        for (const steer of session.steering.splice(0)) session.transcript.append({ role: "user", content: steer.text, ...(steer.images.length > 0 ? { images: steer.images } : {}) });
         this.settle(session, turn, { status: result.status, text: result.text, error: result.error, usage: { input: result.usage.input + turn.subagentUsage.input, cacheRead: result.usage.cacheRead + turn.subagentUsage.cacheRead, output: result.usage.output + turn.subagentUsage.output, thinking: result.usage.thinking + turn.subagentUsage.thinking, cacheCreate: 0 } });
       })
       .catch((error: unknown) => {
@@ -1416,11 +1416,11 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
     });
 
   /** Hand the running turn more input: the loop reads it as a user message at its next step. */
-  readonly steerTurn = (threadId: ThreadId, text: string): Effect.Effect<void, CliError> =>
+  readonly steerTurn = (threadId: ThreadId, text: string, images: readonly ProviderImage[] = []): Effect.Effect<void, CliError> =>
     this.attempt("HARNESS_STEER_FAILED", `Could not steer the turn on thread ${threadId}`, () => {
       const session = this.requireSession(threadId);
       if (!this.openTurn(session)) throw new CliError("TURN_NOT_RUNNING", `Thread ${threadId} has no running turn to steer.`, { details: { threadId } });
-      session.steering.push(text);
+      session.steering.push({ text, images });
     });
 
   // -- stopping ------------------------------------------------------------------

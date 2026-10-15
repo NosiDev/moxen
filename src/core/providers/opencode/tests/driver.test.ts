@@ -1108,6 +1108,25 @@ describe("opencode images", () => {
     });
     await Effect.runPromise(driver.stopAll());
   });
+
+  it("carries images on a steer", async () => {
+    const transport = new FakeOpencodeTransport();
+    const driver = new OpenCodeDriver({ transport, env: { ANTHROPIC_API_KEY: "test-key" } });
+    await Effect.runPromise(
+      driver.startSession({
+        threadId: "thread-1",
+        workingDirectory: "/repo",
+        modelSelection: { instanceId: "opencode", model: "anthropic/claude-opus-4-6" },
+      }),
+    );
+    await Effect.runPromise(driver.sendTurn({ threadId: "thread-1", prompt: "look" }));
+    await Effect.runPromise(driver.steerTurn("thread-1", "this one", [{ name: "a.png", mimeType: "image/png", data: "iVBORw0KGgo=" }]));
+    expect(transport.servers[0]?.callsTo("session.prompt")[1]?.args).toMatchObject({
+      text: "this one",
+      files: [{ uri: "data:image/png;base64,iVBORw0KGgo=", name: "a.png" }],
+    });
+    await Effect.runPromise(driver.stopAll());
+  });
 });
 const MCP = [
   { name: "docs", type: "http" as const, url: "https://docs.example/mcp", headers: { Authorization: "Bearer t" } },

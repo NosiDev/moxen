@@ -576,7 +576,7 @@ export class ClaudeDriver implements ProviderAdapter<CliError> {
    * tool rounds (or, if the run is already finishing, runs next and is
    * announced by the result's `queued_turn_count`).
    */
-  readonly steerTurn = (threadId: ThreadId, text: string): Effect.Effect<void, CliError> =>
+  readonly steerTurn = (threadId: ThreadId, text: string, images: readonly ProviderImage[] = []): Effect.Effect<void, CliError> =>
     this.attempt("CLAUDE_STEER_FAILED", `Could not steer the turn on thread ${threadId}`, async () => {
       const session = this.requireSession(threadId);
       const open = session.transcript.find((turn) => turn.status === "running");
@@ -588,7 +588,7 @@ export class ClaudeDriver implements ProviderAdapter<CliError> {
       open.items.push({ kind: "user", text });
       // Said outright rather than left to the default: a steer is read at
       // the running turn's next step, never held until it ends.
-      session.input.push(text, [], "next");
+      session.input.push(text, images, "next");
     });
 
   /**

@@ -540,7 +540,7 @@ export interface ProviderAdapter<TError = unknown> extends ProviderSessionTitles
    * drivers whose provider cannot take input mid-turn (Grok's ACP has no
    * such request) — a steer then stays recorded in the ledger only.
    */
-  readonly steerTurn?: (threadId: ThreadId, text: string) => Effect.Effect<void, TError>;
+  readonly steerTurn?: (threadId: ThreadId, text: string, images?: readonly ProviderImage[]) => Effect.Effect<void, TError>;
 
   readonly sendTurn: (
     input: ProviderSendTurnInput,

@@ -93,7 +93,7 @@ export interface TurnDriver extends ProviderSessionTitles {
   contextUsage?(threadId: string): Promise<ContextWindowUsage | null>;
   /** What fills the window, by category; absent where the provider reports only totals. */
   contextBreakdown?(threadId: string): Promise<ContextBreakdown | null>;
-  steerTurn?(threadId: string, text: string): Effect.Effect<void, CliError>;
+  steerTurn?(threadId: string, text: string, images?: readonly ProviderImage[]): Effect.Effect<void, CliError>;
   /**
    * The MCP servers this thread should have now, given to a session that is
    * already running (it was started with the set of its day). A no-op when

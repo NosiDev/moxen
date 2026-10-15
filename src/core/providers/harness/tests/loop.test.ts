@@ -184,7 +184,7 @@ describe("runTurn", () => {
     const file = path.join(dir, "s.txt");
     fs.writeFileSync(file, "x");
     // The first take happens before round two (the tool results are in), the second as the model finishes.
-    const takes = [["also do B"], ["and C"], []];
+    const takes = [[{ text: "also do B", images: [] }], [{ text: "and C", images: [] }], []];
     const { run, requests, events } = setup([toolCall("read", { file_path: file }), text("A done."), text("B and C done.")], { takeSteering: () => takes.shift() ?? [] });
     expect(await run()).toMatchObject({ status: "completed", text: "B and C done." });
     expect(requests[1]!.messages.at(-1)).toMatchObject({ role: "user", content: "also do B" });

@@ -22,7 +22,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
-import { decodeDataUrl, imageMention } from "../attachments.js";
+import { decodeDataUrl, imageMention, type ImageAttachmentUpload } from "../attachments.js";
 import {
   defaultModelSelection,
   followUpSelection,
@@ -54,7 +54,7 @@ import type {
   WorkspaceMode,
   WorkspaceResolution,
 } from "../types.js";
-import type { ProviderRuntimeEvent } from "../providers/spi.js";
+import type { ProviderImage, ProviderRuntimeEvent } from "../providers/spi.js";
 import { driverKindOfInstance } from "../types.js";
 import { driverKey, ensureDriverSession, executeTurn, imagesOf, type TurnDriver } from "./execute.js";
 import { pendingRuleUpdate, withRuleUpdate, type PendingRuleUpdate } from "./rulefiles.js";
@@ -465,9 +465,9 @@ export async function startTurn(ctx: OperationContext, input: StartTurnInput): P
   const sent = await sendTurn(store, thread.id, send);
   const uploads = input.attachments ?? [];
   if (sent.delivery === "steered" || sent.delivery === "injected") {
-    // Steering carries text only; images sent with a steer are named.
+    // Drivers that cannot take images mid-turn still get them named in the text.
     const text = imageMention(input.driverPrompt ?? input.prompt.trim(), uploads.map((upload) => upload.name));
-    return { ...sent, run: null, steerDelivered: await deliverSteer(driver, thread.id, text) };
+    return { ...sent, run: null, steerDelivered: await deliverSteer(driver, thread.id, text, providerImages(uploads)) };
   }
   if (sent.turn.status === "queued" && typeof sent.turn.scheduledFor === "string") {
     armScheduledTurn(thread.id, sent.turn.id, sent.turn.scheduledFor);
@@ -491,10 +491,7 @@ export async function startTurn(ctx: OperationContext, input: StartTurnInput): P
     await failTurn(store, thread.id, sent.turn.id, { error: message.slice(0, 500) }).catch(() => undefined);
     return { ...sent, run: Promise.resolve() };
   }
-  const images = uploads.flatMap((upload) => {
-    const decoded = decodeDataUrl(upload.dataUrl);
-    return decoded ? [{ name: upload.name, mimeType: decoded.mimeType, data: decoded.data }] : [];
-  });
+  const images = providerImages(uploads);
   // MCP servers added, changed or removed in config since the session started: a live session takes them now,
   // not at its next start. A server that will not connect is the provider's to report, never a reason to fail the send.
   await driver.updateMcpServers?.(sent.thread.id, setup.mcpServers).catch(() => undefined);
@@ -519,16 +516,23 @@ export async function startTurn(ctx: OperationContext, input: StartTurnInput): P
   return { ...sent, run };
 }
 
+function providerImages(uploads: readonly ImageAttachmentUpload[]): ProviderImage[] {
+  return uploads.flatMap((upload) => {
+    const decoded = decodeDataUrl(upload.dataUrl);
+    return decoded ? [{ name: upload.name, mimeType: decoded.mimeType, data: decoded.data }] : [];
+  });
+}
+
 /**
  * Give the running provider turn the steer, when this process holds its
  * session. Never starts a session: a session opened just for this would be
  * a second, empty conversation, not the one doing the work.
  */
-async function deliverSteer(driver: TurnDriver, threadId: string, text: string): Promise<boolean> {
+async function deliverSteer(driver: TurnDriver, threadId: string, text: string, images: readonly ProviderImage[]): Promise<boolean> {
   if (!driver.steerTurn) return false;
   const live = await Effect.runPromise(driver.hasSession(threadId)).catch(() => false);
   if (!live) return false;
-  return await Effect.runPromise(driver.steerTurn(threadId, text)).then(
+  return await Effect.runPromise(driver.steerTurn(threadId, text, images)).then(
     () => true,
     () => false,
   );
