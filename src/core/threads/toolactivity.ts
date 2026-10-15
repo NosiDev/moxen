@@ -222,6 +222,10 @@ export function toolActivityRow(event: ToolRuntimeEvent): ToolActivityRow | null
     case "opencode":
       native = fromOpencode(event, raw);
       break;
+    case "harness":
+      // The harness publishes Claude's shape (`toolUseId`, `input`, `output`, `isError`) on purpose.
+      native = fromClaude(event, raw);
+      break;
     default:
       native = null;
   }

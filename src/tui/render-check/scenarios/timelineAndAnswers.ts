@@ -168,7 +168,14 @@ export async function runTimelineAndAnswers(setup: TestRendererSetup): Promise<v
   await act(async () => setup.mockInput.pressArrow("right"));
   await setup.flush();
   if (!setup.captureCharFrame().includes("Which direction, step 2?")) fail("→ did not move on to question 2");
-  // Dismiss so later scenarios start from a clean composer.
-  await act(async () => setup.mockInput.pressKey("ESCAPE"));
+  // Dismiss so later scenarios start from a clean composer. The panel takes
+  // no Escape (its key listener is global), so the × in its header is the way out.
+  const frameLines = setup.captureCharFrame().split("\n");
+  const headerRow = frameLines.findIndex((line) => line.includes("1✓") && line.includes("2 Direction 2"));
+  const closeColumn = headerRow < 0 ? -1 : frameLines[headerRow]!.lastIndexOf("×");
+  if (closeColumn < 0) fail("the answer panel has no × to dismiss it");
+  await act(async () => setup.mockMouse.click(closeColumn, headerRow));
+  await new Promise((resolve) => setTimeout(resolve, 100));
   await setup.flush();
+  if (setup.captureCharFrame().includes("Which direction, step 2?")) fail("the × did not dismiss the answer panel");
 }

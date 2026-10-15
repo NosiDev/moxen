@@ -1,3 +1,4 @@
+import { driverKindOfInstance } from "../../core/types.js";
 import type { ProviderSummary } from "../../core/catalog/summary.js";
 import { updateState, versionNumber, type UpdatableProvider } from "../../core/catalog/update.js";
 import type { SettingDescriptor, SettingSection, SettingValue, SettingView } from "../../core/configschema.js";
@@ -8,7 +9,7 @@ import type { QueryResult } from "../../server/api.js";
  *
  * The page never asks for typing unless nothing else can supply the value:
  * enums list their choices, integers and durations their presets, and the
- * model defaults the provider catalog (so "Default model" lists the models
+ * model defaults the provider catalog (so "Model" lists the models
  * the default provider actually has). What stays free text is what only the
  * user knows — an executable's path, extra instructions.
  */
@@ -23,7 +24,11 @@ export interface SettingOption {
 export type SettingControl =
   | { readonly kind: "toggle" }
   | { readonly kind: "pick"; readonly options: readonly SettingOption[] }
-  | { readonly kind: "text"; readonly multiline: boolean };
+  | { readonly kind: "text"; readonly multiline: boolean }
+  /** A key or token: typed into a masked input and kept in the OS keychain. */
+  | { readonly kind: "secret" }
+  /** A structured list (the harness profiles): opens its own editor. */
+  | { readonly kind: "list" };
 
 const option = (value: string, label: string, description?: string): SettingOption =>
   description === undefined ? { value, label } : { value, label, description };
@@ -56,10 +61,17 @@ function catalogOptions(
   source: "provider" | "model" | "effort",
   settings: readonly SettingView[],
   providers: readonly ProviderSummary[],
+  providerKind?: "claude" | "opencode" | "harness",
 ): SettingOption[] {
   const available = offered(providers);
   const providerId = valueOf(settings, "provider");
-  const scoped = providerId === undefined ? available : available.filter((provider) => provider.instanceId === providerId);
+  // A provider's own page lists that provider's models; the global one follows the default provider.
+  const scoped =
+    providerKind !== undefined
+      ? available.filter((provider) => driverKindOfInstance(provider.instanceId) === providerKind)
+      : providerId === undefined
+        ? available
+        : available.filter((provider) => provider.instanceId === providerId);
   if (source === "provider") {
     return [
       option("", "Not set", "Each project's own default."),
@@ -82,7 +94,7 @@ function catalogOptions(
   }
   // Effort: the levels the default model takes, or every level the
   // offered models share a name for when no model is pinned.
-  const modelSlug = valueOf(settings, "model");
+  const modelSlug = valueOf(settings, providerKind === undefined ? "model" : `providers.${providerKind}.model`);
   const out: SettingOption[] = [option("", "Provider's default")];
   const seen = new Set<string>();
   for (const provider of scoped) {
@@ -115,6 +127,10 @@ export function settingControl(
   const kind = descriptor.kind;
   let options: SettingOption[];
   switch (kind.type) {
+    case "list":
+      return { kind: "list" };
+    case "secret":
+      return { kind: "secret" };
     case "boolean":
       return { kind: "toggle" };
     case "enum":
@@ -138,7 +154,7 @@ export function settingControl(
     case "string":
       if (kind.source === undefined) return { kind: "text", multiline: kind.multiline === true };
       // No catalog yet (still loading): the list would be empty, not wrong.
-      options = catalogOptions(kind.source, settings, providers ?? []);
+      options = catalogOptions(kind.source, settings, providers ?? [], kind.providerKind);
       break;
   }
   const current = value === undefined || value === "" ? "" : String(value);
@@ -147,8 +163,13 @@ export function settingControl(
 }
 
 /** A setting's value as the page shows it. */
-export function settingValueLabel(descriptor: SettingDescriptor, value: SettingValue, control: SettingControl): string {
+export function settingValueLabel(descriptor: SettingDescriptor, value: SettingValue, control: SettingControl, count?: number): string {
+  if (descriptor.kind.type === "list") {
+    const noun = descriptor.kind.noun;
+    return count === undefined || count === 0 ? `None yet` : `${count} ${noun}${count === 1 ? "" : "s"}`;
+  }
   if (descriptor.kind.type === "boolean") return value === true ? "On" : "Off";
+  if (descriptor.kind.type === "secret") return value === undefined || value === "" ? "Not set" : "Saved in the keychain";
   if (control.kind === "pick") {
     const current = value === undefined || value === "" ? "" : String(value);
     const match = control.options.find((entry) => entry.value === current);

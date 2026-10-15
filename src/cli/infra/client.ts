@@ -32,10 +32,11 @@ export function preferDirectClient(value: boolean): void {
   forceDirect = value;
 }
 
-export async function cliClient(config: CliConfig, drivers?: TurnDriverFactories): Promise<ClientApi> {
+export async function cliClient(config: CliConfig, drivers?: TurnDriverFactories, configPath?: string): Promise<ClientApi> {
   if (factory) return await factory(config);
   return await openClient({
-    config,
+    // A command that reads back what it just wrote (the harness profile editor) passes the file, not the launch-time object.
+    ...(configPath ? { configPath } : { config }),
     ...(drivers ? { drivers, mode: "direct" as const } : forceDirect ? { mode: "direct" as const } : {}),
   });
 }

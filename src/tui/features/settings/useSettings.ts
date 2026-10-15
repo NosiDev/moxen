@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { ClientApi, SettingsSnapshot } from "../../../server/api.js";
+import type { ClientApi, CommandResult, SettingsSnapshot } from "../../../server/api.js";
 import type { UiConfig } from "../../../core/types.js";
 
 /**
@@ -20,8 +20,23 @@ export interface SettingsState {
   readonly saving: string | null;
   readonly error: string | null;
   readonly set: (key: string, value: string) => void;
+  /** Copy a list entry under a new id. */
+  readonly duplicate: (key: string, id: string, newId: string) => void;
+  /** The test or probe of a harness profile: running, or the last answer. */
+  readonly run: HarnessRun | null;
+  readonly test: (profileId: string, model?: string) => void;
+  /** Start one MCP server and list its tools. */
+  readonly testMcp: (name: string) => void;
+  readonly probe: (profileId: string, model?: string) => void;
   readonly reload: () => void;
 }
+
+/** One test or probe against a harness endpoint, from start to answer. */
+export type HarnessRun =
+  | { readonly kind: "test" | "probe"; readonly profileId: string; readonly running: true }
+  | { readonly kind: "test"; readonly profileId: string; readonly running: false; readonly result: { readonly ok: boolean; readonly message: string } }
+  | { readonly kind: "probe"; readonly profileId: string; readonly running: false; readonly result: CommandResult<"harness.profile.probe"> }
+  | { readonly kind: "test" | "probe"; readonly profileId: string; readonly running: false; readonly error: string };
 
 export function useSettings(client: ClientApi, open: boolean): SettingsState {
   const [snapshot, setSnapshot] = useState<SettingsSnapshot | null>(null);
@@ -80,7 +95,77 @@ export function useSettings(client: ClientApi, open: boolean): SettingsState {
     [client],
   );
 
-  return { snapshot, loading, saving, error, set, reload: load };
+  const duplicate = useCallback(
+    (key: string, id: string, newId: string) => {
+      const mine = (generation.current += 1);
+      setSaving(key);
+      void client
+        .dispatch({ type: "settings.duplicate", key, id, newId })
+        .then((result) => {
+          if (generation.current !== mine) return;
+          setSnapshot({ path: result.path, exists: result.exists, settings: result.settings });
+          setError(null);
+        })
+        .catch((cause: unknown) => {
+          if (generation.current === mine) setError(cause instanceof Error ? cause.message : String(cause));
+        })
+        .finally(() => {
+          if (generation.current === mine) setSaving(null);
+        });
+    },
+    [client],
+  );
+
+  // A test or probe is slow and spends requests on someone's server: one at a time.
+  const [run, setRun] = useState<HarnessRun | null>(null);
+  const runs = useRef(0);
+  const busy = useRef(false);
+  const start = useCallback(
+    (kind: "test" | "probe", profileId: string, model?: string) => {
+      if (busy.current) return;
+      busy.current = true;
+      const mine = (runs.current += 1);
+      setRun({ kind, profileId, running: true });
+      const finish = (next: HarnessRun) => {
+        busy.current = false;
+        if (runs.current === mine) setRun(next);
+      };
+      const failed = (cause: unknown) => finish({ kind, profileId, running: false, error: cause instanceof Error ? cause.message : String(cause) });
+      if (kind === "test") {
+        void client.dispatch({ type: "harness.profile.test", profileId, ...(model ? { model } : {}) }).then((result) => finish({ kind, profileId, running: false, result }), failed);
+        return;
+      }
+      void client
+        .dispatch({ type: "harness.profile.probe", profileId, ...(model ? { model } : {}) })
+        .then((result) => {
+          finish({ kind: "probe", profileId, running: false, result });
+          // The probe wrote to the config: show it.
+          load();
+        }, failed);
+    },
+    [client, load],
+  );
+  const test = useCallback((profileId: string, model?: string) => start("test", profileId, model), [start]);
+  const testMcp = useCallback(
+    (name: string) => {
+      if (busy.current) return;
+      busy.current = true;
+      const mine = (runs.current += 1);
+      setRun({ kind: "test", profileId: name, running: true });
+      const finish = (next: HarnessRun) => {
+        busy.current = false;
+        if (runs.current === mine) setRun(next);
+      };
+      void client.dispatch({ type: "mcp.server.test", name }).then(
+        (result) => finish({ kind: "test", profileId: name, running: false, result }),
+        (cause: unknown) => finish({ kind: "test", profileId: name, running: false, error: cause instanceof Error ? cause.message : String(cause) }),
+      );
+    },
+    [client],
+  );
+  const probe = useCallback((profileId: string, model?: string) => start("probe", profileId, model), [start]);
+
+  return { snapshot, loading, saving, error, set, duplicate, run, test, testMcp, probe, reload: load };
 }
 
 /**
@@ -97,11 +182,15 @@ export function uiFromSnapshot(snapshot: SettingsSnapshot | null): UiConfig | nu
   const side = value("ui.defaultSidePanel");
   const context = value("ui.contextRefreshSeconds");
   const usage = value("ui.usageRefreshSeconds");
+  const handoff = value("ui.autoHandoff");
+  const handoffPercent = value("ui.autoHandoffPercent");
   return {
     ...(backdrop === "animated" || backdrop === "static" || backdrop === "off" ? { backdrop } : {}),
     ...(typeof modelScenes === "boolean" ? { modelScenes } : {}),
     ...(side === "context" || side === "git" || side === "agents" || side === "background" ? { defaultSidePanel: side } : {}),
     ...(typeof context === "number" ? { contextRefreshSeconds: context } : {}),
     ...(typeof usage === "number" ? { usageRefreshSeconds: usage } : {}),
+    ...(handoff === "off" || handoff === "ask" || handoff === "auto" ? { autoHandoff: handoff } : {}),
+    ...(typeof handoffPercent === "number" ? { autoHandoffPercent: handoffPercent } : {}),
   };
 }

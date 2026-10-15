@@ -17,6 +17,8 @@
  *   `server.getConfig` payload shape, so `extractProviders` (and the
  *   effort picker) works unmodified.
  */
+import { primeProfileKey } from "../core/providers/harness/profiles.js";
+import { testMcpServer } from "../core/mcptest.js";
 import { searchThreadsView } from "../core/threads/search.js";
 import * as Effect from "effect/Effect";
 
@@ -27,9 +29,12 @@ import { latestVersions } from "../core/providers/latest.js";
 import type { LatestVersions } from "../core/catalog/update.js";
 import { EMPTY_SKILL_INVENTORY, type ProviderSummary } from "../core/catalog/summary.js";
 import { loadModelPrefs, providerModelPreferences, setModelHidden } from "../core/catalog/prefs.js";
-import { defaultModelSelection, resolveModelSelection } from "../core/catalog/selection.js";
-import { defaultConfigPath, loadConfig, saveConfig, setConfigValue } from "../core/config.js";
-import { describeSettings } from "../core/configschema.js";
+import { defaultModelSelection, defaultRuntimeMode, resolveModelSelection } from "../core/catalog/selection.js";
+import { defaultConfigPath, loadConfig, normalizeConfig, saveConfig, setConfigValueSecure } from "../core/config.js";
+import { duplicateListItem } from "../core/configlist.js";
+import { describeSettings, listTarget } from "../core/configschema.js";
+import { HarnessDriver } from "../core/providers/harness/driver.js";
+import { mergeProbed, probeSettledSomething, runProbe, testProfile } from "../core/providers/harness/probe.js";
 import { buildHandoff, continuedTitle } from "../core/threads/handoff.js";
 import { readCommitDetail, readCommitDiff, readOverview } from "../core/git/history.js";
 import {
@@ -123,6 +128,7 @@ import {
   type ShellFrame,
   type StartedTurnSummary,
   type ThreadFrame,
+  type PermissionDecision,
   type UserInputAnswers,
 } from "./protocol.js";
 
@@ -147,6 +153,8 @@ export interface DirectConnectionOptions {
   readonly updateProvider?: (provider: UpdatableProvider, binaryPath?: string) => Promise<ProviderUpdate>;
   /** Reads the newest provider versions (tests); defaults to the npm registry. */
   readonly latestVersions?: (claudeBinaryPath?: string) => Promise<Omit<LatestVersions, "enabled">>;
+  /** The `fetch` the harness test and probe use; tests hand in a fake server. */
+  readonly harnessFetch?: typeof fetch;
 }
 
 export class DirectConnection implements ClientApi {
@@ -163,6 +171,9 @@ export class DirectConnection implements ClientApi {
   private readonly builtinMcpServers: ((threadId: string) => readonly McpServerSpec[]) | null;
   private readonly readLatestVersions: (claudeBinaryPath?: string) => Promise<Omit<LatestVersions, "enabled">>;
   private readonly runProviderUpdate: (provider: UpdatableProvider, binaryPath?: string) => Promise<ProviderUpdate>;
+  private readonly harnessFetch: typeof fetch | undefined;
+  /** Profiles with a probe running: two at once would fight over a single-slot server. */
+  private readonly probing = new Set<string>();
   private storePromise: Promise<ThreadStore> | null = null;
   private readonly driversOwner = {};
   private readonly ownedDrivers = new Set<TurnDriver>();
@@ -174,9 +185,14 @@ export class DirectConnection implements ClientApi {
     this.storeRoot = options.storeRoot ?? resolveStoreRoot();
     persistUsageLimits(this.storeRoot);
     this.factories = options.drivers ?? {};
+    this.harnessFetch = options.harnessFetch;
     this.shellPollMs = options.shellPollMs ?? 1500;
     this.threadPollMs = options.threadPollMs ?? 750;
-    this.providers = options.providers ?? (() => buildDirectProviders());
+    this.providers = options.providers ?? (async () => {
+      // A config that cannot be read must not hide the providers that need none of it.
+      const harness = await this.readConfigFile().then((read) => read.config.providers?.harness, () => undefined);
+      return await buildDirectProviders({ harness });
+    });
     this.catalog = options.catalog ?? (async () => toWsConfigPayload(await this.providers()));
     // One reader, two shapes: operations want the config alone, while
     // `settings.set` also needs the path to write back to. A test that
@@ -191,6 +207,7 @@ export class DirectConnection implements ClientApi {
       this.lastProviders = config.providers;
       return config;
     };
+    this.harnessFetch = options.harnessFetch;
     this.readLatestVersions = options.latestVersions ?? ((claudeBinaryPath) => latestVersions(claudeBinaryPath === undefined ? {} : { claudeBinaryPath }));
     this.runProviderUpdate = options.updateProvider ?? ((provider, binaryPath) => updateProvider(provider, binaryPath === undefined ? {} : { binaryPath }));
     this.builtinMcpServers =
@@ -277,6 +294,18 @@ export class DirectConnection implements ClientApi {
     return { cwd, detection: await detectForge(cwd, config.forge) };
   }
 
+  /** A profile and one of its models. The test may name a model the profile does not list (it is sent as asked); a probe stores its findings on the entry, so it must be listed. */
+  private async harnessModel(profileId: string, modelId: string | undefined, listed: boolean) {
+    const { config, path } = await this.readConfigFile();
+    const profile = config.providers?.harness?.profiles?.find((entry) => entry.id === profileId.toLowerCase());
+    if (!profile) throw new CliError("PROVIDER_UNKNOWN", `No harness profile "${profileId}".`, { details: { profileId } });
+    const model = modelId === undefined ? profile.models[0]! : (profile.models.find((entry) => entry.id === modelId) ?? (listed ? undefined : { id: modelId }));
+    if (!model) throw new CliError("INVALID_CONFIG", `Profile "${profile.id}" does not list the model "${modelId}". Add it first.`, { details: { profileId: profile.id } });
+    // A key kept in the keychain is read here, so the test or probe can send it.
+    await primeProfileKey(profile);
+    return { profile, model, config, path };
+  }
+
   private async settingsSnapshot(): Promise<SettingsSnapshot> {
     const { config, path, exists } = await this.readConfigFile();
     return { path, exists, settings: describeSettings(config) };
@@ -335,6 +364,9 @@ export class DirectConnection implements ClientApi {
     // goes through `context()` first, so this is never staler than the
     // operation asking for it.
     const driver = driverForInstance(this.driversOwner, instanceId, this.factories, this.lastProviders);
+    // The harness reads its profiles on every turn, so it is handed the config this operation saw.
+    // Profiles are edited while the server runs; the harness driver reads its config on every use.
+    if (driver instanceof HarnessDriver) driver.setConfig(this.lastProviders?.harness);
     this.ownedDrivers.add(driver);
     return driver;
   }
@@ -643,6 +675,9 @@ export class DirectConnection implements ClientApi {
       case "thread.user-input.dismiss":
         await this.userInputDismiss(command.threadId, command.requestId);
         return accepted;
+      case "thread.permission.respond":
+        await this.permissionRespond(command.threadId, command.requestId, command.decision);
+        return accepted;
       case "thread.handover": {
         const { type: _type, commandId: _id, wait, ...request } = command;
         const result = await handover(await this.context(), request);
@@ -707,8 +742,45 @@ export class DirectConnection implements ClientApi {
         // have written since, and a settings page that silently reverts a
         // neighbour's edit is worse than one that is a beat behind.
         const { config, path } = await this.readConfigFile();
-        await saveConfig(path, setConfigValue(config, command.key, command.value));
+        await saveConfig(path, await setConfigValueSecure(config, command.key, command.value));
         return { ...(await this.settingsSnapshot()), accepted: true };
+      }
+      case "settings.duplicate": {
+        const { config, path } = await this.readConfigFile();
+        const entry = listTarget(`${command.key}[${command.id}]`);
+        if (!entry) throw new CliError("INVALID_CONFIG_KEY", `${command.key} is not a list setting.`);
+        await saveConfig(path, normalizeConfig(duplicateListItem(config, entry, command.newId, command.key)));
+        return { ...(await this.settingsSnapshot()), accepted: true };
+      }
+      case "mcp.server.test": {
+        const { config } = await this.readConfigFile();
+        return await testMcpServer(command.name, config.mcpServers, process.cwd());
+      }
+      case "harness.profile.test": {
+        const { profile, model } = await this.harnessModel(command.profileId, command.model, false);
+        return await testProfile({ profile, model, ...(this.harnessFetch ? { fetch: this.harnessFetch } : {}) });
+      }
+      case "harness.profile.probe": {
+        const { profile, model } = await this.harnessModel(command.profileId, command.model, true);
+        if (this.probing.has(profile.id)) throw new CliError("PROBE_RUNNING", `A probe of "${profile.id}" is already running.`);
+        this.probing.add(profile.id);
+        try {
+          const report = await runProbe({ profile, model, ...(this.harnessFetch ? { fetch: this.harnessFetch } : {}) });
+          const save = command.dryRun !== true && probeSettledSomething(report);
+          if (save) {
+            // Re-read: the file may have changed during the minutes the probe took.
+            const fresh = await this.readConfigFile();
+            const profiles = (fresh.config.providers?.harness?.profiles ?? []).map((entry) =>
+              entry.id !== profile.id
+                ? entry
+                : { ...entry, models: entry.models.map((m) => (m.id === model.id ? { ...m, probed: mergeProbed(m.probed, report) } : m)) },
+            );
+            await saveConfig(fresh.path, normalizeConfig({ ...fresh.config, providers: { ...fresh.config.providers, harness: { ...fresh.config.providers?.harness, profiles } } }));
+          }
+          return { ...report, saved: save };
+        } finally {
+          this.probing.delete(profile.id);
+        }
       }
       case "provider.update": {
         // The binary the sessions are configured to use, which is the one to update.
@@ -821,16 +893,17 @@ export class DirectConnection implements ClientApi {
         details: { projectId },
       });
     }
+    // No explicit selection: the project's default, then the config's
+    // provider/model, the same resolution a CLI handover applies.
+    const modelSelection =
+      command.modelSelection ??
+      resolveModelSelection(project.defaultModelSelection ?? defaultModelSelection(), config, { prompt: "" });
     const created = await createThread(store, {
       ...(command.threadId ? { id: command.threadId } : {}),
       projectId,
       title: command.title ?? "New thread",
-      // No explicit selection: the project's default, then the config's
-      // provider/model, the same resolution a CLI handover applies.
-      modelSelection:
-        command.modelSelection ??
-        resolveModelSelection(project.defaultModelSelection ?? defaultModelSelection(), config, { prompt: "" }),
-      runtimeMode: command.runtimeMode ?? config.runtimeMode,
+      modelSelection,
+      runtimeMode: command.runtimeMode ?? defaultRuntimeMode(config, modelSelection.instanceId),
       interactionMode: command.interactionMode ?? config.interactionMode,
       env: { mode: "local", path: project.workspaceRoot, branch: command.branch ?? null },
     });
@@ -927,9 +1000,15 @@ export class DirectConnection implements ClientApi {
     if (live !== null) return live;
     const store = await this.store();
     const thread = await store.readThreadRecord(threadId);
-    if (thread?.providerSessions?.["opencode"] === undefined) return null;
+    if (thread === null) return null;
     const turns = await store.readTurns(threadId);
     const selection = [...turns].reverse().find((turn) => turn.modelSelection)?.modelSelection ?? thread.modelSelection;
+    // The harness keeps subagent conversations in files named by the thread's session: no session needs to be running to read one.
+    if (driverKey(selection.instanceId) === "harness" && thread.providerSessions?.["harness"] !== undefined) {
+      await this.context();
+      return this.driverFor(selection.instanceId);
+    }
+    if (thread.providerSessions?.["opencode"] === undefined) return null;
     if (driverKey(selection.instanceId) !== "opencode") return null;
     await this.context();
     const driver = this.driverFor(selection.instanceId);
@@ -986,6 +1065,16 @@ export class DirectConnection implements ClientApi {
       throw new CliError("REQUEST_UNSUPPORTED", "This provider cannot be answered.");
     }
     await Effect.runPromise(driver.respondToRequest(threadId, requestId, { kind: "decline" }));
+  }
+
+  /** Answers a parked tool approval on the provider that is blocked on it. */
+  private async permissionRespond(threadId: string, requestId: string, decision: PermissionDecision): Promise<void> {
+    const driver = await this.driverForThread(threadId);
+    if (!driver.respondToRequest) {
+      throw new CliError("REQUEST_UNSUPPORTED", "This provider cannot be answered.");
+    }
+    const kind = decision === "accept-session" ? "acceptForSession" : decision;
+    await Effect.runPromise(driver.respondToRequest(threadId, requestId, { kind }));
   }
 
   // -- reads -----------------------------------------------------------------
@@ -1064,8 +1153,13 @@ export class DirectConnection implements ClientApi {
       case "thread.subagent": {
         // OpenCode keeps each subagent as a child session only a driver holding the thread's session can read.
         const driver = await this.subagentDriver(query.threadId);
-        const readHistory = driver?.subagentHistory ? (agentId: string) => driver.subagentHistory!(query.threadId, agentId) : undefined;
-        return await subagentTranscript(await this.store(), query.threadId, query.agentId, readHistory);
+        const store = await this.store();
+        const thread = await store.readThreadRecord(query.threadId);
+        const selection = [...(await store.readTurns(query.threadId))].reverse().find((turn) => turn.modelSelection)?.modelSelection ?? thread?.modelSelection;
+        const harness = selection !== undefined && driverKey(selection.instanceId) === "harness";
+        const cursor = thread?.providerSessions?.[harness ? "harness" : "opencode"] ?? null;
+        const readHistory = driver?.subagentHistory ? (agentId: string) => driver.subagentHistory!(query.threadId, agentId, cursor) : undefined;
+        return await subagentTranscript(store, query.threadId, query.agentId, readHistory, harness ? "harness" : "opencode");
       }
       case "provider.latest": {
         // Off by choice (`updates.checkLatest`): nothing is asked, and the answer says so.

@@ -25,6 +25,8 @@ import { useThreadSearch } from "../features/search/useThreadSearch.js";
 import { ModalShell } from "../ui/modalshell.js";
 import { RenameModal } from "../ui/renamemodal.js";
 import { AnswerPanel } from "../features/answerpanel/answerpanel.js";
+import { PermissionPanel } from "../features/permissionpanel/permissionpanel.js";
+import { usePermissionFlow } from "../features/permissionpanel/usePermissionFlow.js";
 import { dispatchErrorMessage } from "../../core/errors.js";
 import type { ModelSelection, RuntimeMode, UiConfig } from "../../core/types.js";
 import { compatibleRuntimeMode } from "../../core/catalog/permissions.js";
@@ -52,6 +54,7 @@ import { bootLoadingStage, isBootReady } from "../model/readiness.js";
 import { HoverButton } from "../ui/hoverbutton.js";
 import { openExternal } from "../../core/infra/platformOpen.js";
 import { formatDuration } from "../model/turns.js";
+import { autoHandoffState, DEFAULT_AUTO_HANDOFF_MODE, DEFAULT_AUTO_HANDOFF_PERCENT } from "../model/autohandoff.js";
 import { handOffTarget, openRequestPrompt, requestNoun } from "../model/gitpanel.js";
 import { renderMessage } from "../model/message.js";
 import { copiedAttachments, copiedToast, copyPrompt, matchCopy, uniqueName } from "../model/copystash.js";
@@ -237,6 +240,17 @@ export function App({
     goToQuestion,
     dismissAnswerRequest,
   } = useAnswerFlow(client, threadState, threadStateRef, openThreadId, picker, toasts, setError);
+  const { activePermission, permissionVisible, respondToPermission } = usePermissionFlow(
+    client,
+    threadState,
+    threadStateRef,
+    openThreadId,
+    toasts,
+    setError,
+  );
+  /** An agent question owns the composer slot first; a tool approval takes it once none is open. */
+  const permissionShown = !answerVisible && permissionVisible;
+  const requestPanelVisible = answerVisible || permissionShown;
   /** Dismissal key of the last-dismissed resume-compaction banner — a new
       context snapshot reopens it even if an earlier one was dismissed. */
   const [dismissedResumeKey, setDismissedResumeKey] = useState<string | null>(null);
@@ -808,8 +822,8 @@ export function App({
     if (sideQuestion.open || forgePrompt !== null) {
       return;
     }
-    // The inline answer panel owns its keys exactly like a modal does.
-    if (answerVisible) {
+    // The inline answer and permission panels own their keys exactly like a modal does.
+    if (requestPanelVisible) {
       return;
     }
     // While `$EDITOR` owns the terminal the TUI must not act on keys.
@@ -1195,6 +1209,33 @@ export function App({
     !shouldOfferResumeCompaction(threadState, effectiveModelSelection?.instanceId, now)
       ? null
       : { key: resumeKey, usedTokens: threadState.contextUsage?.usedTokens ?? 0 };
+  /** Past `ui.autoHandoffPercent` of the window the thread should move to a fresh one (MXN-22). */
+  const handoffMode = ui?.autoHandoff ?? DEFAULT_AUTO_HANDOFF_MODE;
+  const handoffState =
+    creating || openThreadId === null
+      ? null
+      : autoHandoffState({
+          mode: handoffMode,
+          percent: ui?.autoHandoffPercent ?? DEFAULT_AUTO_HANDOFF_PERCENT,
+          usedTokens: threadState.contextUsage?.usedTokens ?? null,
+          maxTokens: threadState.contextUsage?.maxTokens ?? null,
+          hasReply: lastAssistantMessage !== null,
+          turnRunning: sessionRunning,
+          runningSubthreads: runningAgents,
+          runningBackgroundTasks: background.length,
+          queuedMessages: queued.items.length,
+        });
+  const handoffReady = handoffState !== null && handoffState.blockers.length === 0;
+  const handoffKey = openThreadId === null ? null : `handoff:${openThreadId}`;
+  const handoffAskedFor = useRef<Set<string>>(new Set());
+  const [dismissedHandoffKey, setDismissedHandoffKey] = useState<string | null>(null);
+  useEffect(() => {
+    // Once per thread, and only when idle: a failed or refused attempt is not retried in a loop.
+    if (handoffMode !== "auto" || !handoffReady || handoffKey === null || handoffAskedFor.current.has(handoffKey)) return;
+    handoffAskedFor.current.add(handoffKey);
+    usageBanner.continueInNewThread();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handoffMode, handoffReady, handoffKey]);
   /** What waits over the composer, most urgent first; the banner pages between them. */
   const notices: Notice[] = [];
   if (usageBanner.banner !== null) {
@@ -1251,6 +1292,25 @@ export function App({
       actions: [
         { label: "Compact", fg: COLOR.accent, onClick: () => compactSession(() => setDismissedResumeKey(resumeBanner.key)) },
         { label: "Keep full history", fg: COLOR.dim, hoverFg: COLOR.text, onClick: () => setDismissedResumeKey(resumeBanner.key) },
+      ],
+    });
+  }
+  if (handoffState !== null && handoffKey !== null && handoffKey !== dismissedHandoffKey && !(handoffMode === "auto" && handoffReady)) {
+    notices.push({
+      key: handoffKey,
+      glyph: "◈",
+      glyphColor: COLOR.warn,
+      title: `Context ${handoffState.usedPercent}% full`,
+      detail: (
+        <text fg={COLOR.dim} selectable={false}>
+          {handoffState.blockers.length === 0
+            ? "  Tool calls get less reliable as it fills: continue in a fresh thread"
+            : `  ${handoffMode === "auto" ? "Handing off once" : "Waiting for"}: ${handoffState.blockers.join(", ")}`}
+        </text>
+      ),
+      actions: [
+        { label: "Hand off", fg: COLOR.accent, onClick: usageBanner.continueInNewThread },
+        { label: "Not now", fg: COLOR.dim, hoverFg: COLOR.text, onClick: () => setDismissedHandoffKey(handoffKey) },
       ],
     });
   }
@@ -1957,6 +2017,21 @@ export function App({
    * of the composer (both slots below). Render-time closures, so picks and
    * toggles always read fresh draft state.
    */
+  const renderRequestPanel = (panelWidth: number) => {
+    if (permissionShown && activePermission !== null) {
+      return (
+        <PermissionPanel
+          key={activePermission.requestId}
+          request={activePermission}
+          width={panelWidth}
+          suspended={picker !== null}
+          onDecide={respondToPermission}
+        />
+      );
+    }
+    return renderAnswerPanel(panelWidth);
+  };
+
   const renderAnswerPanel = (panelWidth: number) => {
     if (answerDraft === null || activeAnswerRequest === null || activeAnswerQuestion === null) return null;
     const draft = answerDraft;
@@ -2097,8 +2172,8 @@ export function App({
                 >{projectTitle}</text>
                 <text fg={COLOR.bright} selectable={false} onMouseDown={openProjectPicker}>{"?"}</text>
               </box>
-              {answerVisible ? (
-                renderAnswerPanel(Math.min(76, Math.max(40, width - SIDEBAR_WIDTH - 8)))
+              {requestPanelVisible ? (
+                renderRequestPanel(Math.min(76, Math.max(40, width - SIDEBAR_WIDTH - 8)))
               ) : (
               <Composer
                 draft={draft}
@@ -2225,8 +2300,8 @@ export function App({
               width={chatWidth}
               onBack={subagentView.close}
             />
-          ) : answerVisible ? (
-            renderAnswerPanel(chatWidth)
+          ) : requestPanelVisible ? (
+            renderRequestPanel(chatWidth)
           ) : (
           <Composer
             draft={draft}
@@ -2605,6 +2680,11 @@ export function App({
           saving={settings.saving}
           error={settings.error}
           onSet={settings.set}
+          onDuplicate={settings.duplicate}
+          run={settings.run}
+          onTest={settings.test}
+          onTestMcp={settings.testMcp}
+          onProbe={settings.probe}
           versions={providerVersions.versions}
           latest={providerVersions.latest}
           updating={providerUpdates.updating}

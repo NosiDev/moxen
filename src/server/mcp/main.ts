@@ -8,6 +8,7 @@
  *
  * Stdout is the protocol channel: nothing else may be written to it.
  */
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import type { McpServerSpec } from "../../core/mcp.js";
@@ -17,9 +18,18 @@ import { MOXEN_CHECKLIST_ARG, serveMcp } from "./stdio.js";
 /** The name agents see its tools under (`mcp__moxen__delegate`). */
 export const MOXEN_MCP_SERVER_NAME = "moxen";
 
+/**
+ * This file in the source tree, `server/mcp/entry.js` beside `cli/` in the bundle
+ * (where this code lives in a chunk under `chunks/` and has no `main.ts` next to it).
+ */
+function mcpEntry(): string {
+  const source = fileURLToPath(new URL("./main.ts", import.meta.url));
+  return existsSync(source) ? source : fileURLToPath(new URL("../server/mcp/entry.js", import.meta.url));
+}
+
 /** How a provider session launches the moxen tools for one thread. */
 export function moxenMcpServerSpec(threadId: string): Extract<McpServerSpec, { type: "stdio" }> {
-  const entry = fileURLToPath(new URL("./main.ts", import.meta.url));
+  const entry = mcpEntry();
   // Bun runs the TypeScript directly: this runtime when it is Bun, else `bun` from PATH.
   const runtime = process.versions.bun ? process.execPath : "bun";
   return { name: MOXEN_MCP_SERVER_NAME, type: "stdio", command: runtime, args: [entry, "--thread", threadId], env: {} };
@@ -31,18 +41,21 @@ function threadArg(argv: readonly string[]): string | null {
   return value && value.trim() ? value.trim() : null;
 }
 
-if (import.meta.main) {
-  const parentThreadId = threadArg(process.argv.slice(2));
+/** Serves the moxen tools over stdio for the thread named on the command line, then exits. */
+export async function runMcpMain(argv: readonly string[] = process.argv.slice(2)): Promise<never> {
+  const parentThreadId = threadArg(argv);
   if (!parentThreadId) {
     process.stderr.write("moxen mcp: --thread <thread-id> is required\n");
     process.exit(2);
   }
   const api = await openClient();
   try {
-    const checklist = process.argv.slice(2).includes(MOXEN_CHECKLIST_ARG);
+    const checklist = argv.includes(MOXEN_CHECKLIST_ARG);
     await serveMcp({ api, parentThreadId, checklist, input: process.stdin, output: process.stdout });
   } finally {
     await api.close().catch(() => undefined);
   }
   process.exit(0);
 }
+
+if (import.meta.main) await runMcpMain();

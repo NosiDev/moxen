@@ -1,8 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ScrollBoxRenderable } from "@opentui/core";
-import { StyledText, fg } from "@opentui/core";
+import { StyledText, TextAttributes, fg } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 
+import { ListEditor } from "./listeditor.js";
+import { TextField } from "./textfield.js";
+import type { HarnessRun } from "./useSettings.js";
+import type { ListItemView } from "../../../core/configschema.js";
 import { ModalShell } from "../../ui/modalshell.js";
 import { markModalDismissed } from "../../model/modalDismiss.js";
 import { useHover } from "../../hooks/useHover.js";
@@ -43,6 +47,8 @@ interface SettingItem {
   readonly value: SettingValue;
   readonly explicit: boolean;
   readonly control: SettingControl;
+  /** The entries of a list setting. */
+  readonly entries?: readonly ListItemView[];
 }
 
 /** The left column: section labels plus the selection bar and a gap. */
@@ -54,6 +60,11 @@ export function SettingsModal({
   saving,
   error,
   onSet,
+  onDuplicate,
+  run,
+  onTest,
+  onTestMcp,
+  onProbe,
   versions,
   latest,
   updating,
@@ -72,6 +83,13 @@ export function SettingsModal({
   saving: string | null;
   error: string | null;
   onSet: (key: string, value: string) => void;
+  onDuplicate: (key: string, id: string, newId: string) => void;
+  /** The last test or probe of a harness profile, while it runs and after. */
+  run: HarnessRun | null;
+  onTest: (profileId: string, model?: string) => void;
+  /** Start an MCP server and list its tools. */
+  onTestMcp: (name: string) => void;
+  onProbe: (profileId: string, model?: string) => void;
   /** Each updatable provider's install, from the doctor query; null until it answers. */
   versions: { readonly claude: ProviderCheckView; readonly opencode: ProviderCheckView } | null;
   /** The newest release of each, from the registry; null until it answers. */
@@ -94,6 +112,8 @@ export function SettingsModal({
   const [editing, setEditing] = useState<string | null>(null);
   /** The setting whose list is open in the right pane, and the highlighted option. */
   const [picking, setPicking] = useState<{ key: string; index: number } | null>(null);
+  /** The list setting whose editor fills the right pane. */
+  const [listOpen, setListOpen] = useState<string | null>(null);
 
   const sections = useMemo(
     () => SETTING_SECTIONS.filter((section) => snapshot?.settings.some((view) => view.descriptor.section === section) === true),
@@ -101,13 +121,19 @@ export function SettingsModal({
   );
   const items = useMemo<readonly SettingItem[]>(() => {
     if (!snapshot) return [];
+    const valueOf = (key: string): string => {
+      const view = snapshot.settings.find((entry) => entry.descriptor.key === key);
+      return view?.value === undefined ? "" : String(view.value);
+    };
     return snapshot.settings
       .filter((view) => view.descriptor.section === tab)
+      .filter((view) => view.descriptor.visibleWhen === undefined || view.descriptor.visibleWhen.in.includes(valueOf(view.descriptor.visibleWhen.key)))
       .map((view) => ({
         descriptor: view.descriptor,
         value: view.value,
         explicit: view.explicit,
         control: settingControl(view.descriptor, view.value, snapshot.settings, providers),
+        ...(view.items ? { entries: view.items } : {}),
       }));
   }, [snapshot, tab, providers]);
 
@@ -127,6 +153,7 @@ export function SettingsModal({
     setTab(next);
     setIndex(0);
     setPicking(null);
+    setListOpen(null);
   };
   const stepTab = (delta: number) => {
     if (sections.length === 0) return;
@@ -135,15 +162,20 @@ export function SettingsModal({
   };
 
   const activate = (item: SettingItem) => {
+    if (item.control.kind === "list") {
+      setListOpen(item.descriptor.key);
+      return;
+    }
     if (item.control.kind === "toggle") {
       onSet(item.descriptor.key, item.value === true ? "false" : "true");
       return;
     }
-    if (item.control.kind === "text") {
+    if (item.control.kind === "text" || item.control.kind === "secret") {
       setEditing(item.descriptor.key);
       return;
     }
     const currentValue = item.value === undefined ? "" : String(item.value);
+    if (item.control.kind !== "pick") return;
     setPicking({ key: item.descriptor.key, index: Math.max(0, item.control.options.findIndex((entry) => entry.value === currentValue)) });
   };
   const choose = (key: string, value: string) => {
@@ -151,7 +183,11 @@ export function SettingsModal({
     onSet(key, value);
   };
 
+  const listItem = listOpen === null ? undefined : items.find((item) => item.descriptor.key === listOpen);
+
   useKeyboard((key) => {
+    // The list editor owns every key while it is open.
+    if (listOpen !== null) return;
     const escape = key.name === "escape" || key.name === "esc";
     const enter = key.name === "return" || key.name === "enter";
     if (editing !== null) {
@@ -203,10 +239,11 @@ export function SettingsModal({
   // Keep the selected setting (or option) in view. Cards wrap their
   // descriptions, so their heights are the layout's to know, not ours.
   const scrollRef = useRef<ScrollBoxRenderable | null>(null);
-  const scrollTarget = picking !== null ? `settings-option-${picking.index}` : current === undefined ? null : `settings-row-${current.descriptor.key}`;
+  const scrollTarget = picking !== null ? `settings-option-${picking.index}` : current === undefined ? null : editing !== null ? `settings-edit-${editing}` : `settings-row-${current.descriptor.key}`;
   useEffect(() => {
     if (scrollTarget === null) return;
-    const timer = setTimeout(() => scrollRef.current?.scrollChildIntoView(scrollTarget), 0);
+    // An opening editor changes the card's height after this render, so it gets a moment to lay out.
+    const timer = setTimeout(() => scrollRef.current?.scrollChildIntoView(scrollTarget), scrollTarget.startsWith("settings-edit-") ? 120 : 0);
     return () => clearTimeout(timer);
   }, [scrollTarget]);
 
@@ -216,12 +253,12 @@ export function SettingsModal({
   const base =
     picking !== null
       ? "↑↓ choose · enter picks · esc back"
-      : current?.control.kind === "text"
+      : current?.control.kind === "text" || current?.control.kind === "secret"
         ? "enter edits · tab next section · esc closes"
         : current?.control.kind === "toggle"
           ? "enter switches · tab next section · esc closes"
           : "enter opens the choices · tab next section · esc closes";
-  const hint = picking === null && updatable !== null ? `u updates · ${base}` : base;
+  const hint = listOpen !== null ? "" : picking === null && updatable !== null ? `u updates · ${base}` : base;
 
   return (
     <ModalShell screenWidth={screenWidth} screenHeight={screenHeight} left={left} top={top} width={width} height={height} onClose={onClose}>
@@ -252,7 +289,20 @@ export function SettingsModal({
               borderColor={SURFACE.border}
               backgroundColor={SURFACE.raised}
             >
-              {pickItem !== undefined && picking !== null ? (
+              {listItem !== undefined && listOpen !== null ? (
+                <ListEditor
+                  descriptor={listItem.descriptor}
+                  items={listItem.entries ?? []}
+                  saving={saving}
+                  onSet={onSet}
+                  onDuplicate={(id, newId) => onDuplicate(listItem.descriptor.key, id, newId)}
+                  run={run}
+                  onTest={(id, model) => (listItem.descriptor.key === "mcpServers" ? onTestMcp(id) : onTest(id, model))}
+                  onProbe={onProbe}
+                  width={paneWidth}
+                  onExit={() => setListOpen(null)}
+                />
+              ) : pickItem !== undefined && picking !== null ? (
                 <>
                   <BackButton onBack={() => setPicking(null)} />
                   <box style={{ flexDirection: "column", flexShrink: 0, paddingTop: 1 }}>
@@ -290,15 +340,24 @@ export function SettingsModal({
                     />
                   )}
                 <scrollbox ref={scrollRef} style={{ flexGrow: 1 }} stickyStart="top" backgroundColor={SURFACE.raised}>
-                  {items.map((item, itemIndex) => (
+                  {items.map((item, itemIndex) => {
+                    const group = item.descriptor.group;
+                    const startsGroup = group !== undefined && group !== items[itemIndex - 1]?.descriptor.group;
+                    return (
+                    <Fragment key={item.descriptor.key}>
+                    {startsGroup ? (
+                      <box style={{ flexDirection: "row", height: 1, flexShrink: 0, marginTop: itemIndex === 0 ? 0 : 1, paddingLeft: 1 }} backgroundColor={SURFACE.raised}>
+                        <text fg={COLOR.dim} bg={SURFACE.raised} attributes={TextAttributes.BOLD} selectable={false}>{truncate(group ?? "", paneWidth)}</text>
+                      </box>
+                    ) : null}
                     <SettingCard
-                      key={item.descriptor.key}
                       item={item}
-                      first={itemIndex === 0}
+                      first={itemIndex === 0 || startsGroup}
                       active={itemIndex === safe}
                       editing={editing === item.descriptor.key}
                       pending={saving === item.descriptor.key}
                       width={paneWidth}
+                      onGrow={() => scrollRef.current?.scrollChildIntoView(`settings-edit-${item.descriptor.key}`)}
                       onActivate={() => {
                         setIndex(itemIndex);
                         activate(item);
@@ -308,7 +367,9 @@ export function SettingsModal({
                         onSet(item.descriptor.key, text);
                       }}
                     />
-                  ))}
+                    </Fragment>
+                    );
+                  })}
                 </scrollbox>
                 </>
               )}
@@ -409,7 +470,8 @@ function SectionTab({ label, active, width, onSelect }: { label: string; active:
 
 /** The value side of a card: a switch, a list to open, or text to edit. */
 function valueText(item: SettingItem): string {
-  const label = settingValueLabel(item.descriptor, item.value, item.control);
+  const label = settingValueLabel(item.descriptor, item.value, item.control, item.entries?.length);
+  if (item.control.kind === "list") return `${label}  ›`;
   if (item.control.kind === "toggle") return item.value === true ? "● On" : "○ Off";
   if (item.control.kind === "pick") return `${label}  ›`;
   return label;
@@ -423,6 +485,7 @@ function SettingCard({
   pending,
   width,
   onActivate,
+  onGrow,
   onSubmit,
 }: {
   item: SettingItem;
@@ -433,11 +496,12 @@ function SettingCard({
   pending: boolean;
   width: number;
   onActivate: () => void;
+  onGrow: () => void;
   onSubmit: (text: string) => void;
 }) {
   const { hovered, handlers } = useHover();
   const { descriptor, value, explicit } = item;
-  const [text, setText] = useState(value === undefined ? "" : String(value));
+  const secret = descriptor.kind.type === "secret";
   const bg = active ? SURFACE.hover : hovered ? SURFACE.border : SURFACE.raised;
   const shown = `${pending ? "· " : ""}${valueText(item)}`;
   const note = descriptor.restartRequired === true ? "  next start" : "";
@@ -469,22 +533,19 @@ function SettingCard({
         {editing ? null : <text fg={valueColor} bg={bg} selectable={false}>{shown}</text>}
       </box>
       {editing ? (
-        <box style={{ flexDirection: "row", height: 1, flexShrink: 0, marginTop: 1 }} backgroundColor={SURFACE.base}>
-          <input
-            focused
-            value={value === undefined ? "" : String(value)}
-            placeholder={descriptor.kind.type === "string" ? (descriptor.kind.placeholder ?? "") : ""}
-            textColor={COLOR.text}
-            backgroundColor={SURFACE.base}
-            focusedBackgroundColor={SURFACE.base}
-            focusedTextColor={COLOR.bright}
-            placeholderColor={COLOR.faint}
-            onInput={setText}
-            onSubmit={(submitted: string | object) => onSubmit(typeof submitted === "string" ? submitted : text)}
-          />
-        </box>
+        <TextField
+          id={`settings-edit-${descriptor.key}`}
+          initial={secret || value === undefined ? "" : String(value)}
+          placeholder={secret ? "paste the key, then press enter" : descriptor.kind.type === "string" ? (descriptor.kind.placeholder ?? "") : ""}
+          multiline={descriptor.kind.type === "string" && descriptor.kind.multiline === true}
+          secret={secret}
+          fallback={secret ? "removes the saved key" : descriptor.defaultValue === undefined || descriptor.defaultValue === "" ? "unset" : `the default, ${String(descriptor.defaultValue)}`}
+          width={width}
+          onGrow={onGrow}
+          onSubmit={onSubmit}
+        />
       ) : null}
-      <text content={prose(editing ? "enter saves · esc cancels" : descriptor.description, COLOR.dim)} bg={bg} wrapMode="word" selectable={false} />
+      <text content={prose(descriptor.description, COLOR.dim)} bg={bg} wrapMode="word" selectable={false} />
     </box>
   );
 }

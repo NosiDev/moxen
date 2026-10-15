@@ -12,6 +12,7 @@
  * Chosen by `MOXEN_SERVER`; `auto` when unset.
  */
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { appEnv } from "../core/config.js";
@@ -70,11 +71,20 @@ export async function openClient(options: OpenClientOptions = {}): Promise<Clien
   return await RemoteConnection.connect(endpoint);
 }
 
-/** Start `./main.ts` detached and wait until it accepts connections. */
+/**
+ * The server entry: `./daemon.ts` in the source tree, `server/daemon.js` beside
+ * `cli/` in the bundle (where this code lives in a chunk under `chunks/`).
+ */
+function serverEntry(): string {
+  const source = fileURLToPath(new URL("./daemon.ts", import.meta.url));
+  return existsSync(source) ? source : fileURLToPath(new URL("../server/daemon.js", import.meta.url));
+}
+
+/** Start the server entry detached and wait until it accepts connections. */
 async function startDaemon(endpoint: string): Promise<void> {
-  const entry = fileURLToPath(new URL("./main.ts", import.meta.url));
-  // The server is Bun (it runs TypeScript directly): this runtime when it
-  // is Bun, else `bun` from PATH — e.g. when the caller runs under Node.
+  const entry = serverEntry();
+  // The server is Bun: this runtime when it is Bun, else `bun` from PATH —
+  // e.g. when the caller runs under Node.
   const runtime = process.versions.bun ? process.execPath : "bun";
   const child = spawn(runtime, [entry], {
     detached: true,

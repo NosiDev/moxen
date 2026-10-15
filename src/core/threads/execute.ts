@@ -28,6 +28,7 @@ import type { McpServerSpec } from "../mcp.js";
 import { ClaudeDriver } from "../providers/claude/driver.js";
 import { locateSkillsMod } from "../providers/claude/skillsmod.js";
 import { locateBundledSkills } from "../providers/bundledskills.js";
+import { HarnessDriver } from "../providers/harness/driver.js";
 import { OpenCodeDriver } from "../providers/opencode/driver.js";
 import type {
   ContextBreakdown,
@@ -57,7 +58,7 @@ import { isolationInstructions, resolveIsolation } from "./isolation.js";
 import { recordNativeSubagent } from "./subagents.js";
 import { ThreadStore } from "./store.js";
 import { toolActivityRow, type ToolRuntimeEvent } from "./toolactivity.js";
-import { userInputActivityRow, type UserInputRuntimeEvent } from "./requestactivity.js";
+import { permissionActivityRow, userInputActivityRow, type UserInputRuntimeEvent } from "./requestactivity.js";
 import type { StoredAttachment, StoredThread, TurnUsage } from "./types.js";
 
 /** Structural driver surface the runner needs. All four drivers satisfy it. */
@@ -103,10 +104,12 @@ export interface TurnDriver extends ProviderSessionTitles {
   skillInventory?(workingDirectory: string): Promise<SkillInventory>;
   /**
    * A native subagent's conversation, for providers that keep it in their
-   * own session store (OpenCode's child sessions). Null when it cannot be
-   * read right now.
+   * own session store (OpenCode's child sessions, the harness's saved
+   * subagent conversations). `cursor` is the thread's native session, for a
+   * driver that holds none in this process. Null when it cannot be read
+   * right now.
    */
-  subagentHistory?(threadId: string, agentId: string): Promise<readonly SubagentHistoryItem[] | null>;
+  subagentHistory?(threadId: string, agentId: string, cursor?: string | null): Promise<readonly SubagentHistoryItem[] | null>;
   /** Background work running in the thread's live session (Claude: commands, Monitor watches, subagents). */
   backgroundTasks?(threadId: string): readonly BackgroundTaskSummary[];
   stopBackgroundTask?(threadId: string, taskId: string): Effect.Effect<void, CliError>;
@@ -147,6 +150,7 @@ export interface TurnOutcome {
 export interface TurnDriverFactories {
   readonly claude?: () => TurnDriver;
   readonly opencode?: () => TurnDriver;
+  readonly harness?: () => TurnDriver;
 }
 
 const driverCache = new WeakMap<object, WeakMap<object, Map<string, TurnDriver>>>();
@@ -155,7 +159,8 @@ const defaultFactories: TurnDriverFactories = {};
 
 /**
  * The driver an instance id routes to. `opencode/<provider>` entries share
- * one driver (the provider address travels in the model slug), and
+ * one driver (the provider address travels in the model slug), `harness/<profile>`
+ * entries share the harness driver (the profile is resolved per send), and
  * `claudeAgent` is the historical id for the Claude surface that existing
  * threads and configs still carry.
  */
@@ -163,9 +168,11 @@ export function driverKey(instanceId: string): string {
   const rawKey = instanceId.trim().toLowerCase();
   return rawKey === "opencode" || rawKey.startsWith("opencode/")
     ? "opencode"
-    : rawKey === "claudeagent"
-      ? "claude"
-      : rawKey;
+    : rawKey === "harness" || rawKey.startsWith("harness/")
+      ? "harness"
+      : rawKey === "claudeagent"
+        ? "claude"
+        : rawKey;
 }
 
 /**
@@ -198,6 +205,7 @@ export function driverForInstance(
   // (`restartRequired`), so a change applies to the next server start.
   if (key === "claude") driver = factories.claude?.() ?? new ClaudeDriver({ ...(providers?.claude ? { settings: providers.claude } : {}), skillsMod: locateSkillsMod() });
   else if (key === "opencode") driver = factories.opencode?.() ?? new OpenCodeDriver({ ...(providers?.opencode ? { settings: providers.opencode } : {}), bundledSkillsDir: locateBundledSkills() });
+  else if (key === "harness") driver = factories.harness?.() ?? new HarnessDriver({ config: providers?.harness });
   if (!driver) {
     throw new CliError("PROVIDER_UNKNOWN", `No direct driver for provider "${instanceId}".`, {
       details: { instanceId },
@@ -496,6 +504,8 @@ export async function ensureDriverSession(
     readonly modelSelection?: ModelSelection;
     readonly workingDirectory?: string;
     readonly mcpServers?: readonly McpServerSpec[];
+    readonly disabledMcpTools?: readonly string[];
+    readonly checklist?: boolean;
     readonly instructions?: string | null;
     /** How moxen's own skills reach the session (`ProviderSessionStartInput.moxenSkills`). */
     readonly moxenSkills?: "project" | "served" | "none";
@@ -521,6 +531,8 @@ export async function ensureDriverSession(
       interactionMode: thread.interactionMode,
       ...(cursor ? { resumeCursor: cursor } : {}),
       ...(options.mcpServers && options.mcpServers.length > 0 ? { mcpServers: options.mcpServers } : {}),
+      ...(options.disabledMcpTools && options.disabledMcpTools.length > 0 ? { disabledMcpTools: options.disabledMcpTools } : {}),
+      ...(options.checklist === false ? { checklist: false } : {}),
       ...(instructions ? { instructions } : {}),
       ...(isolation ? { isolation } : {}),
       ...(options.moxenSkills ? { moxenSkills: options.moxenSkills } : {}),
@@ -892,22 +904,13 @@ function recordTurnActivity(
       return;
     }
     if (event.type === "permission.request.opened" || event.type === "permission.request.resolved") {
-      // Bracket rows for a tool approval, so a reader can tell how long the
-      // turn stood waiting on the user (the transcript's "Worked for" and
-      // live clock leave that time out). Tool name only: the input can be
-      // a whole file, and the prompt itself is rendered live elsewhere.
-      const opened = event.type === "permission.request.opened";
-      const key = `permission:${event.requestId}:${opened ? "requested" : "resolved"}`;
-      if (written.has(key)) return;
-      written.set(key, key);
-      const raw = event.raw !== null && typeof event.raw === "object" ? (event.raw as Record<string, unknown>) : {};
-      const toolName = typeof raw.toolName === "string" ? raw.toolName : null;
-      append(opened ? "permission.requested" : "permission.resolved", opened ? `Asked to use ${toolName ?? "a tool"}` : "Permission answered", {
-        requestId: event.requestId,
-        provider: event.provider,
-        toolName,
-        ...(!opened && typeof raw.behavior === "string" ? { behavior: raw.behavior } : {}),
-      });
+      // Bracket rows for a tool approval: they time how long the turn stood
+      // waiting on the user (the transcript's "Worked for" and live clock
+      // leave that out) and carry what the approval prompt renders.
+      const row = permissionActivityRow(event);
+      if (written.has(row.key)) return;
+      written.set(row.key, row.key);
+      append(row.kind, row.summary, row.payload);
       return;
     }
     if (

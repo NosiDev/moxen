@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { describeActivity } from "../activity.js";
 
-import { applyThreadFrame, emptyThreadState, isQuestionToolActivity, latestPlan, pendingUserInputRequests, resumeCompactionKey, shouldOfferResumeCompaction, timeline } from "../thread.js";
+import { applyThreadFrame, emptyThreadState, isQuestionToolActivity, latestPlan, pendingPermissionRequests, pendingUserInputRequests, resumeCompactionKey, shouldOfferResumeCompaction, timeline } from "../thread.js";
 
 function messageSent(messageId: string, text: string, streaming: boolean) {
   return {
@@ -898,5 +898,44 @@ describe("shouldOfferResumeCompaction", () => {
     const stale = stateWithWindow(431_553, "2026-09-17T04:40:00.000Z");
     const running = { ...stale, session: { ...(stale.session ?? {}), status: "running" } } as typeof stale;
     expect(shouldOfferResumeCompaction(running, "claudeAgent", now)).toBe(false);
+  });
+});
+
+describe("pendingPermissionRequests", () => {
+  const activity = (kind: string, requestId: string, extra: Record<string, unknown> = {}) => ({
+    id: `${kind}-${requestId}`,
+    kind,
+    tone: "info",
+    summary: kind,
+    turnId: "turn-1",
+    createdAt: "2026-09-16T09:00:00.000Z",
+    payload: { requestId, toolName: "Bash", ...extra },
+  });
+  const stateWith = (activities: unknown[]) =>
+    applyThreadFrame(emptyThreadState(), {
+      kind: "snapshot",
+      snapshot: {
+        snapshotSequence: 1,
+        thread: { id: "t1", messages: [], activities, checkpoints: [], proposedPlans: [], session: null },
+      },
+    });
+
+  it("returns open approvals with what the prompt shows, until resolved", () => {
+    const open = stateWith([
+      activity("permission.requested", "p1", { classification: "command-execution", detail: "ls", description: "List" }),
+      activity("permission.requested", "p2"),
+      activity("permission.resolved", "p1", { behavior: "allow" }),
+    ]);
+    expect(pendingPermissionRequests(open)).toEqual([
+      { requestId: "p2", toolName: "Bash", classification: null, detail: null, description: null },
+    ]);
+    const first = stateWith([activity("permission.requested", "p1", { classification: "command-execution", detail: "ls", description: "List" })]);
+    expect(pendingPermissionRequests(first)[0]).toEqual({
+      requestId: "p1",
+      toolName: "Bash",
+      classification: "command-execution",
+      detail: "ls",
+      description: "List",
+    });
   });
 });

@@ -45,6 +45,11 @@ class QuestionDriver implements TurnDriver {
   private parked: ((answer: Record<string, string> | null) => void) | null = null;
   answered: Record<string, string> | null = null;
   dismissed = false;
+  /** The last decision `respondToRequest` received. */
+  decision: unknown = null;
+
+  /** `event` is what the turn parks on; a question unless a test says otherwise. */
+  constructor(private readonly event: ((threadId: string) => ProviderRuntimeEvent) | null = null) {}
 
   hasSession(threadId: string): Effect.Effect<boolean, CliError> {
     return Effect.succeed(this.sessions.has(threadId));
@@ -60,24 +65,29 @@ class QuestionDriver implements TurnDriver {
   sendTurn(input: { threadId: string }): Effect.Effect<{ threadId: string; turnId: string }, CliError> {
     return Effect.sync(() => {
       Effect.runSync(
-        Queue.offer(this.queue, {
-          type: "user-input.request.opened",
-          provider: "claude",
-          threadId: input.threadId,
-          requestId: "req-1",
-          raw: {
-            toolName: "AskUserQuestion",
-            input: {
-              questions: [
-                {
-                  question: "Which direction?",
-                  header: "Direction",
-                  options: [{ label: "Forward" }, { label: "Sideways" }],
+        Queue.offer(
+          this.queue,
+          this.event !== null
+            ? this.event(input.threadId)
+            : ({
+                type: "user-input.request.opened",
+                provider: "claude",
+                threadId: input.threadId,
+                requestId: "req-1",
+                raw: {
+                  toolName: "AskUserQuestion",
+                  input: {
+                    questions: [
+                      {
+                        question: "Which direction?",
+                        header: "Direction",
+                        options: [{ label: "Forward" }, { label: "Sideways" }],
+                      },
+                    ],
+                  },
                 },
-              ],
-            },
-          },
-        } as ProviderRuntimeEvent),
+              } as ProviderRuntimeEvent),
+        ),
       );
       return { threadId: input.threadId, turnId: "driver-turn-1" };
     });
@@ -98,8 +108,9 @@ class QuestionDriver implements TurnDriver {
     });
   }
 
-  respondToRequest(): Effect.Effect<void, CliError> {
+  respondToRequest(_threadId: string, _requestId: string, decision: unknown): Effect.Effect<void, CliError> {
     return Effect.sync(() => {
+      this.decision = decision;
       this.dismissed = true;
       this.parked?.(null);
     });
@@ -195,6 +206,60 @@ describe("DirectConnection parked questions", () => {
     expect(driver.dismissed).toBe(true);
     await waitFor("turn completion", async () => {
       const done = await readThread(harness.store, "thread-q");
+      return done.turns[0]?.status === "completed";
+    });
+  });
+});
+
+describe("DirectConnection parked tool approvals", () => {
+  it("writes the approval to the ledger and answers it through dispatch", async () => {
+    const driver = new QuestionDriver((threadId) => ({
+      type: "permission.request.opened",
+      provider: "claude",
+      threadId,
+      requestId: "perm-1",
+      raw: { toolName: "Bash", classification: "command-execution", input: { command: "bun run check", description: "Run the checks" } },
+    }) as ProviderRuntimeEvent);
+    const harness = await testHarness({ drivers: { claude: () => driver, opencode: () => driver } });
+    const connection = new DirectConnection({ storeRoot: harness.root, drivers: harness.drivers });
+    const workspaceRoot = await realpath(harness.work);
+    const ensured = await ensureStoredProject(storeRoot(), { workspaceRoot });
+    await connection.dispatch({
+      type: "thread.create",
+      commandId: "c-pc",
+      threadId: "thread-p",
+      projectId: ensured.project.id,
+      title: "Permission",
+      modelSelection: { instanceId: "claudeAgent", model: "claude-opus-5" },
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      branch: "main",
+    });
+    await connection.dispatch({ type: "thread.turn.start", commandId: "c-p", threadId: "thread-p", message: { text: "check it" } });
+    await waitFor("permission row", async () => {
+      const read = await readThread(harness.store, "thread-p");
+      return read.activities.some((activity) => activity.kind === "permission.requested");
+    });
+    const read = await readThread(harness.store, "thread-p");
+    const asked = read.activities.find((activity) => activity.kind === "permission.requested");
+    expect(asked?.payload).toMatchObject({
+      requestId: "perm-1",
+      toolName: "Bash",
+      classification: "command-execution",
+      detail: "bun run check",
+      description: "Run the checks",
+    });
+
+    await connection.dispatch({
+      type: "thread.permission.respond",
+      commandId: "c-pr",
+      threadId: "thread-p",
+      requestId: "perm-1",
+      decision: "accept-session",
+    });
+    expect(driver.decision).toEqual({ kind: "acceptForSession" });
+    await waitFor("turn completion", async () => {
+      const done = await readThread(harness.store, "thread-p");
       return done.turns[0]?.status === "completed";
     });
   });
@@ -1326,7 +1391,7 @@ describe("DirectConnection settings", () => {
       // The descriptors ride along so a client talking to a newer server
       // renders the settings that server actually honours.
       const runtimeMode = snapshot.settings.find((view) => view.descriptor.key === "runtimeMode");
-      expect(runtimeMode?.descriptor.label).toBe("Tool permissions");
+      expect(runtimeMode?.descriptor.label).toBe("Permissions");
       expect(runtimeMode?.value).toBe("full-access");
       expect(runtimeMode?.explicit).toBe(true);
       const backdrop = snapshot.settings.find((view) => view.descriptor.key === "ui.backdrop");
@@ -1454,6 +1519,85 @@ describe("DirectConnection settings", () => {
       await expect(connection.dispatch({ type: "settings.set", key: "nope", value: "1" })).rejects.toThrow(
         "Unknown config key: nope",
       );
+    } finally {
+      await connection.close();
+    }
+  });
+});
+
+describe("DirectConnection harness profiles", () => {
+  const PROFILES = "providers.harness.profiles";
+  const openAt = async (name: string, fetchImpl?: typeof fetch) => {
+    const harness = await testHarness();
+    const configPath = path.join(harness.root, name);
+    const connection = new DirectConnection({ storeRoot: harness.root, drivers: harness.drivers, configPath, ...(fetchImpl ? { harnessFetch: fetchImpl } : {}) });
+    return { connection, configPath };
+  };
+  const chat = (replies: (body: Record<string, any>) => Response) =>
+    (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/slots") || url.endsWith("/props") || url.endsWith("/tokenize")) return new Response("no", { status: 404 });
+      return replies(JSON.parse(String(init?.body)));
+    }) as unknown as typeof fetch;
+  const ok = () => new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { status: 200 });
+
+  it("adds, copies and removes profiles by id", async () => {
+    const { connection, configPath } = await openAt("profiles.json");
+    try {
+      await connection.dispatch({ type: "settings.set", key: `${PROFILES}[Home]`, value: JSON.stringify({ baseUrl: "http://h:8080", models: [{ id: "m" }] }) });
+      const copied = await connection.dispatch({ type: "settings.duplicate", key: PROFILES, id: "home", newId: "work" });
+      const items = copied.settings.find((view) => view.descriptor.key === PROFILES)?.items ?? [];
+      expect(items.map((item) => item.id)).toEqual(["home", "work"]);
+      await expect(connection.dispatch({ type: "settings.duplicate", key: PROFILES, id: "home", newId: "work" })).rejects.toThrow(/already exists/);
+      const removed = await connection.dispatch({ type: "settings.set", key: `${PROFILES}[home]`, value: "" });
+      expect(removed.settings.find((view) => view.descriptor.key === PROFILES)?.items?.map((item) => item.id)).toEqual(["work"]);
+      expect(JSON.parse(await readFile(configPath, "utf8")).providers.harness.profiles).toHaveLength(1);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("probes into the model's probed block, never its quirks, and a dry run saves nothing", async () => {
+    const strict = chat((body) =>
+      (body.messages as Array<{ role: string }>).some((message, index) => index > 0 && message.role === "system")
+        ? new Response(JSON.stringify({ error: { message: "System message must be at the beginning." } }), { status: 400 })
+        : ok(),
+    );
+    const { connection, configPath } = await openAt("probe.json", strict);
+    try {
+      await connection.dispatch({ type: "settings.set", key: `${PROFILES}[home]`, value: JSON.stringify({ baseUrl: "http://h:8080", quirks: { images: "none" }, models: [{ id: "m" }] }) });
+      const before = await readFile(configPath, "utf8");
+      const dry = await connection.dispatch({ type: "harness.profile.probe", profileId: "home", dryRun: true });
+      expect(dry).toMatchObject({ saved: false, quirks: { systemFirstOnly: true } });
+      expect(await readFile(configPath, "utf8")).toBe(before);
+      const real = await connection.dispatch({ type: "harness.profile.probe", profileId: "HOME" });
+      expect(real.saved).toBe(true);
+      const saved = JSON.parse(await readFile(configPath, "utf8")).providers.harness.profiles[0];
+      expect(saved.models[0].probed.quirks).toMatchObject({ systemFirstOnly: true });
+      expect(saved.quirks).toEqual({ images: "none" });
+      await expect(connection.dispatch({ type: "harness.profile.probe", profileId: "home", model: "not-listed" })).rejects.toThrow(/does not list the model/);
+      await expect(connection.dispatch({ type: "harness.profile.probe", profileId: "ghost" })).rejects.toThrow(/No harness profile/);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("refuses a second probe of a profile while one runs", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const slow = chat(() => ok());
+    const gated = (async (input: string | URL | Request, init?: RequestInit) => {
+      await gate;
+      return await slow(input, init);
+    }) as unknown as typeof fetch;
+    const { connection } = await openAt("busy.json", gated);
+    try {
+      await connection.dispatch({ type: "settings.set", key: `${PROFILES}[home]`, value: JSON.stringify({ baseUrl: "http://h:8080", models: [{ id: "m" }] }) });
+      const first = connection.dispatch({ type: "harness.profile.probe", profileId: "home", dryRun: true });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await expect(connection.dispatch({ type: "harness.profile.probe", profileId: "home", dryRun: true })).rejects.toThrow(/already running/);
+      release();
+      await first;
     } finally {
       await connection.close();
     }

@@ -26,7 +26,10 @@ as a duration over a prompt echo, so rows are written while the turn runs.
 A row is only appended when its signature changes, so streamed output does
 not flood the ledger. Parked questions land as rows too: the answer panel
 reads open questions off the ledger, so a question that never becomes a
-row can never be answered.
+row can never be answered. Tool approvals work the same way: a
+`permission.requested` row carries the tool, its command or path, and the
+agent's reason, and the permission panel (yes / yes for the session / no)
+answers it with `thread.permission.respond`.
 
 ## Steering
 
@@ -46,6 +49,19 @@ stays open.
 The instructions a conversation began with are kept, not rewritten. What
 changes since — edited rule files (sent as a patch, never the whole file),
 MCP server sets, skills — rides ahead of the next prompt.
+
+## Handing off a long thread
+
+Models make more tool-call mistakes as their window fills, so past
+`ui.autoHandoffPercent` (50 by default) of it a thread should move to a fresh one.
+The TUI watches the open thread's context reading (`tui/model/autohandoff.ts`).
+With `ui.autoHandoff` set to `ask` (the default) a card appears over the composer
+with **Hand off** and **Not now**; with `auto` Moxen sends `thread.continue` itself
+(the same handoff document as "Continue in a new thread") as soon as nothing is
+running that the new thread would lose track of: no turn, no subthread, no
+background task and no queued message. Until then the card names what it waits for
+and the button hands off by hand. It is Moxen that decides, not the model, and it
+fires at most once per thread. `off` turns the card and the automatic hand-off off.
 
 ## Revert
 

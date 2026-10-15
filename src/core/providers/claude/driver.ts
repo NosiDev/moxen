@@ -11,6 +11,7 @@
  * inherited from the CLI login — never our own OAuth.
  * See docs/providers.md.
  */
+import { wrapToolResponse } from "../../untrusted.js";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import os from "node:os";
@@ -202,6 +203,8 @@ interface ClaudeSession {
    * started with, kept so a rebuilt query has them too.
    */
   mcpServers: readonly McpServerSpec[] | null;
+  /** Tools hidden from the model: MCP tools the user switched off, and the to-do tools when the to-do list is off. */
+  readonly disallowedTools: readonly string[];
   readonly instructions: string | null;
   /** Set when the session runs in its own worktree: the PreToolUse hook refuses what reaches the checkout it came from. */
   readonly isolation: WorktreeIsolation | null;
@@ -518,6 +521,7 @@ export class ClaudeDriver implements ProviderAdapter<CliError> {
         model: input.modelSelection?.model ?? null,
         effort: sessionWideEffort(effectiveEffortChoice(input.modelSelection)),
         mcpServers: input.mcpServers && input.mcpServers.length > 0 ? input.mcpServers : null,
+        disallowedTools: [...(input.disabledMcpTools ?? []), ...(input.checklist === false ? CHECKLIST_TOOLS : [])],
         instructions: input.instructions ?? null,
         isolation: input.isolation ?? null,
         sdkMessages: new Map(),
@@ -2052,6 +2056,20 @@ export class ClaudeDriver implements ProviderAdapter<CliError> {
       SubagentStart: observe((input) => this.publishSubagent(session, input, "started")),
       SubagentStop: observe((input) => this.publishSubagent(session, input, "stopped")),
     };
+    // What an MCP server answers is data from outside the conversation: wrap it so the model is told so (the instructions explain the tag).
+    hooks.PostToolUse = [
+      {
+        matcher: "^mcp__",
+        hooks: [
+          async (input) => {
+            const call = input as unknown as { tool_name?: unknown; tool_response?: unknown };
+            const name = typeof call.tool_name === "string" ? call.tool_name : "";
+            const wrapped = wrapToolResponse(call.tool_response, `mcp:${name.replace(/^mcp__/, "").replace("__", "/")}`);
+            return wrapped === undefined ? {} : { hookSpecificOutput: { hookEventName: "PostToolUse" as const, updatedMCPToolOutput: wrapped } };
+          },
+        ],
+      },
+    ];
     const { isolation } = session;
     if (isolation) {
       // Unlike `canUseTool`, a hook runs in every permission mode (bypass included), and it covers subagents.
@@ -2361,7 +2379,9 @@ export class ClaudeDriver implements ProviderAdapter<CliError> {
     )) {
       if (typeof value === "string") env[key] = value;
     }
-    // The mod finds moxen's own skills here; `.agents/skills` it reads itself.
+    // The mod finds moxen's own skills here; `.agents/skills` it reads itself. An inherited value (moxen
+    // launched from a moxen session) must not point a project- or delegated-skills session at the bundled folder.
+    delete env["MOXEN_SKILLS_DIR"];
     if (this.skillsMod?.bundledSkillsDir && session.moxenSkills === "served") env["MOXEN_SKILLS_DIR"] = this.skillsMod.bundledSkillsDir;
     return {
       cwd: session.workingDirectory,
@@ -2370,6 +2390,7 @@ export class ClaudeDriver implements ProviderAdapter<CliError> {
       ...(session.resumeSessionId ? { resume: session.resumeSessionId } : {}),
       // Built per query: an in-process server instance connects to one query only, so a rebuilt one needs its own.
       ...(session.mcpServers ? { mcpServers: claudeMcpServers(session.mcpServers) } : {}),
+      ...(session.disallowedTools.length > 0 ? { disallowedTools: [...session.disallowedTools] } : {}),
       // Always Claude Code's own prompt: the SDK's default when this is
       // omitted is an *empty* custom prompt (`systemPrompt = ""`), which
       // left sessions without Claude Code's tool and environment guidance.
@@ -2452,6 +2473,9 @@ function extractPlan(input: Record<string, unknown>): string | null {
  * newer model never writes the checklist the tasks panel renders. An
  * explicit value in the user's own environment (e.g. `0`) wins.
  */
+/** Claude Code's to-do tools, in both of their shapes (TodoWrite, and the Task tools that replaced it). */
+const CHECKLIST_TOOLS: readonly string[] = ["TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"];
+
 function withTaskTools(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   if (env["CLAUDE_CODE_ENABLE_TODO_TOOLS"] !== undefined) return env;
   return { ...env, CLAUDE_CODE_ENABLE_TODO_TOOLS: "1" };

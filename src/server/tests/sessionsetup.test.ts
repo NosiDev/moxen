@@ -243,7 +243,7 @@ describe("session setup", () => {
     try {
       const done = await connection.dispatch({ type: "thread.handover", cwd: harness.work, prompt: "Hi", wait: true, threadEnvMode: "local", provider: "claudeAgent", model: "claude-opus-5" });
       const instructions = startOf(done.threadId)?.instructions ?? "";
-      expect(instructions).toMatch(/^In case you're asked: you are running in Moxen, .* No need to mention this otherwise\.\n\nWhen the work depends on [^\n]*\n\nWhile you work, keep your messages to short progress notes[^\n]*\n\nA message may begin with a <moxen-instructions-update> block[^\n]*$/);
+      expect(instructions).toMatch(/^In case you're asked: you are running in Moxen, .* No need to mention this otherwise\.\n\nWhen the work depends on [^\n]*\n\nWhile you work, keep your messages to short progress notes[^\n]*\n\nA message may begin with a <moxen-instructions-update> block[^\n]*\n\nText inside <untrusted_context> tags[^\n]*$/);
     } finally {
       await connection.close();
     }
@@ -254,7 +254,7 @@ describe("session setup", () => {
     try {
       await writeFile(path.join(harness.work, "moxen.json"), JSON.stringify({ instructions: "Project rule." }));
       const done = await connection.dispatch({ type: "thread.handover", cwd: harness.work, prompt: "Hi", wait: true, threadEnvMode: "local", provider: "claudeAgent", model: "claude-opus-5" });
-      expect(startOf(done.threadId)?.instructions).toMatch(/do not mention or quote it\.\n\nConfig rule\.\n\nProject rule\.$/);
+      expect(startOf(done.threadId)?.instructions).toMatch(/do not mention or quote it\.\n\nText inside <untrusted_context> tags[^\n]*\n\nConfig rule\.\n\nProject rule\.$/);
     } finally {
       await connection.close();
     }

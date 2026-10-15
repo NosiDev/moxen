@@ -11,10 +11,12 @@ import {
   expandHome,
   loadConfig,
   saveConfig,
-  setConfigValue,
+  setConfigValueSecure,
   type ConfigKey,
 } from "../core/config.js";
-import { describeSettings } from "../core/configschema.js";
+import { describeSettings, isSettingKey, listTarget, readSetting, secretKeyName } from "../core/configschema.js";
+import { readListValue } from "../core/configlist.js";
+import { addProfile, duplicateProfile, editProfile, listProfiles, probeProfile, removeProfile, showProfile, testProfile } from "./harness/harness.js";
 import type { MergeStrategy } from "../server/api.js";
 import {
   commentOnForgeRequest,
@@ -30,7 +32,6 @@ import { redactMcpServers } from "../core/mcp.js";
 import { doctor } from "./doctor.js";
 import { parseUpdatable, updateCommand } from "./update.js";
 import { preferDirectClient } from "./infra/client.js";
-import { reexecInProduction } from "./infra/production.js";
 import { serverStart, serverStatus, serverStop } from "./server.js";
 import { CliError } from "../core/errors.js";
 import { writeError, writeSuccess } from "./output.js";
@@ -359,7 +360,6 @@ program
   .description("Open the terminal UI for threads.")
   .action(() =>
     action(async () => {
-      if (await reexecInProduction()) return;
       const context = await commandContext();
       const { runTui } = await import("../tui/index.js");
       await runTui(context.config, context.configPath);
@@ -447,17 +447,36 @@ configCommand.command("show").action(() =>
 );
 configCommand
   .command("set")
-  .argument("<key>", `Setting key: ${CONFIG_KEYS.join(", ")}`)
+  .argument("<key>", `Setting key: ${CONFIG_KEYS.join(", ")}. List entries are addressed by id: providers.harness.profiles[<id>].baseUrl (empty value removes an entry or clears a field).`)
   .argument("<value>")
   .action((key: string, value: string) =>
     action(async () => {
-      if (!(CONFIG_KEYS as readonly string[]).includes(key)) {
+      if (!isSettingKey(key)) {
         throw new CliError("INVALID_CONFIG_KEY", `Unknown config key: ${key}`);
       }
       const context = await commandContext();
-      const next = setConfigValue(context.config, key as ConfigKey, value);
+      const next = await setConfigValueSecure(context.config, key as ConfigKey, value);
       await saveConfig(context.configPath, next);
-      writeSuccess({ path: context.configPath, config: displayConfig(next) }, context, `Saved ${key}=${value}.`);
+      // A secret is never echoed back.
+      writeSuccess({ path: context.configPath, config: displayConfig(next) }, context, secretKeyName(key) !== null ? `Saved ${key} to the OS keychain.` : `Saved ${key}=${value}.`);
+    }),
+  );
+
+configCommand
+  .command("get")
+  .description("Read one setting: the value in force, or for a list entry its JSON.")
+  .argument("<key>")
+  .action((key: string) =>
+    action(async () => {
+      if (!isSettingKey(key)) throw new CliError("INVALID_CONFIG_KEY", `Unknown config key: ${key}`);
+      const context = await commandContext();
+      const entry = listTarget(key);
+      const value: unknown = entry ? readListValue(context.config, entry) : readSetting(context.config, key);
+      writeSuccess(
+        { key, value: value ?? null, explicit: entry ? value !== undefined : (describeSettings(context.config).find((view) => view.descriptor.key === key)?.explicit ?? false) },
+        context,
+        value === undefined || value === null ? "" : typeof value === "object" ? JSON.stringify(value, null, 2) : String(value),
+      );
     }),
   );
 
@@ -480,6 +499,7 @@ configCommand
           : {}),
         value: view.value ?? null,
         explicit: view.explicit,
+        ...(view.items ? { items: view.items.map((item) => ({ id: item.id, label: item.title, summary: item.summary })) } : {}),
         ...(view.descriptor.restartRequired === true ? { restartRequired: true } : {}),
       }));
       writeSuccess(
@@ -489,6 +509,136 @@ configCommand
           .map((setting) => `${setting.key.padEnd(34)} ${String(setting.value ?? "—")}`)
           .join("\n"),
       );
+    }),
+  );
+
+const harness = program.command("harness").description("Moxen Harness: the endpoints it talks to.");
+const harnessProfile = harness.command("profile").description("Saved endpoints (providers.harness.profiles). Keys are never stored: a profile names the environment variable that holds one.");
+const collect = (value: string, previous: string[]): string[] => [...previous, value];
+
+function profileLines(item: { id: string; title: string; summary: string; status: string | null }): string {
+  return `${item.id}\t${item.title}\t${item.summary}${item.status ? `\t! ${item.status}` : ""}`;
+}
+
+harnessProfile
+  .command("list")
+  .description("List profiles.")
+  .action(() =>
+    action(async () => {
+      const context = await commandContext();
+      const result = await listProfiles(context);
+      writeSuccess(result, context, result.profiles.length === 0 ? "No harness profiles. Add one with `moxen harness profile add`." : result.profiles.map((p) => `${p.id}\t${p.label}\t${p.baseUrl ?? "-"}\t${p.models.join(",")}${p.status ? `\t! ${p.status}` : ""}`).join("\n"));
+    }),
+  );
+harnessProfile
+  .command("show")
+  .argument("<id>")
+  .description("One profile with every field, what is in force and where it comes from, and its models' resolved quirks.")
+  .action((id: string) =>
+    action(async () => {
+      const context = await commandContext();
+      const { profile } = await showProfile(context, id);
+      const lines = [profileLines(profile)];
+      for (const field of profile.fields) {
+        if (field.items) {
+          for (const model of field.items) {
+            lines.push(`  model ${model.id}: ${model.summary}`);
+            for (const row of model.resolved) lines.push(`    ${row.label} = ${row.value} (${row.origin})`);
+          }
+        } else if (field.value !== undefined || field.effective) {
+          const inForce = field.effective ? `  [in force: ${String(field.effective.value)}, from ${field.effective.origin}]` : "";
+          lines.push(`  ${field.path} = ${field.value === undefined ? "(unset)" : String(field.value)}${inForce}`);
+        }
+      }
+      writeSuccess({ profile }, context, lines.join("\n"));
+    }),
+  );
+harnessProfile
+  .command("add")
+  .argument("<id>", "Lowercase letters, digits, '.', '_' or '-'.")
+  .requiredOption("--base-url <url>", "The server's address, with or without /v1.")
+  .option("--model <id>", "A model the endpoint serves (repeatable).", collect, [])
+  .option("--label <text>", "Name shown in the model picker.")
+  .option("--api-format <format>", "The API the server speaks: chat (default), responses or anthropic.")
+  .option("--api-key-env <NAME>", "The NAME of the environment variable that holds the key (never the key).")
+  .option("--slots <n>", "Concurrent requests the server takes (llama.cpp -np).", (value) => Number.parseInt(value, 10))
+  .description("Add a profile. Tune it afterwards with `profile edit --set field=value`.")
+  .action((id: string, options: { baseUrl: string; model: string[]; label?: string; apiKeyEnv?: string; apiFormat?: string; slots?: number }) =>
+    action(async () => {
+      const context = await commandContext();
+      if (options.model.length === 0) throw new CliError("INVALID_CONFIG", "Give at least one --model.", { exitCode: 2 });
+      const result = await addProfile(context, { id, baseUrl: options.baseUrl, models: options.model, ...(options.apiFormat ? { apiFormat: options.apiFormat } : {}), ...(options.label ? { label: options.label } : {}), ...(options.apiKeyEnv ? { apiKeyEnv: options.apiKeyEnv } : {}), ...(options.slots !== undefined ? { slots: options.slots } : {}) });
+      writeSuccess(result, context, `Added ${id}.`);
+    }),
+  );
+harnessProfile
+  .command("edit")
+  .argument("<id>")
+  .option("--set <field=value>", "Set a field, e.g. baseUrl=…, sampling.topK=20, models[qwen3].contextWindow=262144, quirks.systemFirstOnly=false (repeatable).", collect, [])
+  .option("--unset <field>", "Clear a field back to its default (repeatable).", collect, [])
+  .option("--add-model <id>", "List another model (repeatable).", collect, [])
+  .option("--remove-model <id>", "Stop listing a model (repeatable).", collect, [])
+  .description("Edit a profile. Edits apply in the order add-model, set, unset, remove-model; the first one the server refuses stops the rest.")
+  .action((id: string, options: { set: string[]; unset: string[]; addModel: string[]; removeModel: string[] }) =>
+    action(async () => {
+      const context = await commandContext();
+      const result = await editProfile(context, id, { sets: options.set, unsets: options.unset, addModels: options.addModel, removeModels: options.removeModel });
+      writeSuccess(result, context, result.applied.length === 0 ? "Nothing to change." : `Updated ${id}: ${result.applied.join(", ")}.`);
+    }),
+  );
+harnessProfile
+  .command("duplicate")
+  .argument("<id>")
+  .argument("<new-id>")
+  .description("Copy a profile. Probe results stay behind: they describe one server.")
+  .action((id: string, newId: string) =>
+    action(async () => {
+      const context = await commandContext();
+      writeSuccess(await duplicateProfile(context, id, newId), context, `Copied ${id} to ${newId}.`);
+    }),
+  );
+harnessProfile
+  .command("remove")
+  .argument("<id>")
+  .description("Remove a profile from the config. Threads that used it keep their history but cannot send until it exists again.")
+  .action((id: string) =>
+    action(async () => {
+      const context = await commandContext();
+      const result = await removeProfile(context, id);
+      writeSuccess(result, context, `Removed ${result.removed}.`);
+    }),
+  );
+harnessProfile
+  .command("test")
+  .argument("<id>")
+  .option("--model <id>", "Model to ask (default: the profile's first).")
+  .description("Send one tiny request. Exits 1 when the endpoint does not answer.")
+  .action((id: string, options: { model?: string }) =>
+    action(async () => {
+      const context = await commandContext();
+      const result = await testProfile(context, id, options.model);
+      writeSuccess(result, context, `${result.ok ? "ok" : "failed"}: ${result.message}`);
+      if (!result.ok) process.exitCode = 1;
+    }),
+  );
+harness
+  .command("probe")
+  .argument("<profile>")
+  .option("--model <id>", "Model to probe (default: the profile's first; it must be listed).")
+  .option("--dry-run", "Report what was found without saving it.")
+  .description(
+    "Run a fixed battery of tiny requests (about a dozen, one at a time) and save what the server's chat template accepts to the model's `probed` block. Your own `quirks` are never touched. On a one-slot server the requests replace the cached prompt of the last conversation.",
+  )
+  .action((profile: string, options: { model?: string; dryRun?: boolean }) =>
+    action(async () => {
+      const context = await commandContext();
+      const report = await probeProfile(context, profile, options);
+      const lines = report.checks.map((check) => `${check.outcome.padEnd(12)} ${check.title}: ${check.finding}`);
+      if (report.stopped) lines.push(`Stopped: ${report.stopped}`);
+      for (const note of report.notes) lines.push(`Note: ${note}`);
+      lines.push(report.saved ? `Saved to ${report.profileId}/${report.model}.` : "Nothing saved.");
+      writeSuccess(report, context, lines.join("\n"));
+      if (report.stopped) process.exitCode = 1;
     }),
   );
 

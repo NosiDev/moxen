@@ -12,6 +12,7 @@
  * `GIT_WORK_TREE`). Like Claude's, it does not track what a shell command
  * writes (`cp`, a redirect), so it is a guard rail, not a sandbox.
  */
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
 
@@ -63,11 +64,44 @@ function within(target: string, root: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-/** Whether `target` is in a protected checkout and not in the worktree (which may itself sit inside one). */
+/**
+ * `target` with every symlink resolved, including through the part that does
+ * not exist yet (a file about to be created) and through a dangling link, whose
+ * target is where a write would land. Without it a link inside the worktree that
+ * points at the main checkout would pass for a path inside the worktree.
+ */
+function canonical(target: string): string {
+  const start = path.resolve(target);
+  let current = start;
+  const rest: string[] = [];
+  for (let hops = 0; hops < 64; hops += 1) {
+    try {
+      return path.join(realpathSync(current), ...rest);
+    } catch {
+      let link: string | null = null;
+      try {
+        if (lstatSync(current).isSymbolicLink()) link = readlinkSync(current);
+      } catch {
+        // Nothing here yet.
+      }
+      if (link !== null) {
+        current = path.resolve(path.dirname(current), link);
+        continue;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) return start;
+      rest.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+  return start;
+}
+
+/** Whether `target` is in a protected checkout and not in the worktree (which may itself sit inside one). Symlinks are followed. */
 export function escapes(isolation: WorktreeIsolation, target: string, cwd: string): boolean {
-  const resolved = path.resolve(cwd, target);
-  if (within(resolved, isolation.worktreeRoot)) return false;
-  return isolation.protectedRoots.some((root) => within(resolved, root));
+  const resolved = canonical(path.resolve(cwd, target));
+  if (within(resolved, canonical(isolation.worktreeRoot))) return false;
+  return isolation.protectedRoots.some((root) => within(resolved, canonical(root)));
 }
 
 /** The first redirect in a shell command that lands in a protected checkout, or null. */

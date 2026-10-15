@@ -46,15 +46,6 @@ export function closeOnSignals(handle: ServerHandle): void {
   process.once("SIGTERM", stop);
 }
 
-if (import.meta.main) {
-  // Detached autostart: stdio is ignored, so a failure is reported through
-  // the exit code only; the client that started us sees the endpoint stay
-  // silent and reports that instead.
-  runServer().then(
-    (handle) => {
-      closeOnSignals(handle);
-      void handle.closed.then(() => process.exit(0));
-    },
-    () => process.exit(1),
-  );
-}
+// `import.meta.main` only holds in the file Bun was asked to run, which a
+// bundle's chunking can move away from: the bundle runs `./daemon.ts` instead.
+if (import.meta.main) await import("./daemon.js");

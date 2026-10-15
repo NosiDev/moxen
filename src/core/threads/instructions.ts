@@ -20,6 +20,8 @@
  * this is for what only moxen knows. (What happens when one is edited while a
  * conversation lives is `rulefiles.ts`'s: a patch, not a resend.)
  */
+import { driverKindOfInstance } from "../types.js";
+import { UNTRUSTED_NOTE } from "../untrusted.js";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -39,6 +41,8 @@ export interface RuntimeInstructionsInput {
   } | null;
   /** From config `instructions`, then the project's `moxen.json`, in that order. */
   readonly userInstructions?: readonly string[];
+  /** False when the user switched the to-do list off for this provider. */
+  readonly checklist?: boolean;
 }
 
 /**
@@ -125,7 +129,9 @@ export function buildRuntimeInstructions(input: RuntimeInstructionsInput): strin
     RESEARCH_GUIDANCE,
     PROGRESS_GUIDANCE,
     INSTRUCTIONS_UPDATE_GUIDANCE,
-    ...(harnessName(input.instanceId) === "OpenCode" ? [OPENCODE_SUBAGENT_GUIDANCE, CHECKLIST_GUIDANCE] : []),
+    ...(harnessName(input.instanceId) === "OpenCode" ? [OPENCODE_SUBAGENT_GUIDANCE, ...(input.checklist === false ? [] : [CHECKLIST_GUIDANCE])] : []),
+    // Claude Code's MCP results are wrapped by a hook; the other providers say so in their own prompts.
+    ...(driverKindOfInstance(input.instanceId) === "claude" ? [UNTRUSTED_NOTE] : []),
   ];
   const delegation = input.delegation ?? null;
 

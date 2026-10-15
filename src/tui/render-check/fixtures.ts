@@ -1,7 +1,9 @@
 import { App } from "../app/app.js";
 import type { ClientApi, ShellFrame, ThreadFrame } from "../../server/api.js";
 import {
+  permissionActivityRow,
   userInputActivityRow,
+  type PermissionRuntimeEvent,
   type UserInputRuntimeEvent,
 } from "../../core/threads/requestactivity.js";
 
@@ -640,6 +642,42 @@ export function userInputRequestedFrame(requestId: string, questionCount = 1): u
           id: `aq-live-${requestId}`,
           kind: row.kind,
           tone: "info",
+          summary: row.summary,
+          turnId: "turn-2",
+          createdAt: new Date().toISOString(),
+          payload: row.payload,
+        },
+      },
+    },
+  };
+}
+
+/**
+ * A `permission.requested` activity frame, built by the real writer for the
+ * same reason as `userInputRequestedFrame`: the panel must fail here if the
+ * writer stops producing what it reads.
+ */
+export function permissionRequestedFrame(requestId: string): unknown {
+  const row = permissionActivityRow({
+    type: "permission.request.opened",
+    provider: "claude",
+    threadId: "thread-1",
+    requestId,
+    raw: {
+      toolName: "Bash",
+      classification: "command-execution",
+      input: { command: "bun run check", description: "Run typecheck and tests" },
+    },
+  } as PermissionRuntimeEvent);
+  return {
+    kind: "event",
+    event: {
+      type: "thread.activity-appended",
+      payload: {
+        activity: {
+          id: `perm-live-${requestId}`,
+          kind: row.kind,
+          tone: "approval",
           summary: row.summary,
           turnId: "turn-2",
           createdAt: new Date().toISOString(),

@@ -1,4 +1,5 @@
 import { CliError } from "../errors.js";
+import { driverKindOfInstance } from "../types.js";
 import { binaryOnPath } from "../infra/process.js";
 import { parseClaudeModels } from "../providers/claude/catalog.js";
 import type {
@@ -6,6 +7,7 @@ import type {
   ModelSelection,
   ProviderOptionSelection,
   SpeedMode,
+  RuntimeMode,
 } from "../types.js";
 
 /** Pins the installation default: `<instanceId>/<model>`, e.g. `claudeAgent/claude-opus-5-5`. */
@@ -109,18 +111,31 @@ export function asModelSelection(value: unknown): ModelSelection | null {
   return candidate as unknown as ModelSelection;
 }
 
+/** The defaults the user set on a provider's own settings page, for the provider an instance belongs to. */
+export function providerDefaults(config: CliConfig, instanceId: string): { runtimeMode?: RuntimeMode; model?: string; thinkingEffort?: string } {
+  const kind = driverKindOfInstance(instanceId);
+  return kind === null ? {} : (config.providers?.[kind] ?? {});
+}
+
+/** The permission mode a new thread on `instanceId` starts in: the provider's own default, else the global one. */
+export function defaultRuntimeMode(config: CliConfig, instanceId: string): RuntimeMode {
+  return providerDefaults(config, instanceId).runtimeMode ?? config.runtimeMode;
+}
+
 export function resolveModelSelection(
   base: ModelSelection,
   config: CliConfig,
   options: ModelSelectionRequest,
 ): ModelSelection {
   const provider = nonEmptyOption(options.provider ?? config.provider, "provider");
-  const requestedModel = nonEmptyOption(options.model ?? config.model, "model");
+  const instanceId = provider ?? base.instanceId;
+  const own = providerDefaults(config, instanceId);
+  // The provider's own page is more specific than the global default.
+  const requestedModel = nonEmptyOption(options.model ?? own.model ?? config.model, "model");
   const thinkingEffort = nonEmptyOption(
-    options.thinkingEffort ?? config.thinkingEffort,
+    options.thinkingEffort ?? own.thinkingEffort ?? config.thinkingEffort,
     "thinking effort",
   );
-  const instanceId = provider ?? base.instanceId;
   if (provider !== undefined && provider !== base.instanceId && requestedModel === undefined) {
     throw new CliError(
       "MODEL_REQUIRED_FOR_PROVIDER",
@@ -187,5 +202,6 @@ export function followUpSelection(
   delete scoped.model;
   delete scoped.speedMode;
   delete scoped.thinkingEffort;
+  delete scoped.providers;
   return resolveModelSelection(base, scoped, { prompt, ...request });
 }

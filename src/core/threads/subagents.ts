@@ -138,12 +138,14 @@ export async function subagentTranscript(
   threadId: string,
   agentId: string,
   readHistory?: SubagentHistoryReader,
+  /** Whose store `readHistory` reads: it decides which of the thread's sessions must exist, and how the tool rows are mapped. */
+  historyProvider: "opencode" | "harness" = "opencode",
 ): Promise<SubagentTranscript> {
   const thread = await store.readThreadRecord(threadId);
   const agent = thread?.nativeSubagents?.find((entry) => entry.agentId === agentId) ?? null;
-  if (thread !== null && thread.providerSessions?.["opencode"] !== undefined && readHistory !== undefined) {
+  if (thread !== null && thread.providerSessions?.[historyProvider] !== undefined && readHistory !== undefined) {
     const history = await readHistory(agentId).catch(() => null);
-    if (history !== null) return { available: true, agent, ...historyEnvelopes(threadId, agentId, history, agent?.startedAt ?? thread.createdAt) };
+    if (history !== null) return { available: true, agent, ...historyEnvelopes(threadId, agentId, history, agent?.startedAt ?? thread.createdAt, historyProvider) };
   }
   const sessionId = thread?.providerSessions?.["claude"];
   if (thread === null || sessionId === undefined) return { available: false, agent, messages: [], activities: [] };
@@ -211,6 +213,7 @@ function historyEnvelopes(
   agentId: string,
   history: readonly SubagentHistoryItem[],
   startedAt: string,
+  provider: "opencode" | "harness",
 ): { messages: MessageEnvelope[]; activities: ActivityEnvelope[] } {
   const turnId = `subagent:${agentId}`;
   const base = Date.parse(startedAt);
@@ -219,7 +222,7 @@ function historyEnvelopes(
   history.forEach((item, index) => {
     const at = item.at ?? new Date((Number.isNaN(base) ? 0 : base) + index).toISOString();
     if (item.kind === "tool") {
-      const row = toolActivityRow({ type: "tool.execute.completed", provider: "opencode", threadId, turnId, tool: item.tool, raw: item.raw });
+      const row = toolActivityRow({ type: "tool.execute.completed", provider, threadId, turnId, tool: item.tool, raw: item.raw });
       if (row !== null) activities.push({ id: `tool:${item.id}`, threadId, turnId, kind: row.kind, summary: row.summary, tone: "tool", createdAt: at, payload: row.payload });
     } else if (item.kind === "reasoning") {
       activities.push({

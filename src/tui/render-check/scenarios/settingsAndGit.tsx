@@ -58,6 +58,11 @@ async function runSettings(): Promise<void> {
         saving={null}
         error={null}
         onSet={(key, value) => written.push({ key, value })}
+        onDuplicate={() => {}}
+        run={null}
+        onTest={() => {}}
+      onTestMcp={() => {}}
+        onProbe={() => {}}
         // Claude Code older than the floor, OpenCode current: both statuses show.
         versions={{
           claude: { ok: false, installed: true, version: "2.1.280 (Claude Code)", login: "inherit", minVersion: "2.1.292" },
@@ -88,10 +93,10 @@ async function runSettings(): Promise<void> {
   console.log("--- settings page ---");
   console.log(frame);
   // Every section is a tab down the left; the first one's settings show.
-  for (const expected of ["Settings", "config.json", "General", "Turns", "Model defaults", "Git and forges", "Claude Code", "Unknown folders"]) {
+  for (const expected of ["Settings", "config.json", "General", "Turns", "New threads", "Git and forges", "Claude Code", "Unknown folders"]) {
     if (!frame.includes(expected)) fail(`settings page is missing "${expected}"`);
   }
-  if (frame.includes("Tool permissions")) fail("settings page shows another section's settings under General");
+  if (frame.includes("Idle session lifetime")) fail("settings page shows another section's settings under General");
   // The first setting sits on its tab's row, not one below it (the tab and the card are side by side).
   const generalRows = frame.split("\n");
   const tabRow = generalRows.findIndex((row) => /^\s*▌?\s*General\s/.test(row) && row.includes("│"));
@@ -104,7 +109,7 @@ async function runSettings(): Promise<void> {
   const turns = setup.captureCharFrame();
   console.log("--- settings page, Turns tab ---");
   console.log(turns);
-  if (!turns.includes("Tool permissions") || turns.includes("Unknown folders")) fail("tab did not switch the settings page to the Turns section");
+  if (!turns.includes("Idle session lifetime") || turns.includes("Unknown folders")) fail("tab did not switch the settings page to the Turns section");
 
   // A duration is picked from its presets, never typed.
   const turnRows = turns.split("\n");
@@ -133,13 +138,37 @@ async function runSettings(): Promise<void> {
   await setup.flush();
   if (written.at(-1)?.key !== "sessionTtl" || written.at(-1)?.value !== "5m") fail(`picking a preset wrote ${JSON.stringify(written)}`);
 
+  // Free text: a box that wraps and grows, with its keys and what empty means said under it.
+  // Idle session lifetime, continue at a limit, install skills, then extra instructions.
+  for (let step = 0; step < 3; step += 1) await act(async () => setup.mockInput.pressArrow("down"));
+  await act(async () => setup.mockInput.pressEnter());
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 250)));
+  await setup.flush();
+  await act(async () => setup.mockInput.typeText("Prefer small commits. Never touch the lockfile unless asked, and say so when a test is skipped."));
+  await setup.flush();
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 200)));
+  await setup.flush();
+  const typedFrame = setup.captureCharFrame();
+  console.log("--- settings page, text input ---");
+  console.log(typedFrame);
+  for (const expected of ["Prefer small commits", "shift+enter new line", "ctrl+u clears", "Empty: unset", "characters"]) {
+    if (!typedFrame.includes(expected)) fail(`the text input does not show "${expected}"`);
+  }
+  await act(async () => setup.mockInput.pressKey("u", { ctrl: true }));
+  await setup.flush();
+  if (setup.captureCharFrame().includes("Prefer small commits")) fail("ctrl+u did not clear the text input");
+  await act(async () => setup.mockInput.pressEscape());
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 150)));
+  await setup.flush();
+  for (let step = 0; step < 3; step += 1) await act(async () => setup.mockInput.pressArrow("up"));
+
   // Model defaults list the catalog's models rather than asking for a slug.
   await act(async () => setup.mockInput.pressTab());
   await setup.flush();
   const model = setup.captureCharFrame().split("\n");
-  const modelRow = model.findIndex((row) => row.includes("Default model"));
-  if (modelRow < 0) fail("Model defaults tab has no default model row");
-  await act(async () => setup.mockMouse.click(model[modelRow]!.indexOf("Default model") + 1, modelRow));
+  const modelRow = model.findIndex((row) => /│\s+Model\s/.test(row));
+  if (modelRow < 0) fail("New threads tab has no model row");
+  await act(async () => setup.mockMouse.click(model[modelRow]!.indexOf("Model") + 1, modelRow));
   await setup.flush();
   const models = setup.captureCharFrame();
   console.log("--- settings page, model choices ---");
@@ -156,8 +185,7 @@ async function runSettings(): Promise<void> {
   const claude = setup.captureCharFrame();
   console.log("--- settings page, Claude Code tab ---");
   console.log(claude);
-  if (!claude.includes("Claude executable")) fail("the Claude Code tab does not show its settings");
-  if (!claude.includes("next start")) fail("settings page does not mark restart-only settings");
+  if (!claude.includes("Permissions") || !claude.includes("Effort")) fail("the Claude Code tab does not lead with its thread defaults");
   // The update card: the version, where it stands against the floor, and the button.
   if (!claude.includes("2.1.280") || !claude.includes("Older than the 2.1.292")) fail("the Claude Code tab does not say its install is older than the floor");
   if (!claude.includes("[ Update ]") || !claude.includes("claude update")) fail("the Claude Code tab has no update button naming what it runs");
@@ -165,7 +193,16 @@ async function runSettings(): Promise<void> {
   await setup.flush();
   if (updated.join() !== "claude") fail(`pressing u on the Claude Code tab updated ${JSON.stringify(updated)}`);
 
-  // The last row is below the fold in a page this short: move down to it.
+  // The setup rows (executable, config directory) sit under the defaults,
+  // below the fold in a page this short: move down to them.
+  for (let step = 0; step < 5; step += 1) await act(async () => setup.mockInput.pressArrow("down"));
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
+  await setup.flush();
+  const claudeSetup = setup.captureCharFrame();
+  if (!claudeSetup.includes("Claude executable")) fail("the Claude Code tab does not show its settings");
+  if (!claudeSetup.includes("next start")) fail("settings page does not mark restart-only settings");
+
+  // The last row is further down still.
   for (let step = 0; step < 8; step += 1) await act(async () => setup.mockInput.pressArrow("down"));
   await act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
   await setup.flush();
@@ -180,11 +217,15 @@ async function runSettings(): Promise<void> {
   const opencode = setup.captureCharFrame();
   console.log("--- settings page, OpenCode tab ---");
   console.log(opencode);
-  if (!opencode.includes("OpenCode executable")) fail("the OpenCode tab does not show its settings");
+  if (!opencode.includes("Permissions")) fail("the OpenCode tab does not show its settings");
   if (!opencode.includes("2.0.22")) fail("the OpenCode tab does not show its installed version");
   // Behind the registry's newest: it says so, and the button names the version it goes to.
   if (!opencode.includes("2.0.24 is available")) fail("the OpenCode tab does not say a newer version is available");
   if (!opencode.includes("[ Update to 2.0.24 ]")) fail("the OpenCode update button does not name the version it updates to");
+  for (let step = 0; step < 5; step += 1) await act(async () => setup.mockInput.pressArrow("down"));
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
+  await setup.flush();
+  if (!setup.captureCharFrame().includes("OpenCode executable")) fail("the OpenCode tab does not show its executable");
   await act(async () => setup.mockInput.pressTab({ shift: true }));
   await setup.flush();
   await act(async () => setup.mockInput.pressTab({ shift: true }));

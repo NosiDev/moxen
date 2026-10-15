@@ -21,21 +21,37 @@ import path from "node:path";
 import { APP_NAME } from "./config.js";
 import { CliError } from "./errors.js";
 
-export type McpServerEntry =
-  | {
-      readonly type?: "stdio";
-      readonly command: string;
-      readonly args?: readonly string[];
-      readonly env?: Readonly<Record<string, string>>;
-    }
-  | {
-      readonly type: "http";
-      readonly url: string;
-      readonly headers?: Readonly<Record<string, string>>;
-    };
+/** Which providers a server is offered to, and what of it is switched off. All optional: the default is every provider, every tool. */
+export interface McpRouting {
+  /** Provider kinds that get this server; absent or empty means all of them. */
+  readonly providers?: readonly McpProviderKind[];
+  /** Tool names (as the server lists them) that are switched off. Honoured by Claude Code and the Moxen Harness; OpenCode cannot hide single tools. */
+  readonly disabledTools?: readonly string[];
+  /** Off without being deleted. */
+  readonly disabled?: boolean;
+}
+
+export type McpProviderKind = "claude" | "opencode" | "harness";
+const PROVIDER_KINDS: readonly McpProviderKind[] = ["claude", "opencode", "harness"];
+
+export type McpServerEntry = McpRouting &
+  (
+    | {
+        readonly type?: "stdio";
+        readonly command: string;
+        readonly args?: readonly string[];
+        readonly env?: Readonly<Record<string, string>>;
+      }
+    | {
+        readonly type: "http";
+        readonly url: string;
+        readonly headers?: Readonly<Record<string, string>>;
+      }
+  );
 
 /** A server a provider reaches out of process: a command it spawns, or a URL. */
-export type OutOfProcessMcpServerSpec =
+export type OutOfProcessMcpServerSpec = McpRouting &
+  (
   | {
       readonly name: string;
       readonly type: "stdio";
@@ -51,7 +67,8 @@ export type OutOfProcessMcpServerSpec =
       readonly url: string;
       readonly headers: Readonly<Record<string, string>>;
       readonly alwaysLoad?: boolean;
-    };
+    }
+  );
 
 /** One tool of an in-process server, described the way MCP lists it. */
 export interface InProcessMcpTool {
@@ -68,7 +85,7 @@ export interface InProcessMcpTool {
  * tools in-process (Claude, through the Agent SDK) calls `call` directly;
  * any other reaches the same tools through `fallback`.
  */
-export interface InProcessMcpServerSpec {
+export interface InProcessMcpServerSpec extends McpRouting {
   readonly name: string;
   readonly type: "in-process";
   readonly instructions?: string;
@@ -139,17 +156,39 @@ function stringRecord(value: unknown, source: string, field: string): Record<str
   return out;
 }
 
+function parseRouting(input: Record<string, unknown>, where: string): McpRouting {
+  const routing: { providers?: McpProviderKind[]; disabledTools?: string[]; disabled?: boolean } = {};
+  if (input.providers !== undefined) {
+    if (!Array.isArray(input.providers) || input.providers.some((kind) => !PROVIDER_KINDS.includes(kind as McpProviderKind))) {
+      throw invalid(where, `providers must be a list of ${PROVIDER_KINDS.join(", ")}.`);
+    }
+    if (input.providers.length > 0) routing.providers = [...new Set(input.providers as McpProviderKind[])];
+  }
+  if (input.disabledTools !== undefined) {
+    if (!Array.isArray(input.disabledTools) || input.disabledTools.some((tool) => typeof tool !== "string" || tool.trim() === "")) {
+      throw invalid(where, "disabledTools must be a list of tool names.");
+    }
+    if (input.disabledTools.length > 0) routing.disabledTools = [...new Set((input.disabledTools as string[]).map((tool) => tool.trim()))];
+  }
+  if (input.disabled !== undefined) {
+    if (typeof input.disabled !== "boolean") throw invalid(where, "disabled must be true or false.");
+    if (input.disabled) routing.disabled = true;
+  }
+  return routing;
+}
+
 function parseEntry(name: string, raw: unknown, source: string): McpServerEntry {
   const where = `${source} mcpServers.${name}`;
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw invalid(where, "must be an object.");
   const input = raw as Record<string, unknown>;
+  const routing = parseRouting(input, where);
   const type = input.type ?? (typeof input.url === "string" && input.command === undefined ? "http" : "stdio");
   if (type === "http") {
     if (typeof input.url !== "string" || !/^https?:\/\//.test(input.url)) {
       throw invalid(where, "url must be an http(s) URL.");
     }
     const headers = stringRecord(input.headers, where, "headers");
-    return { type: "http", url: input.url, ...(Object.keys(headers).length > 0 ? { headers } : {}) };
+    return { type: "http", url: input.url, ...(Object.keys(headers).length > 0 ? { headers } : {}), ...routing };
   }
   if (type !== "stdio") throw invalid(where, "type must be stdio or http.");
   if (typeof input.command !== "string" || input.command.trim().length === 0) {
@@ -163,6 +202,7 @@ function parseEntry(name: string, raw: unknown, source: string): McpServerEntry 
     command: input.command,
     ...(input.args !== undefined ? { args: input.args as string[] } : {}),
     ...(Object.keys(env).length > 0 ? { env } : {}),
+    ...routing,
   };
 }
 
@@ -192,8 +232,33 @@ export function parseMcpServers(
 }
 
 function toSpec(name: string, entry: McpServerEntry): McpServerSpec {
-  if (entry.type === "http") return { name, type: "http", url: entry.url, headers: { ...entry.headers } };
-  return { name, type: "stdio", command: entry.command, args: [...(entry.args ?? [])], env: { ...entry.env } };
+  const routing: McpRouting = {
+    ...(entry.providers ? { providers: entry.providers } : {}),
+    ...(entry.disabledTools ? { disabledTools: entry.disabledTools } : {}),
+    ...(entry.disabled ? { disabled: true } : {}),
+  };
+  if (entry.type === "http") return { name, type: "http", url: entry.url, headers: { ...entry.headers }, ...routing };
+  return { name, type: "stdio", command: entry.command, args: [...(entry.args ?? [])], env: { ...entry.env }, ...routing };
+}
+
+/**
+ * The servers one provider gets, with routing applied: servers that are off or
+ * not offered to this provider drop out, and the tools switched off come back
+ * as full names (`mcp__<server>__<tool>`) for the driver to hide.
+ */
+export function routeMcpServers(
+  servers: readonly McpServerSpec[],
+  provider: McpProviderKind,
+): { readonly servers: McpServerSpec[]; readonly disabledTools: string[] } {
+  const kept: McpServerSpec[] = [];
+  const disabledTools: string[] = [];
+  for (const server of servers) {
+    if (server.disabled === true) continue;
+    if (server.providers !== undefined && server.providers.length > 0 && !server.providers.includes(provider)) continue;
+    kept.push(server);
+    for (const tool of server.disabledTools ?? []) disabledTools.push(`mcp__${server.name}__${tool}`);
+  }
+  return { servers: kept, disabledTools };
 }
 
 /** `mcpServers` from `<workspaceRoot>/moxen.json`, or none. */

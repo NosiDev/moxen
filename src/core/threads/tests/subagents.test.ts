@@ -91,6 +91,20 @@ describe("subagentTranscript", () => {
     ]);
   });
 
+  it("maps a harness subagent's tool rows the way the harness's live ones are, and only for a thread that has a harness session", async () => {
+    const harnessThread = { ...thread, providerSessions: { harness: "hs_1" } } as unknown as StoredThread;
+    const harnessStore = { readThreadRecord: async () => harnessThread } as unknown as ThreadStore;
+    const history = async () => [
+      { kind: "prompt" as const, id: "a:0", at: null, text: "Look" },
+      { kind: "tool" as const, id: "c1", at: null, tool: "bash", raw: { toolUseId: "c1", input: { command: "ls" }, output: "a.ts", isError: false } },
+    ];
+    const transcript = await subagentTranscript(harnessStore, "thread-1", "sa_1", history, "harness");
+    expect(transcript.available).toBe(true);
+    expect(transcript.activities).toMatchObject([{ kind: "tool-call.completed", summary: "$ ls", payload: { toolCallId: "c1", itemType: "command_execution" } }]);
+    // The same reader against a thread that only has an OpenCode session is not asked.
+    expect(await subagentTranscript(store, "thread-1", "sa_1", history, "harness")).toMatchObject({ available: false });
+  });
+
   it("is unavailable when the driver cannot read it (no live session)", async () => {
     expect(await subagentTranscript(store, "thread-1", "ses_child", async () => null)).toMatchObject({ available: false, messages: [] });
     expect(await subagentTranscript(store, "thread-1", "ses_child")).toMatchObject({ available: false });

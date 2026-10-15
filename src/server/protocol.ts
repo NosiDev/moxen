@@ -43,6 +43,8 @@ import type {
 import type { ThreadSearch, ThreadSearchQuery } from "../core/threads/search.js";
 import type { ModelRequest } from "../core/catalog/selection.js";
 import type { SettingView } from "../core/configschema.js";
+import type { McpTestResult } from "../core/mcptest.js";
+import type { HarnessTestResult, ProbeReport } from "../core/providers/harness/probe.js";
 import type { GitBranch, GitCommit, GitCommitDetail, GitOverview, GitWorktreeStatus } from "../core/git/history.js";
 import type {
   ForgeCheckRun,
@@ -107,6 +109,9 @@ export interface ThreadMessageInput {
  * the provider SPI wants one string per question, and the server joins
  * them rather than making every driver handle both.
  */
+/** How a tool approval is answered. */
+export type PermissionDecision = "accept" | "accept-session" | "decline";
+
 export type UserInputAnswers = Readonly<Record<string, string | readonly string[]>>;
 
 export type CommandBody =
@@ -172,6 +177,13 @@ export type CommandBody =
       readonly answers: UserInputAnswers;
     }
   | { readonly type: "thread.user-input.dismiss"; readonly threadId: string; readonly requestId: string }
+  /** Answer a parked tool approval; `accept-session` also allows that tool for the rest of the session. */
+  | {
+      readonly type: "thread.permission.respond";
+      readonly threadId: string;
+      readonly requestId: string;
+      readonly decision: PermissionDecision;
+    }
   /** Revert the conversation so its first `turnCount` turns remain; files are left as they are. */
   /** `restoreFiles`: put the files back too, to before the first dropped turn. */
   | { readonly type: "thread.conversation.revert"; readonly threadId: string; readonly turnCount: number; readonly restoreFiles?: boolean }
@@ -198,6 +210,17 @@ export type CommandBody =
    * `value` is always text — the schema's parser owns the conversion.
    */
   | { readonly type: "settings.set"; readonly key: string; readonly value: string }
+  /** Copy one entry of a list setting (`key` is the list's, e.g. `providers.harness.profiles`) under a new id. */
+  | { readonly type: "settings.duplicate"; readonly key: string; readonly id: string; readonly newId: string }
+  /** One tiny request to a harness profile's endpoint: does it work at all. Spends a request, so never retried. */
+  | { readonly type: "harness.profile.test"; readonly profileId: string; readonly model?: string }
+  /** Starts one configured MCP server, lists its tools and stops it again. Never retried. */
+  | { readonly type: "mcp.server.test"; readonly name: string }
+  /**
+   * The harness probe battery against one model of a profile. Writes the
+   * findings to the model's `probed` block unless `dryRun`. Never retried.
+   */
+  | { readonly type: "harness.profile.probe"; readonly profileId: string; readonly model?: string; readonly dryRun?: boolean }
   /** Runs a provider CLI's own updater (`claude update`, `opencode upgrade`) on the machine the sessions run on. */
   | { readonly type: "provider.update"; readonly provider: UpdatableProvider }
   /**
@@ -268,6 +291,7 @@ export interface CommandResults {
   "thread.runtime-mode.set": Accepted;
   "thread.user-input.respond": Accepted;
   "thread.user-input.dismiss": Accepted;
+  "thread.permission.respond": Accepted;
   "thread.conversation.revert": RevertResult & Accepted;
   "thread.handover": Omit<Handover, "started"> & { readonly started: StartedTurnSummary | null };
   "thread.delegate": Delegation;
@@ -277,6 +301,10 @@ export interface CommandResults {
   "project.ensure": EnsuredProject;
   "model.visibility.set": { readonly hidden: boolean };
   "settings.set": SettingsSnapshot & Accepted;
+  "settings.duplicate": SettingsSnapshot & Accepted;
+  "harness.profile.test": HarnessTestResult;
+  "mcp.server.test": McpTestResult;
+  "harness.profile.probe": ProbeReport & { readonly saved: boolean };
   "provider.update": ProviderUpdate;
   "thread.continue": { readonly threadId: string; readonly title: string; readonly scheduledFor: string | null } & Accepted;
   "thread.side-question": { readonly text: string; readonly withContext: boolean; readonly provider: string };
@@ -781,6 +809,21 @@ export function decodeCommand(value: unknown): Command {
         threadId: threadId(),
         requestId: requireField(record.requestId, type, "requestId"),
       };
+    case "thread.permission.respond": {
+      const decision = record.decision;
+      if (decision !== "accept" && decision !== "accept-session" && decision !== "decline") {
+        throw new CliError("INVALID_THREAD_OPTION", `${type} requires decision accept, accept-session, or decline.`, {
+          exitCode: 2,
+        });
+      }
+      return {
+        ...meta,
+        type,
+        threadId: threadId(),
+        requestId: requireField(record.requestId, type, "requestId"),
+        decision,
+      };
+    }
     case "thread.conversation.revert": {
       const turnCount = record.turnCount;
       if (typeof turnCount !== "number" || !Number.isInteger(turnCount) || turnCount < 0) {
@@ -907,6 +950,20 @@ export function decodeCommand(value: unknown): Command {
         // Every value crosses as text: the schema's parser is the one
         // thing that decides what "false" or "120" means for a key.
         value: typeof record.value === "string" ? record.value : String(record.value ?? ""),
+      };
+    case "settings.duplicate":
+      return { ...meta, type, key: requireField(record.key, type, "key"), id: requireField(record.id, type, "id"), newId: requireField(record.newId, type, "newId") };
+    case "mcp.server.test":
+      return { ...meta, type, name: requireField(record.name, type, "name") };
+    case "harness.profile.test":
+      return { ...meta, type, profileId: requireField(record.profileId, type, "profileId"), ...(asString(record.model) !== null ? { model: asString(record.model)! } : {}) };
+    case "harness.profile.probe":
+      return {
+        ...meta,
+        type,
+        profileId: requireField(record.profileId, type, "profileId"),
+        ...(asString(record.model) !== null ? { model: asString(record.model)! } : {}),
+        ...optionalBoolean(record, "dryRun"),
       };
     case "provider.update":
       return {

@@ -19,7 +19,13 @@
  * the config object; `readSetting` / `writeSetting` below are the only
  * things that walk them.
  */
+import { readListScalar, resolveListKey, type ListDescriptor, type ListTarget } from "./configlist.js";
 import { CliError } from "./errors.js";
+import { isSecretRef } from "./secrets.js";
+import { MCP_SERVERS_SETTING } from "./mcpschema.js";
+import { describeMcpServers } from "./mcpview.js";
+import { HARNESS_PROFILES_SETTING } from "./providers/harness/profileschema.js";
+import { describeHarnessProfiles } from "./providers/harness/profileview.js";
 import type { CliConfig } from "./types.js";
 
 /** Where a setting shows up. Order is the order a settings page renders. */
@@ -31,6 +37,8 @@ export const SETTING_SECTIONS = [
   "git",
   "provider:claude",
   "provider:opencode",
+  "provider:harness",
+  "mcp",
 ] as const;
 
 export type SettingSection = (typeof SETTING_SECTIONS)[number];
@@ -38,11 +46,13 @@ export type SettingSection = (typeof SETTING_SECTIONS)[number];
 export const SECTION_LABEL: Record<SettingSection, string> = {
   general: "General",
   turns: "Turns",
-  model: "Model defaults",
+  model: "New threads",
   interface: "Interface",
   git: "Git and forges",
   "provider:claude": "Claude Code",
   "provider:opencode": "OpenCode",
+  "provider:harness": "Moxen Harness",
+  mcp: "MCP servers",
 };
 
 export interface SettingChoice {
@@ -55,6 +65,8 @@ export interface SettingChoice {
 export type SettingKind =
   | { readonly type: "enum"; readonly choices: readonly SettingChoice[] }
   | { readonly type: "boolean" }
+  /** A key or token: typed into a masked input, kept in the OS keychain, and in the config only as a `keychain:` reference. */
+  | { readonly type: "secret" }
   | {
       readonly type: "string";
       readonly placeholder?: string;
@@ -65,6 +77,8 @@ export type SettingKind =
        * catalog lists rather than a text box; the file still holds the id.
        */
       readonly source?: "provider" | "model" | "effort";
+      /** With `source` model or effort: offer only this provider's models (the setting belongs to its page). */
+      readonly providerKind?: "claude" | "opencode" | "harness";
     }
   /**
    * `unit` is appended when the value is shown ("20" -> "20s"). `presets`
@@ -72,7 +86,92 @@ export type SettingKind =
    */
   | { readonly type: "integer"; readonly min: number; readonly max: number; readonly unit?: string; readonly presets?: readonly number[] }
   /** A duration string the session layer parses (`"2m"`, `"45s"`); `presets` as for integers. */
-  | { readonly type: "duration"; readonly presets?: readonly string[] };
+  | { readonly type: "duration"; readonly presets?: readonly string[] }
+  | ListKind;
+
+/**
+ * A field of one list item, addressed relative to the item (`baseUrl`,
+ * `sampling.topK`). The kinds are the plain ones: ranges and combinations are
+ * checked by whatever owns the list, so they are stated once. A boolean is
+ * always three-way (unset, on, off) because an unset field falls back to
+ * something and the editor has to be able to say "go back to that".
+ */
+export interface ListField {
+  readonly path: string;
+  readonly label: string;
+  readonly description: string;
+  /** The heading a client files the field under. */
+  readonly group: string;
+  readonly kind: ListFieldKind;
+}
+
+export type ListFieldKind =
+  | { readonly type: "string"; readonly placeholder?: string; readonly multiline?: boolean }
+  | { readonly type: "integer"; readonly unit?: string; readonly presets?: readonly number[] }
+  | { readonly type: "number"; readonly presets?: readonly number[] }
+  | { readonly type: "boolean" }
+  | { readonly type: "secret" }
+  | { readonly type: "enum"; readonly choices: readonly SettingChoice[] }
+  /** A list of words kept as an array: `separator` is how they are typed (`shell` honours quotes). */
+  | { readonly type: "words"; readonly separator: "comma" | "shell" }
+  /** `KEY=value` pairs kept as an object. `secret`: values are never shown, and typing `KEY=<hidden>` keeps the stored one. */
+  | { readonly type: "pairs"; readonly secret?: boolean }
+  /** A list inside the item (a profile's models), addressed `path[<id>]`. */
+  | { readonly type: "list"; readonly noun: string; readonly fields: readonly ListField[] };
+
+/**
+ * A structured list kept in the config as an array of objects that each carry
+ * an `id`. Edited through `config set 'key[<id>]…'` (see `configlist.ts`);
+ * `actions` are what a client may offer besides add, edit and remove.
+ */
+export interface ListKind {
+  readonly type: "list";
+  /** "profile": used in messages and button labels. */
+  readonly noun: string;
+  /** Ids are folded to lower case (profile ids are; model ids are not). */
+  readonly lowercaseIds?: boolean;
+  /** Kept in the config as an object keyed by id (MCP servers, as in `.mcp.json`) rather than an array of objects carrying one. */
+  readonly keyed?: boolean;
+  /** How a client walks a user through adding one. */
+  readonly add: "harness-profile" | "mcp-server";
+  readonly fields: readonly ListField[];
+  readonly actions: readonly ("duplicate" | "test" | "probe")[];
+}
+
+/** One list entry as a client draws it: values, where they come from, and plain-language state. */
+export interface ListItemView {
+  readonly id: string;
+  readonly title: string;
+  readonly summary: string;
+  /** A problem or note worth showing beside the entry ("COLAB_KEY is not set"), or null. */
+  readonly status: string | null;
+  readonly fields: readonly ListFieldView[];
+  /** Read-only rows: what is in force and why, or what a probe found. */
+  readonly resolved: readonly ListResolvedRow[];
+}
+
+export interface ListFieldView {
+  readonly path: string;
+  readonly value: SettingValue;
+  /** The file holds a value for it. */
+  readonly explicit: boolean;
+  /** What applies when it is unset, or on top of it, and where that comes from. */
+  readonly effective?: ListEffective;
+  /** The entries of a nested list. */
+  readonly items?: readonly ListItemView[];
+}
+
+export interface ListEffective {
+  readonly value: SettingValue;
+  /** Short and plain: "this profile", "Compact at (above)", "the server's probe", "the model's name". */
+  readonly origin: string;
+}
+
+export interface ListResolvedRow {
+  readonly label: string;
+  readonly value: string;
+  readonly origin: string;
+}
 
 export type SettingValue = string | boolean | number | undefined;
 
@@ -82,9 +181,13 @@ export interface SettingDescriptor {
   readonly label: string;
   readonly description: string;
   readonly section: SettingSection;
+  /** A heading the page files this setting under, within its section; consecutive settings with the same one share it. */
+  readonly group?: string;
   readonly kind: SettingKind;
   /** The value in force when the key is absent. `undefined` means "unset". */
   readonly defaultValue: SettingValue;
+  /** A page shows this setting only while `key` holds one of `in` (its default counts). The CLI lists it always. */
+  readonly visibleWhen?: { readonly key: string; readonly in: readonly string[] };
   /**
    * Read at driver construction, so a change reaches only sessions started
    * after it. Surfaced to the user rather than silently half-applied.
@@ -166,15 +269,15 @@ export const SETTINGS: readonly SettingDescriptor[] = [
   // -- turns -----------------------------------------------------------------
   {
     key: "runtimeMode",
-    label: "Tool permissions",
-    description: "How much a session may do without asking. Each provider maps this onto its own native mode.",
-    section: "turns",
+    label: "Permissions",
+    description: "How much a new thread may do without asking. A provider's own 'Permissions' (on its tab) wins over this. Each provider maps the mode onto its own native one.",
+    section: "model",
     kind: {
       type: "enum",
       choices: [
-        choice("approval-required", "Ask for everything"),
-        choice("auto-accept-edits", "Auto-accept edits", "Edits go through; commands still ask."),
-        choice("auto", "Provider's auto mode", "Let the provider judge each call."),
+        choice("approval-required", "Supervised", "Ask before every edit and command."),
+        choice("auto-accept-edits", "Auto-accept edits", "Reads and edits go through; commands still ask."),
+        choice("auto", "Auto", "The provider judges each call (Moxen Harness: its command classifier)."),
         choice("full-access", "Full access", "No prompts at all."),
       ],
     },
@@ -183,9 +286,9 @@ export const SETTINGS: readonly SettingDescriptor[] = [
   },
   {
     key: "interactionMode",
-    label: "Interaction mode",
-    description: "Whether new threads start in plan mode.",
-    section: "turns",
+    label: "Start in",
+    description: "Whether new threads start in plan mode, where the agent proposes before it edits.",
+    section: "model",
     kind: {
       type: "enum",
       choices: [choice("default", "Normal"), choice("plan", "Plan first")],
@@ -198,6 +301,7 @@ export const SETTINGS: readonly SettingDescriptor[] = [
     label: "Idle session lifetime",
     description: "How long a provider session stays warm after its last turn.",
     section: "turns",
+    group: "Sessions",
     kind: { type: "duration", presets: ["30s", "1m", "2m", "5m", "10m", "30m", "1h"] },
     defaultValue: "2m",
   },
@@ -207,6 +311,7 @@ export const SETTINGS: readonly SettingDescriptor[] = [
     description:
       "When a plan limit stops a turn, schedule a continue for just after it resets (at most twice in a row). Off by default: it runs work while nobody is watching.",
     section: "turns",
+    group: "Sessions",
     kind: { type: "boolean" },
     defaultValue: false,
   },
@@ -216,6 +321,7 @@ export const SETTINGS: readonly SettingDescriptor[] = [
     description:
       "Put the skills Moxen ships into a project that already has a `.claude` or `.agents` folder (`.claude/skills` when it has both), so both providers find them there. Copies are kept current, listed in `.git/info/exclude`, and never replace a skill you already have. Off, or with neither folder, the providers are pointed at Moxen's own folder instead.",
     section: "turns",
+    group: "Agent",
     kind: { type: "boolean" },
     defaultValue: true,
   },
@@ -224,6 +330,7 @@ export const SETTINGS: readonly SettingDescriptor[] = [
     label: "Extra instructions",
     description: "Appended to every provider session's system prompt.",
     section: "turns",
+    group: "Agent",
     kind: { type: "string", placeholder: "Appended to every session", multiline: true },
     defaultValue: undefined,
   },
@@ -231,8 +338,8 @@ export const SETTINGS: readonly SettingDescriptor[] = [
   // -- model -----------------------------------------------------------------
   {
     key: "provider",
-    label: "Default provider",
-    description: "Which provider a new thread uses when nothing else names one.",
+    label: "Provider",
+    description: "The provider a new thread uses when nothing else names one.",
     section: "model",
     kind: { type: "string", placeholder: "claude", source: "provider" },
     defaultValue: undefined,
@@ -240,8 +347,8 @@ export const SETTINGS: readonly SettingDescriptor[] = [
   },
   {
     key: "model",
-    label: "Default model",
-    description: "Which model a new thread uses when nothing else names one.",
+    label: "Model",
+    description: "The model a new thread uses when nothing else names one. A provider's own 'Model' (on its tab) wins over this.",
     section: "model",
     kind: { type: "string", placeholder: "the provider's own default", source: "model" },
     defaultValue: undefined,
@@ -258,8 +365,8 @@ export const SETTINGS: readonly SettingDescriptor[] = [
   },
   {
     key: "thinkingEffort",
-    label: "Thinking effort",
-    description: "The reasoning effort a session starts at, for providers that take one.",
+    label: "Effort",
+    description: "The reasoning effort a new thread starts at, for models that take one. A provider's own 'Effort' (on its tab) wins over this.",
     section: "model",
     kind: { type: "string", placeholder: "the provider's own default", source: "effort" },
     defaultValue: undefined,
@@ -323,6 +430,25 @@ export const SETTINGS: readonly SettingDescriptor[] = [
     kind: { type: "integer", min: 5, max: 3600, unit: "s", presets: [10, 20, 60, 300, 900] },
     defaultValue: 20,
   },
+  {
+    key: "ui.autoHandoff",
+    label: "Hand off long threads",
+    description:
+      "Models make more tool-call mistakes as the window fills, so a thread past 'Hand off at' moves to a fresh one opened with a handoff of the work so far. Ask shows a card with the action; Automatic does it by itself once no turn, subthread or background task is running; until then the card stays with a button to hand off by hand.",
+    section: "turns",
+    group: "Long threads",
+    kind: { type: "enum", choices: [choice("ask", "Ask"), choice("auto", "Automatic"), choice("off", "Off")] },
+    defaultValue: "ask",
+  },
+  {
+    key: "ui.autoHandoffPercent",
+    label: "Hand off at",
+    description: "Share of the model's context window at which a thread is handed off. Needs the provider to report the window.",
+    section: "turns",
+    group: "Long threads",
+    kind: { type: "integer", min: 20, max: 90, unit: "%", presets: [40, 50, 60, 70] },
+    defaultValue: 50,
+  },
 
   {
     key: "updates.checkLatest",
@@ -380,10 +506,64 @@ export const SETTINGS: readonly SettingDescriptor[] = [
 
   // -- Claude Code -----------------------------------------------------------
   {
+    key: "providers.claude.runtimeMode",
+    label: "Permissions",
+    description: "How much a new Claude Code thread may do without asking. Unset: the Permissions setting on the New threads tab.",
+    section: "provider:claude",
+    group: "New threads",
+    kind: {
+      type: "enum",
+      choices: [
+        choice("approval-required", "Supervised", "Ask before every edit and command."),
+        choice("auto-accept-edits", "Auto-accept edits", "Reads and edits go through; commands still ask."),
+        choice("auto", "Auto", "Claude Code's own auto mode judges each call."),
+        choice("full-access", "Full access", "No prompts at all."),
+      ],
+    },
+    defaultValue: undefined,
+  },
+  {
+    key: "providers.claude.model",
+    label: "Model",
+    description: "The model a new Claude Code thread starts with when nothing more specific names one. Unset: the Model setting on the New threads tab, then the provider's own default.",
+    section: "provider:claude",
+    group: "New threads",
+    kind: { type: "string", placeholder: "the provider's own default", source: "model", providerKind: "claude" },
+    defaultValue: undefined,
+  },
+  {
+    key: "providers.claude.thinkingEffort",
+    label: "Effort",
+    description: "The reasoning effort a new Claude Code thread starts at, for models that take one. Unset: the Effort setting on the New threads tab.",
+    section: "provider:claude",
+    group: "New threads",
+    kind: { type: "string", placeholder: "the provider's own default", source: "effort", providerKind: "claude" },
+    defaultValue: undefined,
+  },
+  {
+    key: "providers.claude.moxenTools",
+    label: "Moxen's tools",
+    description: "Give Claude Code threads Moxen's own tools (delegate, hand off, task status). Turn off for a provider you do not want orchestrating. Applies to the next session.",
+    section: "provider:claude",
+    group: "Tools",
+    kind: { type: "boolean" },
+    defaultValue: true,
+  },
+  {
+    key: "providers.claude.todos",
+    label: "To-do list",
+    description: "Let Claude Code models keep a to-do list (the Tasks panel). Applies to the next session.",
+    section: "provider:claude",
+    group: "Tools",
+    kind: { type: "boolean" },
+    defaultValue: true,
+  },
+  {
     key: "providers.claude.binaryPath",
     label: "Claude executable",
     description: "The `claude` binary to spawn. On Windows an npm shim is followed to the real package entry.",
     section: "provider:claude",
+    group: "Setup",
     kind: { type: "string", placeholder: "claude" },
     defaultValue: "claude",
     restartRequired: true,
@@ -394,6 +574,7 @@ export const SETTINGS: readonly SettingDescriptor[] = [
     description:
       "Sets CLAUDE_CONFIG_DIR for spawned sessions, to run against a separate Claude home. Left empty, the CLI's own is inherited. HOME is never overridden — that would break keychain login on macOS.",
     section: "provider:claude",
+    group: "Setup",
     kind: { type: "string", placeholder: "~/.claude" },
     defaultValue: "",
     restartRequired: true,
@@ -404,6 +585,7 @@ export const SETTINGS: readonly SettingDescriptor[] = [
     description:
       "How extended thinking comes back. Claude Code's `highlights` is not offered: the API allows it only for sessions Anthropic hosts, and any other client silently falls back to no thinking text at all.",
     section: "provider:claude",
+    group: "Behaviour",
     kind: {
       type: "enum",
       choices: [
@@ -419,6 +601,7 @@ export const SETTINGS: readonly SettingDescriptor[] = [
     label: "Suggest the next prompt",
     description: "Ask for one predicted next prompt after each turn, offered in the composer.",
     section: "provider:claude",
+    group: "Behaviour",
     kind: { type: "boolean" },
     defaultValue: true,
     restartRequired: true,
@@ -429,6 +612,7 @@ export const SETTINGS: readonly SettingDescriptor[] = [
     description:
       "Take the CLI's partial-message stream so text appears as it is written. Turning it off leaves whole messages arriving at once, which is quieter over a slow link.",
     section: "provider:claude",
+    group: "Behaviour",
     kind: { type: "boolean" },
     defaultValue: true,
     restartRequired: true,
@@ -439,6 +623,7 @@ export const SETTINGS: readonly SettingDescriptor[] = [
     description:
       "Offer the skills in a project's or your home `.agents/skills`, and moxen's own, to Claude Code through a mod, so none has to be copied into `.claude/skills`. A skill `.claude/skills` already has is left to Claude Code. Needs Claude Code 2.1.287 or newer.",
     section: "provider:claude",
+    group: "Behaviour",
     kind: { type: "boolean" },
     defaultValue: true,
     restartRequired: true,
@@ -449,12 +634,66 @@ export const SETTINGS: readonly SettingDescriptor[] = [
     description:
       "Tokens of context at which Claude Code compacts the conversation on its own, from 100,000 to 1,000,000. Left unset it uses the window tuned for the model. A lower window compacts earlier and keeps long sessions cheaper and sharper.",
     section: "provider:claude",
+    group: "Behaviour",
     kind: { type: "integer", min: 100_000, max: 1_000_000, presets: [200_000, 300_000, 500_000, 800_000, 1_000_000] },
     defaultValue: undefined,
     restartRequired: true,
   },
 
   // -- OpenCode --------------------------------------------------------------
+  {
+    key: "providers.opencode.runtimeMode",
+    label: "Permissions",
+    description: "How much a new OpenCode thread may do without asking. Unset: the Permissions setting on the New threads tab.",
+    section: "provider:opencode",
+    group: "New threads",
+    kind: {
+      type: "enum",
+      choices: [
+        choice("approval-required", "Supervised", "Ask before every edit and command."),
+        choice("auto-accept-edits", "Auto-accept edits", "Reads and edits go through; commands still ask."),
+        choice("auto", "Auto", "OpenCode's own rules judge each call."),
+        choice("full-access", "Full access", "No prompts at all."),
+      ],
+    },
+    defaultValue: undefined,
+  },
+  {
+    key: "providers.opencode.model",
+    label: "Model",
+    description: "The model a new OpenCode thread starts with when nothing more specific names one. Unset: the Model setting on the New threads tab, then the provider's own default.",
+    section: "provider:opencode",
+    group: "New threads",
+    kind: { type: "string", placeholder: "the provider's own default", source: "model", providerKind: "opencode" },
+    defaultValue: undefined,
+  },
+  {
+    key: "providers.opencode.thinkingEffort",
+    label: "Effort",
+    description: "The reasoning effort a new OpenCode thread starts at, for models that take one. Unset: the Effort setting on the New threads tab.",
+    section: "provider:opencode",
+    group: "New threads",
+    kind: { type: "string", placeholder: "the provider's own default", source: "effort", providerKind: "opencode" },
+    defaultValue: undefined,
+  },
+  {
+    key: "providers.opencode.moxenTools",
+    label: "Moxen's tools",
+    description: "Give OpenCode threads Moxen's own tools (delegate, hand off, task status). Turn off for a provider you do not want orchestrating. Applies to the next session.",
+    section: "provider:opencode",
+    group: "Tools",
+    kind: { type: "boolean" },
+    defaultValue: true,
+  },
+  {
+    key: "providers.opencode.todos",
+    label: "To-do list",
+    description: "Let OpenCode models keep a to-do list (the Tasks panel). Applies to the next session.",
+    section: "provider:opencode",
+    group: "Tools",
+    kind: { type: "boolean" },
+    defaultValue: true,
+  },
   // `serverUrl` (an external server) is left out on purpose: v2 authenticates every
   // call and Moxen reads the external server's password only from config, so a URL
   // alone cannot work. It waits for a masked field.
@@ -463,6 +702,7 @@ export const SETTINGS: readonly SettingDescriptor[] = [
     label: "OpenCode executable",
     description: "The `opencode` binary Moxen starts its servers with, and updates.",
     section: "provider:opencode",
+    group: "Setup",
     kind: { type: "string", placeholder: "opencode" },
     defaultValue: "opencode",
     restartRequired: true,
@@ -473,10 +713,186 @@ export const SETTINGS: readonly SettingDescriptor[] = [
     description:
       "Offer the skills Moxen ships (threads, handoff, orchestrate and the rest) to the OpenCode servers it starts, through their `skills` config. Skills in a project's or your home `.agents/skills` need nothing: OpenCode reads those itself.",
     section: "provider:opencode",
+    group: "Behaviour",
     kind: { type: "boolean" },
     defaultValue: true,
     restartRequired: true,
   },
+
+  // -- Moxen Harness ---------------------------------------------------------
+  {
+    key: "providers.harness.runtimeMode",
+    label: "Permissions",
+    description: "How much a new Moxen Harness thread may do without asking. Unset: the Permissions setting on the New threads tab.",
+    section: "provider:harness",
+    group: "New threads",
+    kind: {
+      type: "enum",
+      choices: [
+        choice("approval-required", "Supervised", "Ask before every edit and command."),
+        choice("auto-accept-edits", "Auto-accept edits", "Reads and edits go through; commands still ask."),
+        choice("auto", "Auto", "Moxen's command classifier lets safe calls through and refuses dangerous ones."),
+        choice("full-access", "Full access", "No prompts at all."),
+      ],
+    },
+    defaultValue: undefined,
+  },
+  {
+    key: "providers.harness.model",
+    label: "Model",
+    description: "The model a new Moxen Harness thread starts with when nothing more specific names one. Unset: the Model setting on the New threads tab, then the provider's own default.",
+    section: "provider:harness",
+    group: "New threads",
+    kind: { type: "string", placeholder: "the provider's own default", source: "model", providerKind: "harness" },
+    defaultValue: undefined,
+  },
+  {
+    key: "providers.harness.thinkingEffort",
+    label: "Effort",
+    description: "The reasoning effort a new Moxen Harness thread starts at, for models that take one. Unset: the Effort setting on the New threads tab.",
+    section: "provider:harness",
+    group: "New threads",
+    kind: { type: "string", placeholder: "the provider's own default", source: "effort", providerKind: "harness" },
+    defaultValue: undefined,
+  },
+  {
+    key: "providers.harness.moxenTools",
+    label: "Moxen's tools",
+    description: "Give Moxen Harness threads Moxen's own tools (delegate, hand off, task status). Turn off for a provider you do not want orchestrating. Applies to the next session.",
+    section: "provider:harness",
+    group: "Tools",
+    kind: { type: "boolean" },
+    defaultValue: true,
+  },
+  {
+    key: "providers.harness.todos",
+    label: "To-do list",
+    description: "Let Moxen Harness models keep a to-do list (the Tasks panel). Applies to the next session.",
+    section: "provider:harness",
+    group: "Tools",
+    kind: { type: "boolean" },
+    defaultValue: true,
+  },
+  // These apply to every profile; a profile's own `compaction` fields (in the profile list below) win.
+  // The driver reads the config on every turn, so none of this needs a restart.
+  {
+    key: "providers.harness.slots",
+    label: "Requests at once",
+    description: "How many requests a model server takes at the same time, for profiles that do not say (a profile's own 'Server slots' wins). Subagents, summaries and titles queue behind it. Unset: no limit. A single-GPU llama.cpp server is usually 1; /btw is refused while a turn runs on a server with one slot.",
+    section: "provider:harness",
+    group: "Concurrency",
+    kind: { type: "integer", min: 1, max: 64, presets: [1, 2, 4, 8] },
+    defaultValue: undefined,
+  },
+  {
+    key: "providers.harness.autoCompact",
+    label: "Compact automatically",
+    description:
+      "Summarise the conversation on its own when it nears the model's context window, between turns and in the middle of a long one, and when the server refuses a prompt as too long. Off leaves /compact and the rescue for a refused prompt.",
+    section: "provider:harness",
+    group: "Compaction",
+    kind: { type: "boolean" },
+    defaultValue: true,
+  },
+  {
+    key: "providers.harness.autoCompactPercent",
+    label: "Compact at",
+    description:
+      "Percent of the context window at which to compact. Left unset it is 70 for windows of 128,000 tokens or more and 60 for smaller ones; at least 16,000 tokens are always left free. Needs the model's contextWindow in its profile.",
+    section: "provider:harness",
+    group: "Compaction",
+    kind: { type: "integer", min: 30, max: 95, unit: "%", presets: [50, 60, 70, 80, 90] },
+    defaultValue: undefined,
+  },
+  {
+    key: "providers.harness.keepRecentTokens",
+    label: "Kept word for word",
+    description: "How much of the newest conversation stays as it was when older history is summarised, in tokens.",
+    section: "provider:harness",
+    group: "Compaction",
+    kind: { type: "integer", min: 2_000, max: 100_000, presets: [8_000, 15_000, 30_000, 50_000] },
+    defaultValue: 15_000,
+  },
+  {
+    key: "providers.harness.webSearch",
+    label: "Web search",
+    description:
+      "Where the Moxen Harness's web_search looks. DuckDuckGo needs no account but can ask for a human check if it sees many searches. Exa and Brave are hosted APIs that need a key (saved in the keychain; their plans are metered, so check what yours charges past its free allowance). SearXNG is an instance you run.",
+    section: "provider:harness",
+    group: "Web",
+    kind: {
+      type: "enum",
+      choices: [
+        choice("duckduckgo", "DuckDuckGo", "No account. Unofficial, best-effort."),
+        choice("exa", "Exa", "Hosted API with a key."),
+        choice("brave", "Brave Search", "Hosted API with a key."),
+        choice("searxng", "SearXNG", "Your own instance."),
+      ],
+    },
+    defaultValue: "duckduckgo",
+  },
+  {
+    key: "providers.harness.webSearchKey",
+    label: "Search key",
+    description: "The Exa or Brave key, typed once and kept in the OS keychain; it never appears in the config file or on screen.",
+    section: "provider:harness",
+    group: "Web",
+    kind: { type: "secret" },
+    defaultValue: undefined,
+    visibleWhen: { key: "providers.harness.webSearch", in: ["exa", "brave"] },
+  },
+  {
+    key: "providers.harness.webSearchKeyEnv",
+    label: "Search key variable",
+    description: "Instead of saving a key: the NAME of an environment variable that holds it, as the Moxen server sees it. A saved key wins over this.",
+    section: "provider:harness",
+    group: "Web",
+    kind: { type: "string", placeholder: "EXA_API_KEY" },
+    defaultValue: undefined,
+    visibleWhen: { key: "providers.harness.webSearch", in: ["exa", "brave"] },
+  },
+  {
+    key: "providers.harness.searxngUrl",
+    label: "SearXNG address",
+    description: "The address of your SearXNG instance, e.g. http://localhost:8888. Its settings must allow the json format.",
+    section: "provider:harness",
+    group: "Web",
+    visibleWhen: { key: "providers.harness.webSearch", in: ["searxng"] },
+    kind: { type: "string", placeholder: "http://localhost:8888" },
+    defaultValue: undefined,
+  },
+  {
+    key: "providers.harness.webBrowser",
+    label: "Browser for web pages",
+    description:
+      "When a page cannot be read with a plain request (it turns the request away, or builds its content with scripts), web_fetch can load it in an installed Chrome or Chromium, headless and with a throwaway profile (none of your cookies or logins). Off never starts one.",
+    section: "provider:harness",
+    group: "Web",
+    kind: { type: "enum", choices: [choice("auto", "When needed", "Use an installed Chrome or Chromium."), choice("off", "Never")] },
+    defaultValue: "auto",
+  },
+  {
+    key: "providers.harness.webBrowserPath",
+    label: "Browser program",
+    description: "The Chrome or Chromium program to use. Left unset, the usual places are searched.",
+    section: "provider:harness",
+    group: "Web",
+    kind: { type: "string", placeholder: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" },
+    defaultValue: undefined,
+  },
+  {
+    key: "providers.harness.webPrivateNetwork",
+    label: "Web tools reach private networks",
+    description: "Let web_fetch reach addresses on your local network (10.x, 192.168.x and the like). This machine's own servers are always allowed; cloud metadata addresses never are.",
+    section: "provider:harness",
+    group: "Web",
+    kind: { type: "boolean" },
+    defaultValue: false,
+  },
+  HARNESS_PROFILES_SETTING,
+
+  // -- MCP servers -----------------------------------------------------------
+  MCP_SERVERS_SETTING,
 ];
 
 const BY_KEY: ReadonlyMap<string, SettingDescriptor> = new Map(
@@ -487,8 +903,25 @@ export function settingDescriptor(key: string): SettingDescriptor | undefined {
   return BY_KEY.get(key);
 }
 
-/** Every key, in table order — what `config set` accepts and lists on error. */
+/** Every key, in table order — what `config set` accepts and lists on error. List keys address entries as `key[<id>]…`. */
 export const SETTING_KEYS: readonly string[] = SETTINGS.map((descriptor) => descriptor.key);
+
+const LISTS: readonly ListDescriptor[] = SETTINGS.filter((descriptor): descriptor is ListDescriptor => descriptor.kind.type === "list");
+
+/** What a key into a list setting addresses, or null for any other key. Throws for a malformed one. */
+export function listTarget(key: string): ListTarget | null {
+  return key.includes("[") || LISTS.some((list) => list.key === key) ? resolveListKey(key, LISTS) : null;
+}
+
+/** Whether `config set` accepts the key: a flat key, or an entry or field of a list. */
+export function isSettingKey(key: string): boolean {
+  if (BY_KEY.has(key)) return true;
+  try {
+    return listTarget(key) !== null;
+  } catch {
+    return false;
+  }
+}
 
 export function settingsInSection(section: SettingSection): readonly SettingDescriptor[] {
   return SETTINGS.filter((descriptor) => descriptor.section === section);
@@ -511,10 +944,40 @@ function walk(source: unknown, path: readonly string[]): unknown {
  * throwing, so a config written by a newer build stays readable.
  */
 export function readSetting(config: CliConfig, key: string): SettingValue {
+  const entry = key.includes("[") ? listTarget(key) : null;
+  if (entry) return readListScalar(config, entry);
   const raw = walk(config, key.split("."));
   if (raw === undefined || raw === null) return settingDescriptor(key)?.defaultValue;
   if (typeof raw === "string" || typeof raw === "boolean" || typeof raw === "number") return raw;
   return undefined;
+}
+
+/** A key is never written to the config: only the reference to where the keychain holds it. */
+export function secretValue(key: string, text: string): string {
+  if (text === "" || isSecretRef(text)) return text;
+  throw new CliError("INVALID_CONFIG", `${key} holds a secret, which is kept in the OS keychain, not in the config. Set it with \`moxen config set ${key} <value>\` or on the settings page.`);
+}
+
+/**
+ * The keychain name for a key that holds a secret: the key itself for a flat
+ * setting, the full address for a list field (`providers.harness.profiles[colab].apiKey`).
+ * Null for any other key.
+ */
+export function secretKeyName(key: string): string | null {
+  const flat = BY_KEY.get(key);
+  if (flat) return flat.kind.type === "secret" ? key : null;
+  if (!key.includes("[")) return null;
+  let target: ListTarget | null;
+  try {
+    target = listTarget(key);
+  } catch {
+    return null;
+  }
+  if (target === null || target.id === null || target.trail.length === 0) return null;
+  const last = target.trail[target.trail.length - 1]!;
+  if (last.field.kind.type !== "secret" || last.childId !== null) return null;
+  const path = target.trail.map((step) => `${step.field.path}${step.childId === null ? "" : `[${step.childId}]`}`).join(".");
+  return `${target.list.key}[${target.id}].${path}`;
 }
 
 /** Parse one `config set` argument against its descriptor. */
@@ -554,6 +1017,10 @@ export function parseSettingValue(descriptor: SettingDescriptor, raw: string): S
     }
     case "string":
       return text;
+    case "secret":
+      return secretValue(descriptor.key, text);
+    case "list":
+      throw new CliError("INVALID_CONFIG", `${descriptor.key} is a list. Address an entry: ${descriptor.key}[<id>] (JSON) or ${descriptor.key}[<id>].<field>.`);
   }
 }
 
@@ -588,12 +1055,24 @@ export interface SettingView {
   readonly value: SettingValue;
   /** True when the config file pins it, rather than it falling back to the default. */
   readonly explicit: boolean;
+  /** The entries of a list setting. Absent for every other kind. */
+  readonly items?: readonly ListItemView[];
 }
 
+/** How each list setting's entries are described, keyed by its setting key. */
+const LIST_VIEWS: Readonly<Record<string, (config: CliConfig) => readonly ListItemView[]>> = {
+  [HARNESS_PROFILES_SETTING.key]: describeHarnessProfiles,
+  [MCP_SERVERS_SETTING.key]: (config) => describeMcpServers(config),
+};
+
 export function describeSettings(config: CliConfig): readonly SettingView[] {
-  return SETTINGS.map((descriptor) => ({
-    descriptor,
-    value: readSetting(config, descriptor.key),
-    explicit: walk(config, descriptor.key.split(".")) !== undefined,
-  }));
+  return SETTINGS.map((descriptor) => {
+    const items = LIST_VIEWS[descriptor.key]?.(config);
+    return {
+      descriptor,
+      value: readSetting(config, descriptor.key),
+      explicit: walk(config, descriptor.key.split(".")) !== undefined,
+      ...(items ? { items } : {}),
+    };
+  });
 }

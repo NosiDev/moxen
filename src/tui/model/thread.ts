@@ -1042,6 +1042,45 @@ export function pendingUserInputRequests(state: ThreadState): PendingUserInputRe
   return requested.filter((request) => !resolved.has(request.requestId));
 }
 
+/** A tool approval the running turn is parked on. */
+export interface PendingPermissionRequest {
+  requestId: string;
+  toolName: string;
+  /** Shell, file edit, file read, … — picks the prompt's wording. */
+  classification: string | null;
+  /** The command, path, or URL the tool would act on. */
+  detail: string | null;
+  /** The agent's own one-line reason, when the tool carries one. */
+  description: string | null;
+}
+
+/**
+ * Open tool approvals in arrival order: `permission.requested` activities
+ * minus answered ones (`permission.resolved` carries the same requestId).
+ */
+export function pendingPermissionRequests(state: ThreadState): PendingPermissionRequest[] {
+  const resolved = new Set<string>();
+  const requested: PendingPermissionRequest[] = [];
+  for (const activity of state.activities) {
+    const payload = asRecord(activity.payload);
+    if (payload === null) continue;
+    const requestId = asText(payload.requestId);
+    if (requestId === null || requestId.length === 0) continue;
+    if (activity.kind === "permission.resolved") {
+      resolved.add(requestId);
+    } else if (activity.kind === "permission.requested") {
+      requested.push({
+        requestId,
+        toolName: asText(payload.toolName) ?? "a tool",
+        classification: asText(payload.classification),
+        detail: asText(payload.detail),
+        description: asText(payload.description),
+      });
+    }
+  }
+  return requested.filter((request) => !resolved.has(request.requestId));
+}
+
 /**
  * Turns taken back before they ran: a queued or scheduled message cancelled
  * while it waited. The ledger marks the interrupt `beforeStart`; older rows

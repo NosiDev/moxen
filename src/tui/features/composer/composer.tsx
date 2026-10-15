@@ -382,9 +382,12 @@ export function Composer({
     for (const span of pairImageTokens(draft, attachments ?? []).paired) markToken(node, span.name, span.label, span.start);
     markCommand(node);
     // `draft` is read at the moment `resetKey` changes, not tracked as its
-    // own dependency — see the `resetKey` doc comment above.
+    // own dependency — see the `resetKey` doc comment above. `external` is a
+    // dependency because the textarea is unmounted while the editor is open:
+    // a reset that lands then has no node to write to, and the textarea that
+    // comes back is empty, so it must be filled again when it returns.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resetKey]);
+  }, [resetKey, external]);
 
   // A newly pending image gets its token at the cursor; one no longer
   // pending (sent, or removed elsewhere) lets go of its token.

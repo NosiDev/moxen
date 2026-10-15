@@ -1,3 +1,4 @@
+import { UNTRUSTED_NOTE } from "../../untrusted.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,7 +21,9 @@ describe("runtime instructions", () => {
         "\n\n" +
         PROGRESS_GUIDANCE +
         "\n\n" +
-        INSTRUCTIONS_UPDATE_GUIDANCE,
+        INSTRUCTIONS_UPDATE_GUIDANCE +
+        "\n\n" +
+        UNTRUSTED_NOTE,
     );
     expect(RESEARCH_GUIDANCE).toContain("read the official documentation");
     expect(buildRuntimeInstructions({ instanceId: "opencode/anthropic", env: LOCAL, userInstructions: ["  ", ""] })).toContain(

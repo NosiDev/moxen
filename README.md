@@ -14,20 +14,24 @@ cd moxen
 bun install
 ```
 
-There is no build step for daily use — Bun runs the TypeScript source directly, from any working
-directory, with nothing to put on PATH. Point a `moxen` command at that instead of building a
-`dist/` artifact and shimming it in.
+Build the bundle once, and again after pulling changes (it takes a second or two):
+
+```bash
+bun run build
+```
+
+Then point a `moxen` command at `dist/`, from any working directory, with nothing to put on PATH.
 
 macOS/Linux (bash/zsh) — add to your shell profile (`~/.bashrc`, `~/.zshrc`, ...):
 
 ```bash
-moxen() { bun "/absolute/path/to/moxen/src/cli/index.ts" "$@"; }
+moxen() { bun "/absolute/path/to/moxen/dist/cli/index.js" "$@"; }
 ```
 
 Windows (PowerShell) — add to your `$PROFILE`:
 
 ```powershell
-function moxen { bun "C:\absolute\path\to\moxen\src\cli\index.ts" @args }
+function moxen { bun "C:\absolute\path\to\moxen\dist\cli\index.js" @args }
 ```
 
 Reload the shell, then verify:

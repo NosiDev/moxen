@@ -5,12 +5,16 @@ import path from "node:path";
 
 import { CliError } from "./errors.js";
 import { parseMcpServers, type McpServerEntry } from "./mcp.js";
-import { SETTING_KEYS, parseSettingValue, settingDescriptor, writeSetting } from "./configschema.js";
+import { normalizeHarnessConfig } from "./providers/harness/profiles.js";
+import { writeListValue } from "./configlist.js";
+import { SETTING_KEYS, listTarget, parseSettingValue, secretKeyName, settingDescriptor, writeSetting } from "./configschema.js";
+import { secretRef, writeSecret } from "./secrets.js";
 import type {
   ClaudeProviderConfig,
   CliConfig,
   ForgeConfig,
   GitConfig,
+  HarnessProviderConfig,
   InteractionMode,
   OpencodeProviderConfig,
   OpenMode,
@@ -172,7 +176,7 @@ export function normalizeConfig(raw: unknown): CliConfig {
     const servers = parseMcpServers(input.mcpServers, "config") as Record<string, McpServerEntry>;
     if (Object.keys(servers).length > 0) result.mcpServers = servers;
   }
-  const ui = normalizeSection<UiConfig>(input.ui, "ui", ["backdrop", "modelScenes", "defaultSidePanel", "contextRefreshSeconds", "usageRefreshSeconds"]);
+  const ui = normalizeSection<UiConfig>(input.ui, "ui", ["backdrop", "modelScenes", "defaultSidePanel", "contextRefreshSeconds", "usageRefreshSeconds", "autoHandoff", "autoHandoffPercent"]);
   if (ui) result.ui = ui;
   const git = normalizeSection<GitConfig>(input.git, "git", ["historyLimit", "autoFetch"]);
   if (git) result.git = git;
@@ -241,14 +245,24 @@ function normalizeProviders(raw: unknown): ProvidersConfig | undefined {
       "partialMessages",
       "agentSkills",
       "autoCompactWindow",
+      "runtimeMode",
+      "model",
+      "thinkingEffort",
+      "moxenTools",
+      "todos",
     ]);
     const launchArgs = asSection(input.claude, "providers.claude").launchArgs;
     const args = Array.isArray(launchArgs) && launchArgs.every((entry) => typeof entry === "string") ? (launchArgs as string[]) : undefined;
     if (claude || args) result.claude = { ...(claude ?? {}), ...(args ? { launchArgs: args } : {}) };
   }
   if (input.opencode !== undefined) {
-    const opencode = normalizeSection<OpencodeProviderConfig>(input.opencode, "providers.opencode", ["binaryPath", "bundledSkills"]);
+    const opencode = normalizeSection<OpencodeProviderConfig>(input.opencode, "providers.opencode", ["binaryPath", "bundledSkills", "runtimeMode", "model", "thinkingEffort", "moxenTools", "todos"]);
     if (opencode) result.opencode = opencode;
+  }
+  if (input.harness !== undefined) {
+    const withProfiles = normalizeHarnessConfig(input.harness);
+    const defaults = normalizeSection<HarnessProviderConfig>(input.harness, "providers.harness", ["runtimeMode", "model", "thinkingEffort", "moxenTools", "todos", "slots", "autoCompact", "autoCompactPercent", "keepRecentTokens", "webSearch", "webSearchKey", "webSearchKeyEnv", "searxngUrl", "webBrowser", "webBrowserPath", "webPrivateNetwork"]);
+    if (withProfiles || defaults) result.harness = { ...defaults, ...withProfiles };
   }
   return Object.keys(result).length > 0 ? result : undefined;
 }
@@ -321,7 +335,27 @@ export async function saveConfig(configPath: string, config: CliConfig): Promise
  * re-normalized, which is what catches combinations no single key can.
  */
 export function setConfigValue(config: CliConfig, key: ConfigKey, rawValue: string): CliConfig {
+  // An entry or field of a list (`providers.harness.profiles[colab].baseUrl`) is edited by id.
+  const entry = listTarget(key);
+  if (entry) return normalizeConfig(writeListValue(config, entry, rawValue, key));
   const descriptor = settingDescriptor(key);
   if (!descriptor) throw new CliError("INVALID_CONFIG_KEY", `Unknown config key: ${key}`);
   return normalizeConfig(writeSetting(config, key, parseSettingValue(descriptor, rawValue)));
+}
+
+/**
+ * `setConfigValue`, where a key that holds a secret goes to the OS keychain and
+ * the config gets only the reference (an empty value removes both). Everything
+ * that sets a key from the outside (the settings page, `config set`) uses this.
+ */
+export async function setConfigValueSecure(config: CliConfig, key: ConfigKey, rawValue: string): Promise<CliConfig> {
+  const name = secretKeyName(key);
+  if (name === null) return setConfigValue(config, key, rawValue);
+  const value = rawValue.trim();
+  try {
+    await writeSecret(name, value);
+  } catch (error) {
+    throw new CliError("KEYCHAIN_UNAVAILABLE", `Could not use the OS keychain: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return setConfigValue(config, key, value === "" ? "" : secretRef(name));
 }

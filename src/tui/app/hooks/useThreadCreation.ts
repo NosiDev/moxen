@@ -99,14 +99,15 @@ export function useThreadCreation(params: {
       // With no source thread the override (or nothing, letting the server
       // fall back to the project default) is the whole selection.
       const modelSelection = creatingModelSelection ?? source?.modelSelection;
-      const runtimeMode = creatingRuntimeMode ?? source?.runtimeMode ?? "full-access";
+      // Left out when nothing chose one: the server starts the thread in its provider's default mode.
+      const runtimeMode = creatingRuntimeMode ?? source?.runtimeMode;
       const create = {
         type: "thread.create",
         threadId,
         projectId,
         title,
         ...(modelSelection === undefined ? {} : { modelSelection }),
-        runtimeMode,
+        ...(runtimeMode === undefined ? {} : { runtimeMode }),
         interactionMode,
         branch: source?.branch ?? null,
       } as const;

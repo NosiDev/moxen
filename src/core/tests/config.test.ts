@@ -36,4 +36,20 @@ describe("config", () => {
     });
     expect(() => normalizeConfig({ speedMode: "turbo" })).toThrow("speedMode must be standard or fast");
   });
+
+  it("keeps the harness compaction defaults through the config file, with or without profiles", () => {
+    expect(normalizeConfig({ providers: { harness: { autoCompact: false, autoCompactPercent: 80, keepRecentTokens: 9000 } } }).providers?.harness).toEqual({
+      autoCompact: false,
+      autoCompactPercent: 80,
+      keepRecentTokens: 9000,
+    });
+    expect(() => normalizeConfig({ providers: { harness: { autoCompact: "sometimes" } } })).toThrow(/autoCompact/);
+  });
+
+  it("keeps the harness web settings, and refuses a search backend it does not have", () => {
+    const web = { webSearch: "exa", webSearchKeyEnv: "EXA_API_KEY", searxngUrl: "http://localhost:8888", webBrowser: "off", webBrowserPath: "/usr/bin/chromium", webPrivateNetwork: true };
+    expect(normalizeConfig({ providers: { harness: web } }).providers?.harness).toEqual(web);
+    expect(() => normalizeConfig({ providers: { harness: { webSearch: "bing" } } })).toThrow(/webSearch must be one of/);
+    expect(() => normalizeConfig({ providers: { harness: { webBrowser: "always" } } })).toThrow(/webBrowser/);
+  });
 });

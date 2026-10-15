@@ -50,7 +50,7 @@ import type {
   TokenUsageDelta,
   TurnId,
 } from "../spi.js";
-import { mcpSignature, outOfProcessWithChecklist, type McpServerSpec } from "../../mcp.js";
+import { mcpSignature, outOfProcess, outOfProcessWithChecklist, type McpServerSpec } from "../../mcp.js";
 import { opencodeContextBreakdown } from "./context.js";
 import {
   isOpencodeAuthErrorText,
@@ -172,6 +172,8 @@ interface OpenCodeSession {
   instructions: string | null;
   /** moxen's MCP servers, re-registered on a replacement server (see `dropConnection`). */
   mcpServers: readonly McpServerSpec[];
+  /** Whether moxen's server lends this session its checklist tool (the user's to-do list setting). */
+  readonly checklist: boolean;
   /** What the native session is already set to; a prompt only changes what differs. */
   applied: AppliedSessionState;
   turns: Map<TurnId, OpenCodeTurn>;
@@ -438,7 +440,7 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
     if (!session || session.closed) return;
     if (mcpSignature(servers) === mcpSignature(session.mcpServers)) return;
     session.mcpServers = servers;
-    await this.registerMcpServers(await this.connectionFor(session), servers);
+    await this.registerMcpServers(await this.connectionFor(session), servers, session.checklist);
   };
 
   private readonly settings: OpencodeSettings;
@@ -554,6 +556,7 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
   private async registerMcpServers(
     connection: OpencodeServerConnection,
     servers: readonly McpServerSpec[],
+    checklist = true,
   ): Promise<void> {
     if (servers.length === 0) return;
     let done = this.mcpRegistered.get(connection);
@@ -562,7 +565,7 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
       this.mcpRegistered.set(connection, done);
     }
     // v2 has no `todowrite`: moxen's server lends its checklist tool.
-    for (const server of servers.map(outOfProcessWithChecklist)) {
+    for (const server of servers.map(checklist ? outOfProcessWithChecklist : outOfProcess)) {
       const config: OpencodeMcpConfig =
         server.type === "http"
           ? { type: "remote", url: server.url, ...(Object.keys(server.headers).length > 0 ? { headers: server.headers } : {}) }
@@ -773,7 +776,7 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
       const existing = this.sessions.get(input.threadId);
       if (existing && !existing.closed) return this.describeSession(existing);
       const connection = await this.connectionForSession(input.threadId, input.workingDirectory, input.moxenSkills);
-      await this.registerMcpServers(connection, input.mcpServers ?? []);
+      await this.registerMcpServers(connection, input.mcpServers ?? [], input.checklist !== false);
       // OpenCode keeps sessions on disk, so the previous one — from this
       // process or an earlier one — is reattached with its history rather
       // than replaced by an empty session.
@@ -795,6 +798,7 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
         interactionMode: input.interactionMode ?? "default",
         instructions: input.instructions ?? null,
         mcpServers: input.mcpServers ?? [],
+        checklist: input.checklist !== false,
         // A session we just made has no instruction entry; a resumed one may
         // still hold the previous process's, which the first send reconciles.
         applied: { model: native.model, agent: native.agent, instructions: resumed ? undefined : null },
@@ -882,7 +886,7 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
       try {
         const connection = await this.connectionFor(session);
         // A replacement server (see `dropConnection`) has lost the runtime MCP registrations.
-        await this.registerMcpServers(connection, session.mcpServers);
+        await this.registerMcpServers(connection, session.mcpServers, session.checklist);
         turn.credentialHint = await this.missingCredentialHint(model, connection);
         await this.applySessionState(session, connection, model, input.interactionMode, turn.credentialHint);
         if (turn.compacting) {

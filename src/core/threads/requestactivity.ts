@@ -142,3 +142,73 @@ export function userInputActivityRow(event: UserInputRuntimeEvent): RequestActiv
     payload: { requestId: event.requestId, provider: event.provider, questions },
   };
 }
+
+/** A `permission.request.*` event — a tool approval parked on the user. */
+export type PermissionRuntimeEvent = Extract<
+  ProviderRuntimeEvent,
+  { readonly type: "permission.request.opened" | "permission.request.resolved" }
+>;
+
+/** What the prompt shows of a tool call: enough to decide, never a whole file. */
+const PERMISSION_DETAIL_MAX = 600;
+
+function clip(value: string): string {
+  return value.length > PERMISSION_DETAIL_MAX ? `${value.slice(0, PERMISSION_DETAIL_MAX - 1)}…` : value;
+}
+
+/**
+ * The one-line subject of a tool call: the command for a shell tool, the
+ * path for a file tool, otherwise the first short string input. Null when
+ * the input says nothing readable.
+ */
+function permissionDetail(input: Record<string, unknown> | null): string | null {
+  if (input === null) return null;
+  for (const key of ["command", "file_path", "path", "notebook_path", "url", "pattern", "query"]) {
+    const value = asString(input[key]);
+    if (value !== null) return clip(value);
+  }
+  const first = Object.values(input).find((value): value is string => typeof value === "string" && value.length > 0);
+  if (first !== undefined) return clip(first);
+  const json = JSON.stringify(input);
+  return json === undefined || json === "{}" ? null : clip(json);
+}
+
+/**
+ * Activity rows for a tool approval. The opened row carries what the TUI
+ * needs to render the prompt — tool, classification, a bounded detail line
+ * and the tool's own description — and the resolved row the decision.
+ */
+export function permissionActivityRow(event: PermissionRuntimeEvent): RequestActivityRow {
+  const raw = asRecord(event.raw) ?? {};
+  const toolName = asString(raw.toolName);
+  if (event.type === "permission.request.resolved") {
+    return {
+      key: `permission:${event.requestId}:resolved`,
+      kind: "permission.resolved",
+      summary: "Permission answered",
+      payload: {
+        requestId: event.requestId,
+        provider: event.provider,
+        toolName,
+        ...(typeof raw.behavior === "string" ? { behavior: raw.behavior } : {}),
+      },
+    };
+  }
+  const input = asRecord(raw.input);
+  const detail = permissionDetail(input);
+  const description = asString(input?.description);
+  const classification = asString(raw.classification);
+  return {
+    key: `permission:${event.requestId}:requested`,
+    kind: "permission.requested",
+    summary: `Asked to use ${toolName ?? "a tool"}`,
+    payload: {
+      requestId: event.requestId,
+      provider: event.provider,
+      toolName,
+      ...(classification === null ? {} : { classification }),
+      ...(detail === null ? {} : { detail }),
+      ...(description === null ? {} : { description: clip(description) }),
+    },
+  };
+}

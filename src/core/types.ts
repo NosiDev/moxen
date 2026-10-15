@@ -60,6 +60,9 @@ export interface UiConfig {
   defaultSidePanel?: "context" | "git" | "agents" | "background";
   contextRefreshSeconds?: number;
   usageRefreshSeconds?: number;
+  /** What to do when a thread passes `autoHandoffPercent` of its window: ask with a card, hand off on its own, or nothing. Unset: ask. */
+  autoHandoff?: "off" | "ask" | "auto";
+  autoHandoffPercent?: number;
 }
 
 export interface GitConfig {
@@ -82,16 +85,154 @@ export interface ForgeConfig {
 export interface ProvidersConfig {
   claude?: ClaudeProviderConfig;
   opencode?: OpencodeProviderConfig;
+  harness?: HarnessProviderConfig;
+}
+
+/** Moxen Harness: our own agent loop against endpoints the user configures. */
+export interface HarnessProviderConfig {
+  /** Offer Moxen's own tools (delegate, handoff, task status) to threads on this provider. Unset: yes. */
+  moxenTools?: boolean;
+  /** Offer the model a to-do list on this provider. Unset: yes. */
+  todos?: boolean;
+  /** Permission mode new threads on this provider start in; unset follows the global `runtimeMode`. */
+  runtimeMode?: RuntimeMode;
+  /** Model new threads on this provider start with, when nothing more specific names one. */
+  model?: string;
+  /** Thinking effort new threads on this provider start at. */
+  thinkingEffort?: string;
+  profiles?: HarnessProfileConfig[];
+  /** Compaction defaults for every profile (a profile's own `compaction` wins). Settings descriptors: `providers.harness.*`. */
+  autoCompact?: boolean;
+  /** Percent of the context window at which to compact; unset: 70 for windows of 128k or more, 60 below. */
+  autoCompactPercent?: number;
+  keepRecentTokens?: number;
+  /** How many requests a profile's server takes at once when the profile does not say; unset means no limit. */
+  slots?: number;
+  /** Where `web_search` looks: duckduckgo (no account), exa or brave (a key), searxng (your instance). */
+  webSearch?: string;
+  /** The NAME of the environment variable holding the Exa or Brave key. Never the key. */
+  webSearchKeyEnv?: string;
+  /** A `keychain:` reference to the Exa or Brave key saved in the OS keychain. Wins over `webSearchKeyEnv`. */
+  webSearchKey?: string;
+  /** Address of a SearXNG instance. */
+  searxngUrl?: string;
+  /** `auto`: use an installed Chrome or Chromium for pages a plain request cannot read; `off`: never. */
+  webBrowser?: string;
+  webBrowserPath?: string;
+  /** Let the web tools reach private-network addresses (this machine is always allowed; cloud metadata never). */
+  webPrivateNetwork?: boolean;
+}
+
+/** A profile's own compaction settings, over the defaults above. Not in the settings schema: a profile list is edited as a whole. */
+export interface HarnessCompactionConfig {
+  auto?: boolean;
+  /** Share of the context window, 0.3 to 0.95. */
+  fraction?: number;
+  /** The threshold in tokens; wins over `fraction`. */
+  tokens?: number;
+  keepRecentTokens?: number;
+  /** Reasoning effort for the summary request (default "low"); only sent to servers whose quirks take an effort. */
+  effort?: string;
+}
+
+export interface HarnessModelConfig {
+  /** The model name the endpoint expects. */
+  id: string;
+  /** Tokens the model can hold; unset leaves compaction and the context meter without a ceiling. */
+  contextWindow?: number;
+  maxOutput?: number;
+  /** Whether the model takes images; unset assumes it does not. */
+  vision?: boolean;
+  /** Picks the quirk preset (`qwen3`, `mistral`, …) when the id does not say. */
+  family?: string;
+  /** What `moxen harness probe` found out about this model on its server. Written by the probe, never by hand. */
+  probed?: HarnessProbedConfig;
+}
+
+/**
+ * A probe's findings, kept apart from the profile's own `quirks` so a hand-made
+ * override and a measurement never get mixed up. Resolution is preset, then
+ * this, then `quirks`.
+ */
+export interface HarnessProbedConfig {
+  /** When the probe last ran, ISO 8601. */
+  at: string;
+  /** Only the quirks a check settled; a check that could not tell leaves its keys out. */
+  quirks: Record<string, unknown>;
+  /** The server's own context size per slot, used while the model's `contextWindow` is unset. */
+  contextWindow?: number;
+  /** Slots the server reported (llama.cpp `total_slots`); a hint for the profile's `slots`. */
+  slots?: number;
+  /** Fingerprint of the server's chat template, to tell when it changed since. */
+  templateHash?: string;
+}
+
+/**
+ * One saved endpoint. `apiKeyEnv` names an environment variable: the key is
+ * read from it when a request is made and is never stored here.
+ */
+/** The wire format an endpoint speaks: OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages. */
+export type HarnessApiFormat = "chat" | "responses" | "anthropic";
+
+export interface HarnessProfileConfig {
+  /** Becomes the instance id `harness/<id>`. */
+  id: string;
+  label?: string;
+  apiFormat: HarnessApiFormat;
+  baseUrl: string;
+  apiKeyEnv?: string;
+  /** A `keychain:` reference to a key saved in the OS keychain (never the key). Wins over `apiKeyEnv`. */
+  apiKey?: string;
+  models: HarnessModelConfig[];
+  sampling?: { temperature?: number; topP?: number; topK?: number; minP?: number };
+  /** Concurrent requests the server can take (llama.cpp `-np`); 1 keeps our own subagents from starving it. */
+  slots?: number;
+  /** Send earlier reasoning back to the model (default on); off drops it from the history. */
+  preserveThinking?: boolean;
+  /** Overrides over the family preset; validated by the harness (`providers/harness/quirks.ts`). */
+  quirks?: Record<string, unknown>;
+  compaction?: HarnessCompactionConfig;
+  systemPromptAppend?: string;
+  /** Thresholds of the repeat guards; unset uses the defaults (4 / 6 identical calls, 10 repeats of a stretch of text). */
+  loopGuard?: { repeatWarn?: number; repeatStop?: number; textRepeats?: number };
+  /** Make a title for each thread with this model (default on). Reasoning models can spend the small title budget before answering; turn it off for those. */
+  titles?: boolean;
+  /**
+   * A tool's description, by tool name. A value starting with `+` is added to
+   * the stock text (after a blank line); any other value replaces it. Small
+   * models often want blunter wording than the default. Config file only.
+   */
+  toolDescriptions?: Record<string, string>;
 }
 
 /** What the user may set for OpenCode. Its external-server URL and password are not offered yet (see `configschema.ts`). */
 export interface OpencodeProviderConfig {
+  /** Offer Moxen's own tools (delegate, handoff, task status) to threads on this provider. Unset: yes. */
+  moxenTools?: boolean;
+  /** Offer the model a to-do list on this provider. Unset: yes. */
+  todos?: boolean;
+  /** Permission mode new threads on this provider start in; unset follows the global `runtimeMode`. */
+  runtimeMode?: RuntimeMode;
+  /** Model new threads on this provider start with, when nothing more specific names one. */
+  model?: string;
+  /** Thinking effort new threads on this provider start at. */
+  thinkingEffort?: string;
   binaryPath?: string;
   /** Tell spawned OpenCode servers about moxen's bundled skills. */
   bundledSkills?: boolean;
 }
 
 export interface ClaudeProviderConfig {
+  /** Offer Moxen's own tools (delegate, handoff, task status) to threads on this provider. Unset: yes. */
+  moxenTools?: boolean;
+  /** Offer the model a to-do list on this provider. Unset: yes. */
+  todos?: boolean;
+  /** Permission mode new threads on this provider start in; unset follows the global `runtimeMode`. */
+  runtimeMode?: RuntimeMode;
+  /** Model new threads on this provider start with, when nothing more specific names one. */
+  model?: string;
+  /** Thinking effort new threads on this provider start at. */
+  thinkingEffort?: string;
   binaryPath?: string;
   homePath?: string;
   launchArgs?: readonly string[];
@@ -296,4 +437,13 @@ export interface WorkspaceResolution {
   mode: WorkspaceMode;
   isGitRepository: boolean;
   branch: string | null;
+}
+
+/** The provider driver an instance id routes to (`opencode/<provider>`, `harness/<profile>`, and `claudeAgent`, the historical Claude id), or null for an id no driver owns. */
+export function driverKindOfInstance(instanceId: string): "claude" | "opencode" | "harness" | null {
+  const key = instanceId.trim().toLowerCase();
+  if (key === "opencode" || key.startsWith("opencode/")) return "opencode";
+  if (key === "harness" || key.startsWith("harness/")) return "harness";
+  if (key === "claudeagent" || key === "claude") return "claude";
+  return null;
 }

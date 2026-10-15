@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { userInputActivityRow, type UserInputRuntimeEvent } from "../requestactivity.js";
+import {
+  permissionActivityRow,
+  userInputActivityRow,
+  type PermissionRuntimeEvent,
+  type UserInputRuntimeEvent,
+} from "../requestactivity.js";
 
 function opened(raw: unknown, provider: UserInputRuntimeEvent["provider"] = "claude"): UserInputRuntimeEvent {
   return {
@@ -104,5 +109,42 @@ describe("userInputActivityRow", () => {
         requestId: "req-1",
       } as UserInputRuntimeEvent),
     ).toMatchObject({ kind: "user-input.resolved", payload: { requestId: "req-1" } });
+  });
+});
+
+describe("permissionActivityRow", () => {
+  const event = (type: PermissionRuntimeEvent["type"], raw: unknown): PermissionRuntimeEvent =>
+    ({ type, provider: "claude", threadId: "thread-1", requestId: "perm-1", raw }) as PermissionRuntimeEvent;
+
+  it("carries the command and the agent's reason on the opened row", () => {
+    const row = permissionActivityRow(
+      event("permission.request.opened", {
+        toolName: "Bash",
+        classification: "command-execution",
+        input: { command: "rm -rf build", description: "Clean the build" },
+      }),
+    );
+    expect(row).toMatchObject({
+      key: "permission:perm-1:requested",
+      kind: "permission.requested",
+      summary: "Asked to use Bash",
+      payload: { requestId: "perm-1", toolName: "Bash", classification: "command-execution", detail: "rm -rf build", description: "Clean the build" },
+    });
+  });
+
+  it("names the path for file tools and clips a whole-file input", () => {
+    const edit = permissionActivityRow(
+      event("permission.request.opened", { toolName: "Write", classification: "file-change", input: { file_path: "/a/b.ts", content: "x".repeat(5000) } }),
+    );
+    expect(edit.payload.detail).toBe("/a/b.ts");
+    const odd = permissionActivityRow(event("permission.request.opened", { toolName: "Custom", input: { blob: "y".repeat(5000) } }));
+    expect((odd.payload.detail as string).length).toBeLessThanOrEqual(600);
+  });
+
+  it("omits what the input does not say, and records the decision on resolve", () => {
+    const bare = permissionActivityRow(event("permission.request.opened", { toolName: "Task", input: {} }));
+    expect(bare.payload).toEqual({ requestId: "perm-1", provider: "claude", toolName: "Task" });
+    const done = permissionActivityRow(event("permission.request.resolved", { toolName: "Task", behavior: "allow" }));
+    expect(done).toMatchObject({ key: "permission:perm-1:resolved", kind: "permission.resolved", payload: { behavior: "allow" } });
   });
 });

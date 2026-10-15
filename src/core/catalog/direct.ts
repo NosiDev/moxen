@@ -33,6 +33,7 @@ import {
   type ModelsDevModel,
   type ModelsDevProvider,
 } from "../providers/opencode/catalog.js";
+import type { HarnessProviderConfig } from "../types.js";
 import type { EffortDescriptor, ModelSummary, ProviderSummary } from "./summary.js";
 
 export interface DirectCatalogOptions {
@@ -46,6 +47,8 @@ export interface DirectCatalogOptions {
    * the bare `opencode` on PATH until one exists.
    */
   readonly opencodeBinaryPath?: string;
+  /** `providers.harness` from the config file: one entry per saved profile. */
+  readonly harness?: HarnessProviderConfig | undefined;
 }
 
 
@@ -167,6 +170,36 @@ function opencodeCompatInstance(
 }
 
 /**
+ * One `harness/<profile>` entry per saved profile. A profile is usable as soon as
+ * it exists; the key's environment variable, when it names one, only decides
+ * the status line, because an endpoint may take no key at all.
+ */
+function harnessProviders(
+  config: HarnessProviderConfig | undefined,
+  env: NodeJS.ProcessEnv,
+  isHidden: (instanceId: string, slug: string) => boolean,
+): ProviderSummary[] {
+  return (config?.profiles ?? []).map((profile) => {
+    const instanceId = `harness/${profile.id}`;
+    const keyName = profile.apiKeyEnv;
+    const keySet = keyName !== undefined && (env[keyName] ?? "").trim() !== "";
+    return {
+      instanceId,
+      driver: "harness",
+      displayName: profile.label ?? profile.id,
+      enabled: true,
+      installed: true,
+      status: keyName !== undefined && !keySet ? `${keyName} is not set` : null,
+      authStatus: keySet ? "api-key" : null,
+      models: profile.models.map((model) => ({ ...baseModel(model.id, model.id), isHidden: isHidden(instanceId, model.id) })),
+      supportedRuntimeModes: null,
+      usageLimits: null,
+      skills: [],
+    };
+  });
+}
+
+/**
  * Build the direct-backend provider summaries. Always probes live sources;
  * every failure degrades into its entry's `status`, never a throw — a
  * broken OpenCode login must not hide the working Claude install.
@@ -222,5 +255,7 @@ export async function buildDirectProviders(options: DirectCatalogOptions = {}): 
   );
   const compat = opencodeCompatInstance(modelsDev, opencodeInstalled);
 
-  return [claude, ...opencode, compat];
+  const harness = harnessProviders(options.harness, env, (instanceId, slug) => isModelHidden(prefs, instanceId, slug));
+
+  return [claude, ...harness, ...opencode, compat];
 }

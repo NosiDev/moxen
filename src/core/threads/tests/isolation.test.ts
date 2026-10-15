@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -52,6 +52,36 @@ describe("isolation guard", () => {
     expect(rawInputViolation(iso, { path: "/work/main/a.ts", content: "cd /work/main" }, "/work/wt")).not.toBeNull();
     expect(rawInputViolation(iso, { path: "a.ts", content: "cd /work/main" }, "/work/wt")).toBeNull();
     expect(rawInputViolation(iso, { command: "git -C /work/main log" }, "/work/wt")).not.toBeNull();
+  });
+});
+
+describe("isolation guard and symlinks", () => {
+  const base = realpathSync(mkdtempSync(path.join(tmpdir(), "moxen-iso-links-")));
+  const main = path.join(base, "main");
+  const worktree = path.join(base, "wt");
+  const alias = path.join(base, "alias");
+  afterAll(() => rmSync(base, { recursive: true, force: true }));
+  mkdirSync(main);
+  mkdirSync(worktree);
+  symlinkSync(main, path.join(worktree, "to-main"));
+  symlinkSync(path.join(main, "not-yet.txt"), path.join(worktree, "dangling"));
+  symlinkSync(worktree, alias);
+  const isolation = { worktreeRoot: worktree, protectedRoots: [main] };
+  const edit = (file: string) => isolationViolation(isolation, { tool: "Edit", input: { file_path: file }, cwd: worktree });
+
+  it("sees through a link inside the worktree that points at the main checkout", () => {
+    expect(edit(path.join(worktree, "to-main", "x.ts"))).not.toBeNull();
+    expect(edit("to-main/new/deeper/x.ts")).not.toBeNull();
+    expect(isolationViolation(isolation, { tool: "Bash", input: { command: "git -C to-main status" }, cwd: worktree })).not.toBeNull();
+  });
+
+  it("sees through a dangling link, whose target is where a write lands", () => {
+    expect(edit(path.join(worktree, "dangling"))).not.toBeNull();
+  });
+
+  it("lets the worktree be reached by another name for it", () => {
+    expect(edit(path.join(alias, "x.ts"))).toBeNull();
+    expect(edit(path.join(worktree, "plain.ts"))).toBeNull();
   });
 });
 

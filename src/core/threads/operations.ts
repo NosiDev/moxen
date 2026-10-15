@@ -28,10 +28,11 @@ import {
   followUpSelection,
   resolveModelSelection,
   type ModelRequest,
+  defaultRuntimeMode,
 } from "../catalog/selection.js";
 import { APP_NAME } from "../config.js";
 import { CliError } from "../errors.js";
-import { outOfProcess, resolveMcpServers, type McpServerEntry, type McpServerSpec, type OutOfProcessMcpServerSpec } from "../mcp.js";
+import { outOfProcess, resolveMcpServers, routeMcpServers, type McpServerEntry, type McpServerSpec, type OutOfProcessMcpServerSpec } from "../mcp.js";
 import { runProcess } from "../infra/process.js";
 import {
   ensureStoredProject,
@@ -54,6 +55,7 @@ import type {
   WorkspaceResolution,
 } from "../types.js";
 import type { ProviderRuntimeEvent } from "../providers/spi.js";
+import { driverKindOfInstance } from "../types.js";
 import { driverKey, ensureDriverSession, executeTurn, imagesOf, type TurnDriver } from "./execute.js";
 import { pendingRuleUpdate, withRuleUpdate, type PendingRuleUpdate } from "./rulefiles.js";
 import { buildRuntimeInstructions, planInstructions, projectInstructions, withInstructionsUpdate, type InstructionState } from "./instructions.js";
@@ -135,8 +137,15 @@ interface InstructionsUpdate {
 }
 
 /** The part of a session setup `ensureDriverSession` takes. */
-function sessionStart(setup: { mcpServers: McpServerSpec[]; instructions: string; store: ThreadStore; moxenSkills: "project" | "served" | "none" }) {
-  return { mcpServers: setup.mcpServers, instructions: setup.instructions, store: setup.store, moxenSkills: setup.moxenSkills };
+function sessionStart(setup: { mcpServers: McpServerSpec[]; disabledMcpTools: string[]; checklist: boolean; instructions: string; store: ThreadStore; moxenSkills: "project" | "served" | "none" }) {
+  return {
+    mcpServers: setup.mcpServers,
+    disabledMcpTools: setup.disabledMcpTools,
+    checklist: setup.checklist,
+    instructions: setup.instructions,
+    store: setup.store,
+    moxenSkills: setup.moxenSkills,
+  };
 }
 
 /** The prompt a turn sends the provider: what was typed, with any instruction update ahead of it. */
@@ -159,11 +168,14 @@ async function sessionSetup(
   ctx: OperationContext,
   thread: StoredThread,
   instanceId: string = thread.modelSelection.instanceId,
-): Promise<{ mcpServers: McpServerSpec[]; instructions: string; store: ThreadStore; instructionsUpdate: InstructionsUpdate | null; moxenSkills: "project" | "served" | "none" }> {
+): Promise<{ mcpServers: McpServerSpec[]; disabledMcpTools: string[]; checklist: boolean; instructions: string; store: ThreadStore; instructionsUpdate: InstructionsUpdate | null; moxenSkills: "project" | "served" | "none" }> {
   const project = await projectById(ctx.storeRoot, thread.projectId);
   const workspaceRoot = project?.workspaceRoot ?? (thread.env.path.trim() || null);
   const delegation = await delegationOf(ctx.store, thread.id);
-  const builtin = delegation ? [] : (ctx.builtinMcpServers?.(thread.id) ?? []);
+  const kind = driverKindOfInstance(instanceId);
+  const providerConfig = kind === null ? undefined : ctx.config.providers?.[kind];
+  // A delegated thread gets none of Moxen's tools (it does not delegate), and a provider the user turned them off for gets none either.
+  const builtin = delegation || providerConfig?.moxenTools === false ? [] : (ctx.builtinMcpServers?.(thread.id) ?? []);
   const base: Record<string, McpServerEntry> = {};
   for (const built of builtin) {
     // Layered by name like any configured server, in the form a config entry has.
@@ -178,16 +190,19 @@ async function sessionSetup(
   // A built-in server the config left as it was keeps everything its
   // config-shaped entry dropped: in-process hosting, `alwaysLoad`. One the
   // config replaced (or removed, with `null`) is the config's.
-  const mcpServers = resolved.map((spec) => {
+  const merged = resolved.map((spec) => {
     const built = builtin.find((candidate) => candidate.name === spec.name);
     return built !== undefined && sameEndpoint(outOfProcess(built), spec) ? built : spec;
   });
+  // Servers switched off, or not offered to this provider, drop out; tools switched off are hidden by the driver.
+  const { servers: mcpServers, disabledTools: disabledMcpTools } = kind === null ? { servers: merged, disabledTools: [] } : routeMcpServers(merged, kind);
   const user = [ctx.config.instructions, fromProject].filter((entry): entry is string => Boolean(entry));
   const current = buildRuntimeInstructions({
     instanceId: thread.modelSelection.instanceId,
     env: thread.env,
     delegation,
     userInstructions: user,
+    checklist: providerConfig?.todos !== false,
   });
   // What this provider's conversation was given. With no history behind it (no session handle yet) there
   // is nothing cached to protect, so the current text starts it.
@@ -205,6 +220,8 @@ async function sessionSetup(
   if (recorded?.baseline !== plan.next.baseline || recorded?.delivered !== plan.next.delivered) await record(plan.next);
   return {
     mcpServers,
+    disabledMcpTools,
+    checklist: providerConfig?.todos !== false,
     instructions: plan.systemPrompt,
     // So the session is watched between turns (background turns and tasks).
     store: ctx.store,
@@ -1049,7 +1066,7 @@ export async function handover(ctx: OperationContext, request: HandoverRequest):
     ...(request.thinkingEffort !== undefined ? { thinkingEffort: request.thinkingEffort } : {}),
   });
   const title = firstLineTitle(prompt, "New thread");
-  const runtimeMode = request.runtimeMode ?? config.runtimeMode;
+  const runtimeMode = request.runtimeMode ?? defaultRuntimeMode(config, modelSelection.instanceId);
   const interactionMode = request.interactionMode ?? config.interactionMode;
   const plan = {
     workspace,

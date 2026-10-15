@@ -29,6 +29,8 @@
     "LICENSE"
   ],
   "scripts": {
+    "build": "bun scripts/build.ts",
+    "tui": "bun scripts/build.ts && bun dist/cli/index.js tui",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",

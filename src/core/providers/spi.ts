@@ -15,11 +15,12 @@ import type { WorktreeIsolation } from "../threads/isolation.js";
 import type { InteractionMode, ModelSelection, RuntimeMode } from "../types.js";
 
 /** Provider surfaces we own. Cursor and Antigravity are out of scope. */
-export type ProviderDriverKind = "claude" | "opencode";
+export type ProviderDriverKind = "claude" | "opencode" | "harness";
 
 export const PROVIDER_DRIVER_KINDS: readonly ProviderDriverKind[] = [
   "claude",
   "opencode",
+  "harness",
 ];
 
 export function isProviderDriverKind(value: unknown): value is ProviderDriverKind {
@@ -28,6 +29,8 @@ export function isProviderDriverKind(value: unknown): value is ProviderDriverKin
     (PROVIDER_DRIVER_KINDS as readonly string[]).includes(value)
   );
 }
+
+export { driverKindOfInstance } from "../types.js";
 
 export type ThreadId = string;
 export type TurnId = string;
@@ -55,6 +58,10 @@ export interface ProviderSessionStartInput {
    * without `mcpCapabilities.http`) is dropped rather than failing.
    */
   readonly mcpServers?: readonly McpServerSpec[];
+  /** MCP tools to hide, as `mcp__<server>__<tool>` (a server's `disabledTools`). A driver that cannot hide single tools ignores it. */
+  readonly disabledMcpTools?: readonly string[];
+  /** False when the user switched the to-do list off for this provider: the driver offers the model none. Absent means on. */
+  readonly checklist?: boolean;
   /**
    * Runtime instructions (`core/threads/instructions.ts`), appended to the
    * provider's own system prompt through its native channel. Absent when
@@ -91,6 +98,8 @@ export interface ContextWindowUsage {
   /** Where the provider compacts on its own, when it does. */
   readonly autoCompactThreshold: number | null;
   readonly compactsAutomatically: boolean | null;
+  /** True when `usedTokens` is moxen's own count rather than one the provider reported. Absent means reported. */
+  readonly estimated?: boolean;
   /**
    * Running session total in USD, from the provider's own accounting
    * (Claude: the SDK's `total_cost_usd`) — an estimate, not a bill.
@@ -386,13 +395,16 @@ export type ProviderRuntimeEvent =
       /**
        * Something the provider did to the session that the transcript should
        * say: it compacted the conversation (`detail` is the summary it kept),
-       * or its auto mode refused a tool call (`detail` is why).
+       * or its auto mode refused a tool call (`detail` is why). A harness
+       * session whose automatic compaction gave up says so too, in `title`, and one
+       * whose MCP servers did not all come up, or were reconfigured while it ran, says
+       * that as `mcp`.
        */
       readonly type: "session.notice";
       readonly provider: ProviderDriverKind;
       readonly threadId: ThreadId;
       readonly turnId: TurnId | null;
-      readonly notice: "compacted" | "permission-denied";
+      readonly notice: "compacted" | "permission-denied" | "compaction-stopped" | "mcp";
       readonly title: string;
       readonly detail: string | null;
     }
