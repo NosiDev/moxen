@@ -83,13 +83,13 @@ function fieldViews(fields: readonly (typeof HARNESS_PROFILE_FIELDS)[number][], 
   });
 }
 
-/** Where each compaction value in force comes from: this profile, the Harness tab, the Turns tab or the default (`core/threads/longthreads.ts`). */
+/** Where each compaction value in force comes from: this profile, the Moxen Harness setting, the global one or the default (`core/threads/longthreads.ts`). */
 function compactionEffective(config: CliConfig, profile: HarnessProfileConfig): Record<string, ListEffective> {
   const own = profile.compaction;
   const harness = config.providers?.harness;
   const settings = resolveCompactionSettings(driverProviders(config)?.harness, profile);
   const out: Record<string, ListEffective> = {};
-  const place = (key: string | null | undefined): string => (key === null || key === undefined ? "the default" : key.startsWith("longThreads.") ? "the Turns tab" : "the Moxen Harness setting");
+  const place = (key: string | null | undefined): string => (key === null || key === undefined ? "the default" : key.startsWith("longThreads.") ? "the global setting" : "the Moxen Harness setting");
   out["compaction.auto"] = { value: settings.auto, origin: own?.auto !== undefined ? "this profile" : place(compactionModeFor(config, "harness").key) };
   // The older share in the profile still applies while its size is unset: said here, on the one row the page shows.
   if (own?.tokens === undefined && own?.fraction !== undefined) out["compaction.tokens"] = { value: undefined, origin: `${Math.round(own.fraction * 100)}% of the window, from compaction.fraction in the config file` };

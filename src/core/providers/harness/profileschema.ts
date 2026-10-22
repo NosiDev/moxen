@@ -214,7 +214,7 @@ export const HARNESS_PROFILE_FIELDS: readonly ListField[] = [
   {
     path: "slots",
     label: "Requests at once",
-    description: "Requests this server runs at the same time (llama.cpp `-np`). With 1, Moxen's own subagents wait their turn instead of starving you. Unset: 'Requests at once' on the Moxen Harness tab.",
+    description: "Requests this server runs at the same time (llama.cpp `-np`). With 1, Moxen's own subagents wait their turn instead of starving you. Unset: the Moxen Harness's own 'Requests at once'.",
     group: "Endpoint",
     kind: { type: "integer", presets: [1, 2, 3, 4, 6, 8, 12, 16], ends: { low: "Fewer", high: "More" } },
   },
@@ -240,7 +240,7 @@ export const HARNESS_PROFILE_FIELDS: readonly ListField[] = [
   {
     path: "compaction.auto",
     label: "Compact automatically",
-    description: "Overrides 'Compaction' on the Moxen Harness tab for this profile.",
+    description: "Overrides the Moxen Harness's 'Compaction' for this profile.",
     group: "Compaction",
     kind: { type: "boolean" },
   },
@@ -255,7 +255,7 @@ export const HARNESS_PROFILE_FIELDS: readonly ListField[] = [
   {
     path: "compaction.tokens",
     label: "Compact at",
-    description: "Tokens of context at which this profile compacts. Overrides 'Compact at' on the Moxen Harness tab and the Turns tab, whatever their unit. Needs a context window on the model.",
+    description: "Tokens of context at which this profile compacts. Overrides the Moxen Harness's and the global 'Compact at', whatever their unit. Needs a context window on the model.",
     group: "Compaction",
     kind: { type: "integer", presets: [8_192, 16_384, 24_576, 32_768, 65_536, 131_072, 262_144, 524_288, 1_048_576], ends: { low: "Earlier", high: "Later" } },
   },
@@ -288,7 +288,7 @@ export const HARNESS_PROFILE_FIELDS: readonly ListField[] = [
   {
     path: "systemPromptAppend",
     label: "Profile instructions",
-    description: "Added to the system prompt of threads on this profile, after Moxen's own and after 'Extra instructions' on the Turns tab, which apply to every provider. The two stack.",
+    description: "Added to the system prompt of threads on this profile, after Moxen's own, the global 'Extra instructions' (every provider) and the Moxen Harness's 'Provider instructions'. The two stack.",
     group: "Prompt",
     kind: { type: "string", multiline: true },
   },

@@ -228,7 +228,7 @@ command does, once per host for the session; the local network needs
 `web.privateNetwork` and cloud metadata addresses are never reached. Results are
 marked as untrusted data.
 
-The `web` settings (Turns tab, Web tools) are shared: the `web_fetch` Moxen
+The `web` settings (Agent context tab, Web tools) are shared: the `web_fetch` Moxen
 offers Claude Code and OpenCode follows them too, so Never starts no browser on
 any provider. A file from before they were shared still means what it did:
 `providers.harness.webBrowser` and `webBrowserPath` apply to every provider

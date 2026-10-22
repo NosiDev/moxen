@@ -173,3 +173,34 @@ describe("web tools shared by every provider, and one key per search service", (
     expect(setConfigValue(DEFAULT_CONFIG, "providers.harness.webSearchKeys.brave", "keychain:providers.harness.webSearchKeys.brave").providers?.harness?.webSearchKeys).toEqual({ brave: "keychain:providers.harness.webSearchKeys.brave" });
   });
 });
+
+describe("where settings live", () => {
+  const visible = SETTINGS.filter((descriptor) => descriptor.hidden !== true);
+  const sectionOf = (key: string) => settingDescriptor(key)!.section;
+
+  it("files each global setting on the tab that says what it does", () => {
+    expect(["provider", "model", "thinkingEffort", "runtimeMode", "threadEnvMode"].map(sectionOf)).toEqual(Array(5).fill("defaults"));
+    // Defaults in the order a new thread's choices are made.
+    expect(visible.filter((descriptor) => descriptor.section === "defaults").map((descriptor) => descriptor.key)).toEqual(["provider", "model", "thinkingEffort", "runtimeMode", "threadEnvMode"]);
+    expect(["sessionTtl", "autoContinueAtUsageLimit", "usageLimitContinues"].map(sectionOf)).toEqual(Array(3).fill("sessions"));
+    expect(["longThreads.handoff", "longThreads.handoffAt", "longThreads.compactAt"].map(sectionOf)).toEqual(Array(3).fill("long-threads"));
+    expect(["instructions", "skills.moxen", "web.browser"].map(sectionOf)).toEqual(Array(3).fill("agent"));
+    expect(sectionOf("branchPruneDays")).toBe("git");
+    // No ui.* key outside the Interface tab.
+    expect(visible.filter((descriptor) => descriptor.key.startsWith("ui.") && descriptor.section !== "interface")).toEqual([]);
+  });
+
+  it("gives every provider tab the same leading groups, and no catch-all", () => {
+    for (const kind of ["claude", "opencode", "harness"]) {
+      const groups = [...new Set(visible.filter((descriptor) => descriptor.section === `provider:${kind}`).map((descriptor) => descriptor.group))];
+      expect(groups.slice(0, 4)).toEqual(["Defaults", "Tools", "Long threads", "Sessions"]);
+      expect(groups).not.toContain("Behaviour");
+      expect(groups).not.toContain("Concurrency");
+    }
+  });
+
+  it("names no tab in a description: a cross-reference is generated where it is shown", () => {
+    const tabs = /\b(Turns|New threads|General|Defaults|Sessions|Agent context|Interface|Git and forges|Moxen Harness|Claude Code|OpenCode) tab\b/;
+    expect(SETTINGS.filter((descriptor) => tabs.test(descriptor.description)).map((descriptor) => descriptor.key)).toEqual([]);
+  });
+});

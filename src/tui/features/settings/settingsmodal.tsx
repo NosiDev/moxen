@@ -71,8 +71,10 @@ const TAB_WIDTH = 24;
 /** The sidebar's categories, top to bottom: each names the sections filed under it. */
 const SECTION_CATEGORY: Record<SettingSection, string> = {
   general: "Moxen",
-  turns: "Moxen",
-  model: "Moxen",
+  defaults: "Moxen",
+  sessions: "Moxen",
+  "long-threads": "Moxen",
+  agent: "Moxen",
   interface: "Moxen",
   git: "Moxen",
   "provider:claude": "Providers",

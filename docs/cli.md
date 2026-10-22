@@ -165,6 +165,8 @@ moxen config set thinkingEffort xhigh
 | `speedMode` | `standard`, `fast` | Unset (inherits thread/project) |
 | `thinkingEffort` | Model-supported effort value | Unset (inherits thread/project) |
 
+The settings page files every key under General, Defaults, Sessions, Long threads, Agent context, Interface, Git and forges, one tab per provider (each in the same order: Defaults, Tools, Long threads, Sessions, Setup, then what is particular to it), and MCP servers. Where a setting lives on the page never changes its key.
+
 `projectPolicy: "existing"` makes a missing project a hard error. `workspaceMode: "folder"` uses the exact current folder instead of walking up to the Git root. `threadEnvMode: "auto"` follows project → `moxen.json` → global local/worktree preference. Explicit CLI config values remain overrides.
 
 `--checkout worktree` provisions a local worktree for the new thread: a `moxen/<id>` branch (named from the thread title: `moxen/<title-slug>`; the thread id only when there is no title) off the current branch (or its origin — new worktrees always start from origin), placed under the store's `worktrees` directory, with the thread rooted there. A repository without a current branch returns `WORKTREE_REQUIRES_BRANCH` instead of silently falling back to the current checkout.

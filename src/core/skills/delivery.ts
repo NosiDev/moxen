@@ -169,7 +169,7 @@ export function describeProviderSkills(config: CliConfig, kind: SkillsProviderKi
     const why =
       own.value === false
         ? own.key === `providers.${kind}.moxenSkills` ? "switched off for this provider" : `${own.key} is off in the config file`
-        : "'Moxen's skills' on the Turns tab is Off";
+        : "the global 'Moxen's skills' is Off";
     return `Off: ${why}.`;
   }
   const how =

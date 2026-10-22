@@ -82,7 +82,7 @@ MCP server sets, skills — rides ahead of the next prompt.
 Models make more tool-call mistakes as their window fills, so a long thread is
 either compacted (its history summarised in place) or handed off (continued in
 a fresh thread opened with a handoff document). Every provider's settings page
-has the same "Long threads" group, and the Turns tab holds the defaults:
+has the same "Long threads" group, and the global Long threads tab holds the defaults:
 
 | Row | Key | Values |
 | -- | -- | -- |
@@ -100,7 +100,7 @@ bigger model hands off later; a size suits a small local model. The page
 offers shares from 40% and sizes from 8K.
 
 **Precedence is specificity only**: the model's own size, then the
-provider's tab, then the Turns tab, then the built-in default (hand off at
+provider's tab, then the global Long threads tab, then the built-in default (hand off at
 50%, compact at 80%; the Harness compacts at 70% of the window, 60% under
 128K), whatever unit each level is written in. The rules are in core
 (`core/threads/longthreads.ts`: `longThreadPolicy`, `handoffLineFor`,

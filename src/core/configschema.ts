@@ -52,8 +52,10 @@ import { driverKindOfInstance, type CliConfig } from "./types.js";
 /** Where a setting shows up. Order is the order a settings page renders. */
 export const SETTING_SECTIONS = [
   "general",
-  "turns",
-  "model",
+  "defaults",
+  "sessions",
+  "long-threads",
+  "agent",
   "interface",
   "git",
   "provider:claude",
@@ -66,8 +68,10 @@ export type SettingSection = (typeof SETTING_SECTIONS)[number];
 
 export const SECTION_LABEL: Record<SettingSection, string> = {
   general: "General",
-  turns: "Turns",
-  model: "New threads",
+  defaults: "Defaults",
+  sessions: "Sessions",
+  "long-threads": "Long threads",
+  agent: "Agent context",
   interface: "Interface",
   git: "Git and forges",
   "provider:claude": "Claude Code",
@@ -294,7 +298,7 @@ export interface SettingEffective {
   readonly value: SettingValue;
   /** The value as a page writes it: "Full access", "On", "50% of the window". */
   readonly label: string;
-  /** Where it comes from, to follow the label after a comma: "from Permissions on the New threads tab". Absent when the label says it all. */
+  /** Where it comes from, to follow the label after a comma: "from Permissions on the Defaults tab". Absent when the label says it all. */
   readonly origin?: string;
 }
 
@@ -331,7 +335,7 @@ const COMPACTION_CHOICE_LABEL: Readonly<Record<Exclude<CompactionMode, "provider
 const LINES_INTERACT = "Hand-off is offered first when its line is lower than compaction's; past both, the lower one acts first.";
 
 /**
- * A provider's own switch for Moxen's skills, three-way: unset follows 'Moxen's skills' on the Turns tab
+ * A provider's own switch for Moxen's skills, three-way: unset follows the global 'Moxen's skills'
  * (`core/skills/delivery.ts`); the page shows what is in force beneath it.
  */
 function moxenSkillsSetting(kind: "claude" | "opencode" | "harness"): SettingDescriptor {
@@ -339,7 +343,7 @@ function moxenSkillsSetting(kind: "claude" | "opencode" | "harness"): SettingDes
   return {
     key: `providers.${kind}.moxenSkills`,
     label: "Moxen's skills",
-    description: `Whether ${name} threads get the skills Moxen ships (threads, handoff, orchestrate and the rest). Default follows 'Moxen's skills' on the Turns tab; Off keeps them from this provider, also when the project has copies; On serves them to it even when that is Off. Without Delegation tools, the skills that drive them stay out either way.`,
+    description: `Whether ${name} threads get the skills Moxen ships (threads, handoff, orchestrate and the rest). Default follows the global 'Moxen's skills'; Off keeps them from this provider, also when the project has copies; On serves them to it even when that is Off. Without Delegation tools, the skills that drive them stay out either way.`,
     section: `provider:${kind}`,
     group: "Tools",
     kind: { type: "boolean" },
@@ -350,8 +354,8 @@ function moxenSkillsSetting(kind: "claude" | "opencode" | "harness"): SettingDes
 }
 
 /**
- * One Sessions group per provider, the Turns tab's own narrowed to it: instructions that only this
- * provider's threads get, and whether a usage limit is waited out. Unset, each follows the Turns tab.
+ * One Sessions group per provider, the global Sessions settings narrowed to it: instructions that only this
+ * provider's threads get, and whether a usage limit is waited out. Unset, each follows the global one.
  */
 function sessionSettings(kind: "claude" | "opencode" | "harness"): SettingDescriptor[] {
   const name = { claude: "Claude Code", opencode: "OpenCode", harness: "Moxen Harness" }[kind];
@@ -360,7 +364,7 @@ function sessionSettings(kind: "claude" | "opencode" | "harness"): SettingDescri
     {
       key: `providers.${kind}.instructions`,
       label: "Provider instructions",
-      description: `Added to the system prompt of ${name} threads only, after 'Extra instructions' on the Turns tab and before a project's moxen.json instructions${kind === "harness" ? ", then a profile's own Profile instructions" : ""}. For guidance one model family needs and the others do not.`,
+      description: `Added to the system prompt of ${name} threads only, after the global 'Extra instructions' and before a project's moxen.json instructions${kind === "harness" ? ", then a profile's own Profile instructions" : ""}. For guidance one model family needs and the others do not.`,
       section,
       group: "Sessions",
       kind: { type: "string", placeholder: `Appended to ${name} sessions`, multiline: true },
@@ -370,7 +374,7 @@ function sessionSettings(kind: "claude" | "opencode" | "harness"): SettingDescri
     {
       key: `providers.${kind}.sessionTtl`,
       label: "Idle session lifetime",
-      description: `How long a ${name} session stays warm with nothing happening on it, before it is ended (the next message resumes it). ${{ claude: "Each is a Claude Code process.", opencode: "Sessions share one OpenCode server per folder.", harness: "A local server re-reads the whole prompt when a session comes back." }[kind]} Default follows the Turns tab.`,
+      description: `How long a ${name} session stays warm with nothing happening on it, before it is ended (the next message resumes it). ${{ claude: "Each is a Claude Code process.", opencode: "Sessions share one OpenCode server per folder.", harness: "A local server re-reads the whole prompt when a session comes back." }[kind]} Default follows the global one.`,
       section,
       group: "Sessions",
       kind: { type: "duration", presets: DURATION_PRESETS, ends: { low: "Shorter", high: "Longer" } },
@@ -381,7 +385,7 @@ function sessionSettings(kind: "claude" | "opencode" | "harness"): SettingDescri
     {
       key: `providers.${kind}.autoContinueAtUsageLimit`,
       label: "Continue after a usage limit",
-      description: `When a plan limit stops a ${name} turn, schedule a continue for just after it resets. Limits are per account, so this can be on for a subscription and off for a metered key. Default follows the Turns tab.`,
+      description: `When a plan limit stops a ${name} turn, schedule a continue for just after it resets. Limits are per account, so this can be on for a subscription and off for a metered key. Default follows the global one.`,
       section,
       group: "Sessions",
       kind: { type: "boolean" },
@@ -394,7 +398,7 @@ function sessionSettings(kind: "claude" | "opencode" | "harness"): SettingDescri
 /**
  * One Long threads group per provider, the same rows on every tab: who
  * compacts and where, then whether and where to hand off. Each line is a share
- * or a size and falls back, whatever its unit, to the Turns tab (`core/threads/longthreads.ts`).
+ * or a size and falls back, whatever its unit, to the global setting (`core/threads/longthreads.ts`).
  */
 function longThreadSettings(kind: LongThreadKind): SettingDescriptor[] {
   const section = `provider:${kind}` as const;
@@ -542,7 +546,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     key: "threadEnvMode",
     label: "Thread environment",
     description: "The last-resort answer for threads started from the command line (`moxen handover`, `moxen threads create`) when neither the command, the project, nor its moxen.json says whether to use a worktree. A model delegating work chooses for itself each time (a worktree unless it asks for the shared checkout), so this does not govern delegation.",
-    section: "general",
+    section: "defaults",
     kind: {
       type: "enum",
       choices: [
@@ -560,8 +564,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "runtimeMode",
     label: "Permissions",
-    description: "How much a new thread may do without asking. A provider's own 'Permissions' (on its tab) wins over this. Each provider maps the mode onto its own native one.",
-    section: "model",
+    description: "How much a new thread may do without asking. A provider's own 'Permissions' wins over this. Each provider maps the mode onto its own native one.",
+    section: "defaults",
     kind: {
       type: "enum",
       choices: [
@@ -578,7 +582,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     key: "interactionMode",
     label: "Start in",
     description: "Whether new threads start in plan mode. Plan mode is now a per-thread choice, so a settings page no longer offers this; the key still works for existing configs.",
-    section: "model",
+    section: "defaults",
     hidden: true,
     kind: {
       type: "enum",
@@ -590,9 +594,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "sessionTtl",
     label: "Idle session lifetime",
-    description: "How long a provider session stays warm with nothing happening on it: no turn, no background task, nothing waiting on you. Past it the session is ended, and the next message resumes it, at the cost of a restart and reading the prompt cache afresh. A provider's tab can set its own.",
-    section: "turns",
-    group: "Sessions",
+    description: "How long a provider session stays warm with nothing happening on it: no turn, no background task, nothing waiting on you. Past it the session is ended, and the next message resumes it, at the cost of a restart and reading the prompt cache afresh. Each provider can set its own.",
+    section: "sessions",
     kind: { type: "duration", presets: DURATION_PRESETS, ends: { low: "Shorter", high: "Longer" } },
     defaultValue: "1h",
     appliesAt: "next-session",
@@ -601,9 +604,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     key: "autoContinueAtUsageLimit",
     label: "Continue after a usage limit",
     description:
-      "When a plan limit stops a turn, schedule a continue for just after it resets, at most 'Continues in a row' times. Off by default: it runs work while nobody is watching. A provider's tab can say otherwise for it.",
-    section: "turns",
-    group: "Sessions",
+      "When a plan limit stops a turn, schedule a continue for just after it resets, at most 'Continues in a row' times. Off by default: it runs work while nobody is watching. Each provider can say otherwise for itself.",
+    section: "sessions",
     kind: { type: "boolean" },
     defaultValue: false,
   },
@@ -611,8 +613,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     key: "usageLimitContinues",
     label: "Continues in a row",
     description: "How many automatic continues may follow one another when each runs into the limit again; past it, a notice says it stopped and waits for you.",
-    section: "turns",
-    group: "Sessions",
+    section: "sessions",
     kind: { type: "integer", min: 1, max: 5, presets: [1, 2, 3, 4, 5], ends: { low: "Fewer", high: "More" } },
     defaultValue: 2,
     visibleWhen: { key: "autoContinueAtUsageLimit", in: ["true"] },
@@ -622,7 +623,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "Delete finished worktree branches after",
     description:
       "Days after a thread is archived or deleted before its `moxen/…` branch is deleted, here and on origin if it was pushed. Only a branch already merged into the project's branch goes, so no work is lost; a branch with commits that were never merged is kept. 0 keeps every branch.",
-    section: "general",
+    section: "git",
     kind: { type: "integer", min: 0, max: 365, unit: "d", presets: [0, 1, 3, 7, 14, 30, 60, 90, 180], ends: { low: "Sooner", high: "Later" } },
     defaultValue: 14,
   },
@@ -630,15 +631,14 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     key: "skills.moxen",
     label: "Moxen's skills",
     description:
-      "How the skills Moxen ships reach a thread. Copy: into a project that already has a `.claude` or `.agents` folder (`.claude/skills` when it has both), where every provider finds them; copies are kept current, listed in `.git/info/exclude`, and never replace a skill you already have, and a project with neither folder is served instead. Serve: each provider is pointed at Moxen's own folder and nothing is written into the project (copies Moxen made there are taken out). Off: no thread gets them. A provider's tab can switch them off for it alone, and a project's moxen.json can choose (`\"skills\": { \"moxen\": \"serve\" }`).",
-    section: "turns",
-    group: "Agent",
+      "How the skills Moxen ships reach a thread. Copy: into a project that already has a `.claude` or `.agents` folder (`.claude/skills` when it has both), where every provider finds them; copies are kept current, listed in `.git/info/exclude`, and never replace a skill you already have, and a project with neither folder is served instead. Serve: each provider is pointed at Moxen's own folder and nothing is written into the project (copies Moxen made there are taken out). Off: no thread gets them. Each provider can switch them off for itself alone, and a project's moxen.json can choose (`\"skills\": { \"moxen\": \"serve\" }`).",
+    section: "agent",
     kind: {
       type: "enum",
       choices: [
         choice("copy", "Copy into the project", "Into its .claude or .agents folder; served when it has neither."),
         choice("serve", "Serve from Moxen", "Nothing written into the project."),
-        choice("off", "Off", "No thread gets them, unless a provider's tab turns them on."),
+        choice("off", "Off", "No thread gets them, unless a provider's own switch turns them on."),
       ],
     },
     defaultValue: undefined,
@@ -649,8 +649,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     key: "installSkills",
     label: "Install Moxen's skills in projects",
     description: "Kept so older configs still load: off meant serve, which is what 'Moxen's skills' reads while it is unset.",
-    section: "turns",
-    group: "Agent",
+    section: "agent",
     hidden: true,
     kind: { type: "boolean" },
     defaultValue: true,
@@ -659,9 +658,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "instructions",
     label: "Extra instructions",
-    description: "Appended to every provider session's system prompt. Each provider's tab can add its own after these (Sessions), and a project's moxen.json after that.",
-    section: "turns",
-    group: "Agent",
+    description: "Appended to every provider session's system prompt. Each provider's 'Provider instructions' come after these, and a project's moxen.json after that.",
+    section: "agent",
     kind: { type: "string", placeholder: "Appended to every session", multiline: true },
     defaultValue: undefined,
     appliesAt: "next-session",
@@ -672,7 +670,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     key: "provider",
     label: "Provider",
     description: "The provider a new thread uses when neither the request nor the project names one. A project's own default wins over this.",
-    section: "model",
+    section: "defaults",
     kind: { type: "string", placeholder: "claude", source: "provider" },
     defaultValue: undefined,
     fallback: { text: "The first available: Claude Code when it is installed" },
@@ -681,8 +679,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "model",
     label: "Model",
-    description: "The model a new thread on the Provider above starts with. A model belongs to one provider, so this applies only to threads on that provider, and a provider's own 'Model' (on its tab) wins over it.",
-    section: "model",
+    description: "The model a new thread on the Provider above starts with. A model belongs to one provider, so this applies only to threads on that provider, and a provider's own 'Model' wins over it.",
+    section: "defaults",
     kind: { type: "string", placeholder: "the provider's own default", source: "model" },
     defaultValue: undefined,
     envOverride: "MOXEN_MODEL",
@@ -691,7 +689,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     key: "speedMode",
     label: "Speed",
     description: "Kept so older configs still load. No provider Moxen drives reads it today, so a settings page does not offer it.",
-    section: "model",
+    section: "defaults",
     hidden: true,
     kind: { type: "enum", choices: [choice("standard", "Standard"), choice("fast", "Fast")] },
     defaultValue: undefined,
@@ -701,8 +699,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "thinkingEffort",
     label: "Effort",
-    description: "The reasoning effort a new thread starts at, for models that take one. A provider's own 'Effort' (on its tab) wins over this.",
-    section: "model",
+    description: "The reasoning effort a new thread starts at, for models that take one. A provider's own 'Effort' wins over this.",
+    section: "defaults",
     kind: { type: "string", placeholder: "the provider's own default", source: "effort" },
     defaultValue: undefined,
     envOverride: "MOXEN_THINKING_EFFORT",
@@ -777,9 +775,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     key: "longThreads.handoff",
     label: "Hand off",
     description:
-      "Models make more tool-call mistakes as the window fills, so a thread past 'Hand off at' moves to a fresh one opened with a handoff of the work so far. Ask shows a card with the action; Automatic does it by itself once no turn, subthread or background task is running; until then the card stays with a button to hand off by hand. Each provider's tab can change it.",
-    section: "turns",
-    group: "Long threads",
+      "Models make more tool-call mistakes as the window fills, so a thread past 'Hand off at' moves to a fresh one opened with a handoff of the work so far. Ask shows a card with the action; Automatic does it by itself once no turn, subthread or background task is running; until then the card stays with a button to hand off by hand. Each provider can change it.",
+    section: "long-threads",
     kind: { type: "enum", choices: [choice("ask", "Ask"), choice("auto", "Automatic"), choice("off", "Off")] },
     defaultValue: undefined,
     fallback: { resolver: "handoffMode" },
@@ -787,9 +784,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "longThreads.handoffAt",
     label: "Hand off at",
-    description: `Where a thread is handed off: a share of the model's window (a bigger window hands off later) or a size, the same for every model. A provider's tab, or a model on it, can set its own; the most specific one applies, whatever its unit. ${LINES_INTERACT}`,
-    section: "turns",
-    group: "Long threads",
+    description: `Where a thread is handed off: a share of the model's window (a bigger window hands off later) or a size, the same for every model. A provider, or a model on it, can set its own; the most specific one applies, whatever its unit. ${LINES_INTERACT}`,
+    section: "long-threads",
     kind: { type: "line", presets: LINE_PRESETS },
     defaultValue: undefined,
     fallback: { resolver: "handoffLine" },
@@ -797,9 +793,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "longThreads.compactAt",
     label: "Compact at",
-    description: `Where a thread is compacted when Moxen does it: Claude Code and OpenCode while their Compaction is Moxen's, and the Moxen Harness. A share of the window or a size; each provider's tab can set its own. ${LINES_INTERACT}`,
-    section: "turns",
-    group: "Long threads",
+    description: `Where a thread is compacted when Moxen does it: Claude Code and OpenCode while their Compaction is Moxen's, and the Moxen Harness. A share of the window or a size; each provider can set its own. ${LINES_INTERACT}`,
+    section: "long-threads",
     kind: { type: "line", presets: LINE_PRESETS },
     defaultValue: undefined,
     fallback: { resolver: "compactLine" },
@@ -808,8 +803,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     key: "ui.autoHandoff",
     label: "Hand off long threads",
     description: "Kept so older configs still load: 'Hand off' before it moved out of the interface settings.",
-    section: "turns",
-    group: "Long threads",
+    section: "long-threads",
     hidden: true,
     kind: { type: "enum", choices: [choice("ask", "Ask"), choice("auto", "Automatic"), choice("off", "Off")] },
     defaultValue: "ask",
@@ -818,8 +812,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     key: "ui.autoHandoffPercent",
     label: "Hand off at (share)",
     description: "Kept so older configs still load: 'Hand off at' as a share of the window.",
-    section: "turns",
-    group: "Long threads",
+    section: "long-threads",
     hidden: true,
     kind: { type: "integer", min: 10, max: 90, unit: "%", presets: [20, 30, 40, 50, 60, 70, 80] },
     defaultValue: 50,
@@ -828,8 +821,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     key: "ui.autoHandoffTokens",
     label: "Hand off at a fixed size",
     description: "Kept so older configs still load: 'Hand off at' as a size; it beat the share beside it.",
-    section: "turns",
-    group: "Long threads",
+    section: "long-threads",
     hidden: true,
     kind: { type: "integer", min: 8_192, max: 2_000_000, binary: true },
     defaultValue: undefined,
@@ -841,7 +833,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "Browser for web pages",
     description:
       "When a page cannot be read with a plain request (it turns the request away, or builds its content with scripts), Moxen's web_fetch can load it in an installed Chrome or Chromium, headless and with a throwaway profile (none of your cookies or logins). This is the web_fetch every provider gets from Moxen and the Moxen Harness's own. Never: no thread starts a browser.",
-    section: "turns",
+    section: "agent",
     group: "Web tools",
     kind: { type: "enum", choices: [choice("auto", "When needed", "Use an installed Chrome or Chromium."), choice("off", "Never")] },
     defaultValue: undefined,
@@ -851,7 +843,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     key: "web.browserPath",
     label: "Browser program",
     description: "The Chrome or Chromium program web_fetch starts. Left unset, the usual places are searched.",
-    section: "turns",
+    section: "agent",
     group: "Web tools",
     kind: { type: "string", placeholder: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" },
     defaultValue: undefined,
@@ -861,7 +853,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     key: "web.privateNetwork",
     label: "Web tools reach private networks",
     description: "Let Moxen's web tools, on every provider, reach addresses on your local network (10.x, 192.168.x and the like). This machine's own servers are always allowed; cloud metadata addresses never are.",
-    section: "turns",
+    section: "agent",
     group: "Web tools",
     kind: { type: "boolean" },
     defaultValue: undefined,
@@ -928,7 +920,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "Permissions",
     description: "How much a new Claude Code thread may do without asking.",
     section: "provider:claude",
-    group: "New threads",
+    group: "Defaults",
     kind: {
       type: "enum",
       choices: [
@@ -946,7 +938,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "Model",
     description: "The model a new Claude Code thread starts with, when neither the request nor the project names one.",
     section: "provider:claude",
-    group: "New threads",
+    group: "Defaults",
     kind: { type: "string", placeholder: "the provider's own default", source: "model", providerKind: "claude" },
     defaultValue: undefined,
     fallback: { resolver: "providerModel" },
@@ -956,7 +948,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "Effort",
     description: "The reasoning effort a new Claude Code thread starts at, for models that take one.",
     section: "provider:claude",
-    group: "New threads",
+    group: "Defaults",
     kind: { type: "string", placeholder: "the provider's own default", source: "effort", providerKind: "claude" },
     defaultValue: undefined,
     fallback: { key: "thinkingEffort" },
@@ -976,7 +968,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.claude.webFetch",
     label: "Moxen's web_fetch",
-    description: "Give Claude Code threads Moxen's web_fetch, which reads a page as text and loads it in a browser when a plain request cannot (Web tools, on the Turns tab).",
+    description: "Give Claude Code threads Moxen's web_fetch, which reads a page as text and loads it in a browser when a plain request cannot (it follows the global Web tools settings).",
     section: "provider:claude",
     group: "Tools",
     kind: { type: "boolean" },
@@ -1072,7 +1064,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     description:
       "How extended thinking comes back. Claude Code's `highlights` is not offered: the API allows it only for sessions Anthropic hosts, and any other client silently falls back to no thinking text at all.",
     section: "provider:claude",
-    group: "Behaviour",
+    group: "Output",
     kind: {
       type: "enum",
       choices: [
@@ -1088,7 +1080,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "Suggest the next prompt",
     description: "Ask for one predicted next prompt after each turn, offered in the composer.",
     section: "provider:claude",
-    group: "Behaviour",
+    group: "Output",
     kind: { type: "boolean" },
     defaultValue: true,
     appliesAt: "server-restart",
@@ -1099,7 +1091,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     description:
       "Take the CLI's partial-message stream so text appears as it is written. Turning it off leaves whole messages arriving at once, which is quieter over a slow link.",
     section: "provider:claude",
-    group: "Behaviour",
+    group: "Output",
     kind: { type: "boolean" },
     defaultValue: true,
     appliesAt: "server-restart",
@@ -1110,7 +1102,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     description:
       "Offer the skills in a project's or your home `.agents/skills` to Claude Code, which reads only `.claude/skills`, through a mod. A skill `.claude/skills` already has is left to Claude Code. Moxen's own skills reach Claude Code either way ('Moxen's skills', under Tools). Needs Claude Code 2.1.287 or newer.",
     section: "provider:claude",
-    group: "Behaviour",
+    group: "Tools",
     kind: { type: "boolean" },
     defaultValue: true,
     appliesAt: "server-restart",
@@ -1121,7 +1113,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     description:
       "Start every Claude Code session with Ultracode on: Claude plans larger jobs as workflows, spawning and coordinating many agents, and works through them until they are done. It uses far more tokens than a normal turn, and it is separate from Effort: it stays on at any level. Needs a Claude Code version that has it.",
     section: "provider:claude",
-    group: "Behaviour",
+    group: "Ultracode",
     kind: { type: "boolean" },
     defaultValue: false,
     appliesAt: "server-restart",
@@ -1168,7 +1160,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "Permissions",
     description: "How much a new OpenCode thread may do without asking.",
     section: "provider:opencode",
-    group: "New threads",
+    group: "Defaults",
     kind: {
       type: "enum",
       choices: [
@@ -1186,7 +1178,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "Model",
     description: "The model a new OpenCode thread starts with, when neither the request nor the project names one.",
     section: "provider:opencode",
-    group: "New threads",
+    group: "Defaults",
     kind: { type: "string", placeholder: "the provider's own default", source: "model", providerKind: "opencode" },
     defaultValue: undefined,
     fallback: { resolver: "providerModel" },
@@ -1196,7 +1188,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "Effort",
     description: "The reasoning effort a new OpenCode thread starts at, for models that take one.",
     section: "provider:opencode",
-    group: "New threads",
+    group: "Defaults",
     kind: { type: "string", placeholder: "the provider's own default", source: "effort", providerKind: "opencode" },
     defaultValue: undefined,
     fallback: { key: "thinkingEffort" },
@@ -1216,7 +1208,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.opencode.webFetch",
     label: "Moxen's web_fetch",
-    description: "Give OpenCode threads Moxen's web_fetch, which reads a page as text and loads it in a browser when a plain request cannot (Web tools, on the Turns tab).",
+    description: "Give OpenCode threads Moxen's web_fetch, which reads a page as text and loads it in a browser when a plain request cannot (it follows the global Web tools settings).",
     section: "provider:opencode",
     group: "Tools",
     kind: { type: "boolean" },
@@ -1261,7 +1253,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     description:
       "Replace the base system prompt OpenCode picks for the model's family with Moxen's, the one the Moxen Harness works from, written for OpenCode's tools. Your AGENTS.md files, skills, MCP guidance and Moxen's runtime instructions still apply, and an agent you gave your own `system` keeps it.",
     section: "provider:opencode",
-    group: "Tools",
+    group: "Prompt",
     kind: { type: "boolean" },
     defaultValue: true,
     appliesAt: "provider-restart",
@@ -1353,7 +1345,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "Permissions",
     description: "How much a new Moxen Harness thread may do without asking.",
     section: "provider:harness",
-    group: "New threads",
+    group: "Defaults",
     kind: {
       type: "enum",
       choices: [
@@ -1371,7 +1363,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "Model",
     description: "The model a new Moxen Harness thread starts with, when neither the request nor the project names one.",
     section: "provider:harness",
-    group: "New threads",
+    group: "Defaults",
     kind: { type: "string", placeholder: "the provider's own default", source: "model", providerKind: "harness" },
     defaultValue: undefined,
     fallback: { resolver: "providerModel" },
@@ -1381,7 +1373,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "Effort",
     description: "The reasoning effort a new Moxen Harness thread starts at, for models that take one.",
     section: "provider:harness",
-    group: "New threads",
+    group: "Defaults",
     kind: { type: "string", placeholder: "the provider's own default", source: "effort", providerKind: "harness" },
     defaultValue: undefined,
     fallback: { key: "thinkingEffort" },
@@ -1401,7 +1393,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.harness.webFetch",
     label: "Moxen's web_fetch",
-    description: "Give Moxen Harness threads Moxen's web_fetch, which reads a page as text and loads it in a browser when a plain request cannot (Web tools, on the Turns tab).",
+    description: "Give Moxen Harness threads Moxen's web_fetch, which reads a page as text and loads it in a browser when a plain request cannot (it follows the global Web tools settings).",
     section: "provider:harness",
     group: "Tools",
     kind: { type: "boolean" },
@@ -1447,7 +1439,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "Requests at once",
     description: "How many requests a model server takes at the same time, for profiles that do not say (a profile's own 'Requests at once' wins). Subagents, summaries and titles queue behind it. A single-GPU llama.cpp server is usually 1; /btw is refused while a turn runs on a server with one slot.",
     section: "provider:harness",
-    group: "Concurrency",
+    group: "Sessions",
     kind: { type: "integer", min: 1, max: 64, presets: [1, 2, 3, 4, 6, 8, 12, 16], ends: { low: "Fewer", high: "More" } },
     defaultValue: undefined,
     fallback: { text: "No limit" },
@@ -1488,7 +1480,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     description:
       "Where the Moxen Harness's web_search looks. DuckDuckGo needs no account but can ask for a human check if it sees many searches. Exa and Brave are hosted APIs that need a key (saved in the keychain; their plans are metered, so check what yours charges past its free allowance). SearXNG is an instance you run.",
     section: "provider:harness",
-    group: "Web",
+    group: "Web search",
     kind: {
       type: "enum",
       choices: [
@@ -1510,7 +1502,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
         label: `${name} key`,
         description: `The ${name} key, typed once and kept in the OS keychain; it never appears in the config file or on screen.`,
         section: "provider:harness",
-        group: "Web",
+        group: "Web search",
         kind: { type: "secret" },
         defaultValue: undefined,
         fallback: { resolver: "searchKey" },
@@ -1521,7 +1513,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
         label: `${name} key variable`,
         description: "Instead of saving a key: the NAME of an environment variable that holds it, as the Moxen server sees it. A saved key wins over this.",
         section: "provider:harness",
-        group: "Web",
+        group: "Web search",
         kind: { type: "string", placeholder: backend === "exa" ? "EXA_API_KEY" : "BRAVE_API_KEY" },
         defaultValue: undefined,
         fallback: { resolver: "searchKeyEnv" },
@@ -1534,7 +1526,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "Search key (single slot)",
     description: "Kept so older configs still load: the one slot Exa and Brave shared. It is read only while no service has a key of its own, for the service selected then; switching services on the page first files it under the one it was for.",
     section: "provider:harness",
-    group: "Web",
+    group: "Web search",
     hidden: true,
     kind: { type: "secret" },
     defaultValue: undefined,
@@ -1544,7 +1536,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "Search key variable (single slot)",
     description: "Kept so older configs still load: as the single key slot, for the environment variable's name.",
     section: "provider:harness",
-    group: "Web",
+    group: "Web search",
     hidden: true,
     kind: { type: "string", placeholder: "EXA_API_KEY" },
     defaultValue: undefined,
@@ -1554,7 +1546,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "SearXNG address",
     description: "The address of your SearXNG instance, e.g. http://localhost:8888. Its settings must allow the json format.",
     section: "provider:harness",
-    group: "Web",
+    group: "Web search",
     visibleWhen: { key: "providers.harness.webSearch", in: ["searxng"] },
     kind: { type: "string", placeholder: "http://localhost:8888" },
     defaultValue: undefined,
@@ -1562,9 +1554,9 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.harness.webBrowser",
     label: "Browser for web pages (Harness)",
-    description: "Kept so older configs still load: now 'Browser for web pages' on the Turns tab (web.browser), which every provider's web_fetch follows and which wins when set.",
+    description: "Kept so older configs still load: now the global 'Browser for web pages' (web.browser), which every provider's web_fetch follows and which wins when set.",
     section: "provider:harness",
-    group: "Web",
+    group: "Web search",
     hidden: true,
     kind: { type: "enum", choices: [choice("auto", "When needed"), choice("off", "Never")] },
     defaultValue: undefined,
@@ -1572,9 +1564,9 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.harness.webBrowserPath",
     label: "Browser program (Harness)",
-    description: "Kept so older configs still load: now 'Browser program' on the Turns tab (web.browserPath), which wins when set.",
+    description: "Kept so older configs still load: now the global 'Browser program' (web.browserPath), which wins when set.",
     section: "provider:harness",
-    group: "Web",
+    group: "Web search",
     hidden: true,
     kind: { type: "string", placeholder: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" },
     defaultValue: undefined,
@@ -1582,9 +1574,9 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.harness.webPrivateNetwork",
     label: "Web tools reach private networks (Harness)",
-    description: "Kept so older configs still load: opened private networks for the Moxen Harness's web tools only. Now 'Web tools reach private networks' on the Turns tab (web.privateNetwork), one switch for every provider, which wins when set.",
+    description: "Kept so older configs still load: opened private networks for the Moxen Harness's web tools only. Now the global 'Web tools reach private networks' (web.privateNetwork), one switch for every provider, which wins when set.",
     section: "provider:harness",
-    group: "Web",
+    group: "Web search",
     hidden: true,
     kind: { type: "boolean" },
     defaultValue: undefined,
@@ -1604,7 +1596,24 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
  * thread starts with, the tools, how long threads are handled, then whatever is
  * particular to that provider, and where it lives last.
  */
-const PROVIDER_GROUP_ORDER = ["New threads", "Tools", "Long threads", "Behaviour", "Concurrency", "Web", "Setup"];
+const PROVIDER_GROUP_ORDER = ["Defaults", "Tools", "Long threads", "Sessions", "Setup", "Output", "Ultracode", "Prompt", "Web search", "Model servers"];
+
+/** The Defaults tab in the order a new thread's choices are made: provider, model, effort, then permissions and checkout. */
+const DEFAULTS_ORDER = ["provider", "model", "speedMode", "thinkingEffort", "runtimeMode", "interactionMode", "threadEnvMode"];
+
+function orderDefaults(settings: readonly SettingDescriptor[]): readonly SettingDescriptor[] {
+  const out = [...settings];
+  const slots = out.flatMap((entry, at) => (entry.section === "defaults" ? [at] : []));
+  const rank = (entry: SettingDescriptor): number => {
+    const at = DEFAULTS_ORDER.indexOf(entry.key);
+    return at === -1 ? DEFAULTS_ORDER.length : at;
+  };
+  const sorted = slots.map((at) => out[at]!).sort((a, b) => rank(a) - rank(b));
+  slots.forEach((at, index) => {
+    out[at] = sorted[index]!;
+  });
+  return out;
+}
 
 function orderProviderGroups(settings: readonly SettingDescriptor[]): readonly SettingDescriptor[] {
   const out = [...settings];
@@ -1623,7 +1632,7 @@ function orderProviderGroups(settings: readonly SettingDescriptor[]): readonly S
   return out;
 }
 
-export const SETTINGS: readonly SettingDescriptor[] = orderProviderGroups(SETTINGS_IN_WRITTEN_ORDER);
+export const SETTINGS: readonly SettingDescriptor[] = orderDefaults(orderProviderGroups(SETTINGS_IN_WRITTEN_ORDER));
 
 const BY_KEY: ReadonlyMap<string, SettingDescriptor> = new Map(
   SETTINGS.map((descriptor) => [descriptor.key, descriptor]),
@@ -1896,7 +1905,7 @@ function settingPlace(from: SettingDescriptor, to: SettingDescriptor): string {
   return from.section === to.section ? `from '${to.label}'` : `from '${to.label}' on the ${SECTION_LABEL[to.section]} tab`;
 }
 
-/** The provider a Long threads row is on; undefined on the Turns tab. */
+/** The provider a Long threads row is on; undefined for the global one. */
 const longThreadKindOf = (descriptor: SettingDescriptor): LongThreadKind | undefined =>
   /^providers\.(claude|opencode|harness)\./.exec(descriptor.key)?.[1] as LongThreadKind | undefined;
 
@@ -1930,7 +1939,7 @@ const FALLBACK_RESOLVERS: Readonly<Record<FallbackResolver, (config: CliConfig, 
     const found = skillsDeliveryOf(config);
     return { value: found.value, label: formatSettingValue(descriptor, found.value), ...(found.key === null ? {} : { origin: `from ${found.key} in the config file` }) };
   },
-  /** A provider's 'Moxen's skills', unset: an older switch that kept them away, else the Turns tab's delivery (`providerSkillsOf`). */
+  /** A provider's 'Moxen's skills', unset: an older switch that kept them away, else the global delivery (`providerSkillsOf`). */
   providerSkills(config, descriptor) {
     const kind = /^providers\.(claude|opencode|harness)\./.exec(descriptor.key)?.[1] as SkillsProviderKind;
     const own = providerSkillsOf(config, kind);
@@ -1972,12 +1981,12 @@ const FALLBACK_RESOLVERS: Readonly<Record<FallbackResolver, (config: CliConfig, 
     // Nothing more to say than the picker's own "Provider's default".
     return undefined;
   },
-  /** Hand off, unset: the older key beside it, then the Turns tab, then Ask (`handoffModeFor`). */
+  /** Hand off, unset: the older key beside it, then the global setting, then Ask (`handoffModeFor`). */
   handoffMode(config, descriptor) {
     const found = handoffModeFor(config, longThreadKindOf(descriptor));
     return sourcedEffective(descriptor, found.value, found.key);
   },
-  /** Hand off at, unset: the older keys beside it, then the Turns tab, then half the window, whatever the unit (`handoffLineFor`). */
+  /** Hand off at, unset: the older keys beside it, then the global setting, then half the window, whatever the unit (`handoffLineFor`). */
   handoffLine(config, descriptor) {
     const found = handoffLineFor(config, longThreadKindOf(descriptor));
     return sourcedEffective(descriptor, lineText(found.value), found.key);
@@ -1988,7 +1997,7 @@ const FALLBACK_RESOLVERS: Readonly<Record<FallbackResolver, (config: CliConfig, 
     const found = compactionModeFor(config, kind);
     return sourcedEffective(descriptor, found.value, found.key);
   },
-  /** Compact at, unset: the older keys beside it, then the Turns tab, then 80%; or the provider's own line, which is not one Moxen draws. */
+  /** Compact at, unset: the older keys beside it, then the global setting, then 80%; or the provider's own line, which is not one Moxen draws. */
   compactLine(config, descriptor) {
     const kind = longThreadKindOf(descriptor);
     if (kind === undefined) return { value: lineText(DEFAULT_COMPACT_LINE), label: `${lineLabel(DEFAULT_COMPACT_LINE)} (Moxen Harness: 70%, 60% under 128K)` };

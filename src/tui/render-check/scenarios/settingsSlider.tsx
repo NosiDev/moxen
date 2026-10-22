@@ -76,13 +76,12 @@ export async function runSettingsSlider(): Promise<void> {
   };
   await settle();
   await act(async () => new Promise((resolve) => setTimeout(resolve, 200)));
-  await act(async () => setup.mockInput.pressTab());
-  await settle();
+  // Defaults is the tab after General.
   await act(async () => setup.mockInput.pressTab());
   await settle();
   const rows = setup.captureCharFrame().split("\n");
   const effortRow = rows.findIndex((row) => row.includes("Effort"));
-  if (effortRow < 0) fail("New threads has no Effort row");
+  if (effortRow < 0) fail("Defaults has no Effort row");
   await act(async () => setup.mockMouse.click(rows[effortRow]!.indexOf("Effort") + 1, effortRow));
   await settle();
   const opened = setup.captureCharFrame();
@@ -189,13 +188,12 @@ export async function runSettingsModelList(): Promise<void> {
   };
   await settle();
   await act(async () => new Promise((resolve) => setTimeout(resolve, 200)));
-  await act(async () => setup.mockInput.pressTab());
-  await settle();
+  // Defaults is the tab after General.
   await act(async () => setup.mockInput.pressTab());
   await settle();
   const rows = setup.captureCharFrame().split("\n");
   const modelRow = rows.findIndex((row) => /\bModel\b/.test(row) && !row.includes("backdrop"));
-  if (modelRow < 0) fail("New threads has no Model row");
+  if (modelRow < 0) fail("Defaults has no Model row");
   await act(async () => setup.mockMouse.click(rows[modelRow]!.indexOf("Model") + 1, modelRow));
   await settle();
   const opened = setup.captureCharFrame();

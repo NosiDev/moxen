@@ -97,7 +97,7 @@ async function runSettings(): Promise<void> {
   console.log("--- settings page ---");
   console.log(frame);
   // Every section is a tab down the left; the first one's settings show.
-  for (const expected of ["Settings", "config.json", "General", "Turns", "New threads", "Git and forges", "Claude Code", "Unknown folders"]) {
+  for (const expected of ["Settings", "config.json", "General", "Defaults", "Sessions", "Long threads", "Agent context", "Git and forges", "Claude Code", "Unknown folders"]) {
     if (!frame.includes(expected)) fail(`settings page is missing "${expected}"`);
   }
   if (frame.includes("Idle session lifetime")) fail("settings page shows another section's settings under General");
@@ -108,18 +108,26 @@ async function runSettings(): Promise<void> {
   const firstRow = generalRows.findIndex((row) => row.includes("Unknown folders"));
   if (tabRow < 0 || firstRow !== tabRow - 1) fail(`the first setting is on row ${firstRow}, its tab on row ${tabRow}: the tab should sit one row below, under the category heading`);
 
-  // Tab moves to the next section: Turns.
+  // Tab moves to the next section: Defaults. A model belongs to one provider: with no global Provider the global Model says it waits for one.
+  await act(async () => setup.mockInput.pressTab());
+  await setup.flush();
+  const newThreads = setup.captureCharFrame();
+  console.log("--- settings page, Defaults tab ---");
+  console.log(newThreads);
+  if (!newThreads.replace(/[│\s]+/g, " ").includes("Applies once Provider above names one")) fail("the global Model does not say it waits for a Provider");
+
+  // Then Sessions.
   await act(async () => setup.mockInput.pressTab());
   await setup.flush();
   const turns = setup.captureCharFrame();
-  console.log("--- settings page, Turns tab ---");
+  console.log("--- settings page, Sessions tab ---");
   console.log(turns);
-  if (!turns.includes("Idle session lifetime") || turns.includes("Unknown folders")) fail("tab did not switch the settings page to the Turns section");
+  if (!turns.includes("Idle session lifetime") || turns.includes("Unknown folders")) fail("tab did not switch the settings page to the Sessions section");
 
   // A duration is picked from its presets, never typed.
   const turnRows = turns.split("\n");
   const ttlRow = turnRows.findIndex((row) => row.includes("Idle session lifetime"));
-  if (ttlRow < 0) fail("Turns tab has no idle session lifetime row");
+  if (ttlRow < 0) fail("the Sessions tab has no idle session lifetime row");
   await act(async () => setup.mockMouse.click(turnRows[ttlRow]!.indexOf("Idle") + 1, ttlRow));
   await setup.flush();
   const ttl = setup.captureCharFrame();
@@ -145,8 +153,11 @@ async function runSettings(): Promise<void> {
   if (written.at(-1)?.key !== "sessionTtl" || written.at(-1)?.value !== "2h") fail(`picking a preset wrote ${JSON.stringify(written)}`);
 
   // Free text: a box that wraps and grows, with its keys and what empty means said under it.
-  // Idle session lifetime, continue at a limit, install skills, then extra instructions.
-  for (let step = 0; step < 3; step += 1) await act(async () => setup.mockInput.pressArrow("down"));
+  // Past Long threads to Agent context: Moxen's skills, then extra instructions.
+  for (let step = 0; step < 2; step += 1) await act(async () => setup.mockInput.pressTab());
+  await setup.flush();
+  if (!setup.captureCharFrame().includes("Extra instructions")) fail("Agent context does not hold the extra instructions");
+  await act(async () => setup.mockInput.pressArrow("down"));
   await act(async () => setup.mockInput.pressEnter());
   await act(async () => new Promise((resolve) => setTimeout(resolve, 250)));
   await setup.flush();
@@ -166,15 +177,7 @@ async function runSettings(): Promise<void> {
   await act(async () => setup.mockInput.pressEscape());
   await act(async () => new Promise((resolve) => setTimeout(resolve, 150)));
   await setup.flush();
-  for (let step = 0; step < 3; step += 1) await act(async () => setup.mockInput.pressArrow("up"));
-
-  // A model belongs to one provider: with no global Provider the global Model says it waits for one.
-  await act(async () => setup.mockInput.pressTab());
-  await setup.flush();
-  const newThreads = setup.captureCharFrame();
-  console.log("--- settings page, New threads tab ---");
-  console.log(newThreads);
-  if (!newThreads.replace(/[│\s]+/g, " ").includes("Applies once Provider above names one")) fail("the global Model does not say it waits for a Provider");
+  await act(async () => setup.mockInput.pressArrow("up"));
 
   // The later sections: a restart-only setting says so, and a boolean
   // flips in place on click.
@@ -205,7 +208,7 @@ async function runSettings(): Promise<void> {
   await act(async () => new Promise((resolve) => setTimeout(resolve, 150)));
   await setup.flush();
 
-  // The page runs New threads, Tools, Long threads, Behaviour, Setup: walk the whole of it.
+  // The page runs Defaults, Tools, Long threads, Sessions, Setup, Output, Ultracode: walk the whole of it.
   const claudeFrames: string[] = [];
   for (let step = 0; step < 20; step += 1) {
     await act(async () => setup.mockInput.pressArrow("down"));

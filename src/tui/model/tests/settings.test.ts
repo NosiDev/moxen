@@ -347,17 +347,17 @@ describe("what Default names", () => {
   const effective = (key: string, config: CliConfig = DEFAULT_CONFIG) => describeSettings(config).find((entry) => entry.descriptor.key === key)?.effective;
 
   it("follows a provider's setting to the global one, and says where it is", () => {
-    expect(effective("providers.claude.runtimeMode")).toEqual({ value: "full-access", label: "Full access", origin: "from 'Permissions' on the New threads tab" });
+    expect(effective("providers.claude.runtimeMode")).toEqual({ value: "full-access", label: "Full access", origin: "from 'Permissions' on the Defaults tab" });
     expect(effective("providers.claude.runtimeMode", normalizeConfig({ runtimeMode: "approval-required" }))?.label).toBe("Supervised");
     expect(effective("providers.claude.runtimeMode", normalizeConfig({ providers: { claude: { runtimeMode: "auto" } } }))).toBeUndefined();
     const pick = control("providers.claude.runtimeMode");
-    expect(pick.kind === "pick" && pick.options[0]).toMatchObject({ value: "", label: "Default", description: "Full access, from 'Permissions' on the New threads tab" });
+    expect(pick.kind === "pick" && pick.options[0]).toMatchObject({ value: "", label: "Default", description: "Full access, from 'Permissions' on the Defaults tab" });
     expect(settingValueLabel(settingDescriptor("providers.claude.runtimeMode")!, undefined, pick)).toBe("Default (Full access)");
   });
 
   it("works out a hand-off line the way the server does, whatever its unit", () => {
     expect(effective("longThreads.handoffAt")).toEqual({ value: "50%", label: "50% of the window" });
-    expect(effective("providers.claude.handoffAt", normalizeConfig({ longThreads: { handoffAt: "40%" } }))).toMatchObject({ label: "40% of the window", origin: "from 'Hand off at' on the Turns tab" });
+    expect(effective("providers.claude.handoffAt", normalizeConfig({ longThreads: { handoffAt: "40%" } }))).toMatchObject({ label: "40% of the window", origin: "from 'Hand off at' on the Long threads tab" });
     expect(effective("providers.claude.handoffAt", normalizeConfig({ ui: { autoHandoffTokens: 131_072 } }))).toMatchObject({ value: "128K", label: "128K tokens" });
     // A provider's own (older) share wins over the global size.
     expect(effective("providers.claude.handoffAt", normalizeConfig({ ui: { autoHandoffTokens: 131_072 }, providers: { claude: { autoHandoffPercent: 40 } } }))).toMatchObject({ value: "40%", label: "40% of the window" });

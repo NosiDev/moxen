@@ -212,7 +212,7 @@ describe("the settings page", () => {
     expect(view(config, "providers.claude.handoffAt").effective).toEqual({ value: "64K", label: "64K tokens", origin: "from ui.autoHandoffTokens in the config file" });
     expect(view(config, "providers.claude.compaction").effective).toMatchObject({ value: "provider", label: "Claude Code" });
     expect(view(config, "providers.claude.compactAt").effective?.label).toBe("Claude Code's own, tuned per model");
-    expect(view(normalizeConfig({ longThreads: { handoffAt: "40%" } }), "providers.opencode.handoffAt").effective).toEqual({ value: "40%", label: "40% of the window", origin: "from 'Hand off at' on the Turns tab" });
+    expect(view(normalizeConfig({ longThreads: { handoffAt: "40%" } }), "providers.opencode.handoffAt").effective).toEqual({ value: "40%", label: "40% of the window", origin: "from 'Hand off at' on the Long threads tab" });
   });
 
   it("takes an older key through `config set` and writes the one that replaced it too", () => {

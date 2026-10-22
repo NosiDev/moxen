@@ -88,7 +88,7 @@ describe("the page says when a model setting does not fit", () => {
 
   it("names the global Model on a provider's tab when it reaches that provider", () => {
     const effective = (config: Record<string, unknown>) => describeSettings(normalizeConfig(config)).find((entry) => entry.descriptor.key === "providers.claude.model")!.effective;
-    expect(effective({ provider: "claudeAgent", model: "claude-global" })).toMatchObject({ value: "claude-global", origin: "from 'Model' on the New threads tab" });
+    expect(effective({ provider: "claudeAgent", model: "claude-global" })).toMatchObject({ value: "claude-global", origin: "from 'Model' on the Defaults tab" });
     expect(effective({ model: "claude-global" })).toBeUndefined();
   });
 

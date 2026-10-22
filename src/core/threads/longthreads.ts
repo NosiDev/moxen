@@ -162,7 +162,7 @@ const percentLine = (value: number | undefined): ThresholdLine | undefined => (v
 const tokensLine = (value: number | undefined): ThresholdLine | undefined => (value === undefined ? undefined : { tokens: value });
 const textLine = (value: string | undefined): ThresholdLine | undefined => (value === undefined ? undefined : (parseLine(value) ?? undefined));
 
-/** Hand off: the provider's tab, then the Turns tab, then Ask. */
+/** Hand off: the provider's tab, then the global setting, then Ask. */
 export function handoffModeFor(config: LongThreadConfig, kind: LongThreadKind | undefined): Sourced<AutoHandoffMode> {
   const own = kind === undefined ? undefined : config.providers?.[kind];
   const candidates: Array<readonly [string, unknown]> = [
@@ -175,7 +175,7 @@ export function handoffModeFor(config: LongThreadConfig, kind: LongThreadKind | 
 
 /**
  * Hand off at, whatever the unit: the model's own size, the provider's tab,
- * the Turns tab, half the window. Older keys sit at their own level, a size
+ * the global setting, half the window. Older keys sit at their own level, a size
  * before a share as it always was, so an older config resolves as before.
  */
 export function handoffLineFor(config: LongThreadConfig, kind: LongThreadKind | undefined, model?: string): Sourced<ThresholdLine> {
@@ -220,7 +220,7 @@ export function compactionModeFor(config: Pick<CliConfig, "providers">, kind: Lo
 }
 
 /**
- * Compact at, whatever the unit: the provider's tab, the Turns tab, 80%.
+ * Compact at, whatever the unit: the provider's setting, the global one, 80%.
  * Null where the line is not Moxen's to draw: off, OpenCode's own compaction
  * (its buffer, `compactBuffer`), Claude Code's own unless its tab names a size
  * (which becomes Claude Code's auto-compact window), and the Harness's own

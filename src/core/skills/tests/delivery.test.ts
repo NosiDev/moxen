@@ -64,7 +64,7 @@ describe("what a provider's tab says is in force", () => {
   });
 
   it("says why it is off", () => {
-    expect(describeProviderSkills(c({ skills: { moxen: "off" } }), "harness", true)).toBe("Off: 'Moxen's skills' on the Turns tab is Off.");
+    expect(describeProviderSkills(c({ skills: { moxen: "off" } }), "harness", true)).toBe("Off: the global 'Moxen's skills' is Off.");
     expect(describeProviderSkills(c({ providers: { opencode: { moxenSkills: false } } }), "opencode", true)).toBe("Off: switched off for this provider.");
     expect(describeProviderSkills(c({ installSkills: false, providers: { claude: { agentSkills: false } } }), "claude", true)).toBe("Off: providers.claude.agentSkills is off in the config file.");
   });

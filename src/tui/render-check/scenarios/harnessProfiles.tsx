@@ -104,29 +104,32 @@ export async function runHarnessProfiles(): Promise<void> {
   const harnessRow = sidebar.findIndex((row) => row.includes("MOXEN HARNESS") && row.includes("│"));
   if (harnessRow < 0) fail("the sidebar has no MOXEN HARNESS category");
   if (sidebar.some((row) => row.includes("Moxen Harness"))) fail("the Moxen Harness category also has a row of its own");
-  const firstPage = sidebar.findIndex((row, at) => at > harnessRow && row.includes("New threads"));
+  const firstPage = sidebar.findIndex((row, at) => at > harnessRow && row.includes("Defaults"));
   if (firstPage < 0) fail("the MOXEN HARNESS category has no first page under it");
-  await act(async () => setup.mockMouse.click(sidebar[firstPage]!.indexOf("New threads") + 1, firstPage));
+  await act(async () => setup.mockMouse.click(sidebar[firstPage]!.indexOf("Defaults") + 1, firstPage));
   await setup.flush();
   const tab = setup.captureCharFrame();
   console.log("--- harness tab ---");
   console.log(tab);
-  for (const expected of ["New threads", "Permissions"]) {
+  for (const expected of ["Defaults", "Permissions"]) {
     if (!tab.includes(expected)) fail(`the first Moxen Harness heading is missing "${expected}"`);
   }
-  if (tab.includes("Compact") || tab.includes("Web search")) fail("opening the first Moxen Harness page showed other pages' settings");
+  // "Web search" is also a page in the sidebar: only the settings pane, right of it, counts.
+  if (tab.includes("Compact") || tab.split("\n").some((row) => row.indexOf("Web search") > 28)) fail("opening the first Moxen Harness page showed other pages' settings");
   if (tab.includes("next start")) fail("the harness settings still say they need a restart, but the driver reads them on every turn");
 
   // A row of the sidebar's left column by its name, whatever tree glyph or marker it carries.
   const pageName = (line: string) => line.slice(0, 28).replace(/[│▌├└]/g, "").trim();
   // Each heading in the sidebar shows only its own settings.
   const children = setup.captureCharFrame().split("\n");
-  for (const heading of ["New threads", "Tools", "Long threads", "Concurrency", "Web", "Model servers"]) {
-    if (!children.some((row) => pageName(row) === heading)) fail(`the sidebar does not list "${heading}" under Moxen Harness`);
+  for (const heading of ["Defaults", "Tools", "Long threads", "Sessions", "Web search", "Model servers"]) {
+    if (!children.some((row, at) => at > harnessRow && pageName(row) === heading)) fail(`the sidebar does not list "${heading}" under Moxen Harness`);
   }
   const openHeading = async (name: string) => {
     const rows = setup.captureCharFrame().split("\n");
-    const row = rows.findIndex((line) => pageName(line) === name);
+    // Below the Moxen Harness heading: the global tabs above share some of these names.
+    const below = rows.findIndex((line) => line.includes("MOXEN HARNESS"));
+    const row = rows.findIndex((line, at) => at > below && pageName(line) === name);
     await act(async () => setup.mockMouse.click(rows[row]!.indexOf(name) + 1, row));
     await act(async () => new Promise((resolve) => setTimeout(resolve, 60)));
     await setup.flush();
@@ -135,10 +138,10 @@ export async function runHarnessProfiles(): Promise<void> {
   const longThreads = await openHeading("Long threads");
   for (const expected of ["Compact at", "Hand off at"]) if (!longThreads.includes(expected)) fail(`Long threads is missing "${expected}"`);
   if (longThreads.includes("Permissions")) fail("Long threads still shows other headings' settings");
-  const web = await openHeading("Web");
+  const web = await openHeading("Web search");
   if (!web.includes("Web search") && !web.includes("Web tools")) fail("the Web heading shows none of the web settings");
   if (web.includes("Permissions") || web.includes("Compaction")) fail("the Web heading still shows other headings' settings");
-  for (const name of ["Tools", "Concurrency"]) {
+  for (const name of ["Tools", "Sessions"]) {
     if (!(await openHeading(name)).includes(name)) fail(`the ${name} heading shows nothing of its own`);
   }
 
@@ -174,7 +177,7 @@ export async function runHarnessProfiles(): Promise<void> {
   for (const expected of ["← Model servers", "└ Colab Qwen", "├ Endpoint", "├ Sampling", "└ Template quirks"]) {
     if (!sideRows.some((row) => row.includes(expected) && row.indexOf(expected) < 28)) fail(`the sidebar inside a profile is missing "${expected}"`);
   }
-  if (sideRows.some((row) => row.includes("Concurrency") && row.indexOf("Concurrency") < 28)) fail("the sidebar inside a profile still lists the other Moxen Harness pages");
+  if (sideRows.some((row) => row.includes("Web search") && row.indexOf("Web search") < 28)) fail("the sidebar inside a profile still lists the other Moxen Harness pages");
   // A heading in the sidebar narrows the editor to it, and tab steps through them.
   const samplingRow = sideRows.findIndex((row) => row.includes("├ Sampling") && row.indexOf("├ Sampling") < 28);
   await act(async () => setup.mockMouse.click(sideRows[samplingRow]!.indexOf("Sampling") + 1, samplingRow));
