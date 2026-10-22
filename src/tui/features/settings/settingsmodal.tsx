@@ -61,6 +61,8 @@ interface SettingItem {
   readonly entries?: readonly ListItemView[];
   /** Why the setting can do nothing right now: the card is greyed out and says so. */
   readonly unavailable?: string;
+  /** What the setting amounts to with everything else taken into account (`SettingView.inForce`). */
+  readonly inForce?: string;
 }
 
 /** The left column: section labels plus the selection bar and a gap. */
@@ -203,6 +205,7 @@ export function SettingsModal({
         control: settingControl(view.descriptor, view.value, snapshot.settings, providers),
         ...(view.items ? { entries: view.items } : {}),
         ...(view.unavailable ? { unavailable: view.unavailable } : {}),
+        ...(view.inForce ? { inForce: view.inForce } : {}),
       }));
   }, [snapshot, tab, pageGroup, providers]);
 
@@ -952,6 +955,7 @@ function SettingCard({
       ) : null}
       <text content={prose(descriptor.description, item.unavailable !== undefined ? COLOR.faint : COLOR.dim)} bg={bg} wrapMode="word" selectable={false} />
       {tag !== "" && !inline ? <text fg={COLOR.faint} bg={bg} selectable={false}>{`Applies: ${tag.trim()}`}</text> : null}
+      {item.inForce !== undefined ? <text fg={COLOR.dim} bg={bg} wrapMode="word" selectable={false}>{item.inForce}</text> : null}
       {item.unavailable !== undefined ? <text fg={COLOR.warn} bg={bg} wrapMode="word" selectable={false}>{item.unavailable}</text> : null}
       {item.unavailable === undefined && (item.control.kind === "pick" || item.control.kind === "order") && item.control.warning !== undefined ? <text fg={COLOR.warn} bg={bg} wrapMode="word" selectable={false}>{item.control.warning}</text> : null}
     </box>

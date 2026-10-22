@@ -16,7 +16,7 @@
  * own compatibility surface and stay there.
  */
 import { locateBundledSkills } from "../providers/bundledskills.js";
-import { prepareProjectSkills } from "../skills/projectskills.js";
+import { resolveSessionSkills, type SessionSkills } from "../skills/delivery.js";
 import * as Effect from "effect/Effect";
 import { mkdir, readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -140,7 +140,7 @@ interface InstructionsUpdate {
 }
 
 /** The part of a session setup `ensureDriverSession` takes. */
-function sessionStart(setup: { mcpServers: McpServerSpec[]; disabledMcpTools: string[]; disabledNativeTools: string[]; moxenPrompt: boolean; checklist: boolean; instructions: string; store: ThreadStore; moxenSkills: "project" | "served" | "none" }) {
+function sessionStart(setup: { mcpServers: McpServerSpec[]; disabledMcpTools: string[]; disabledNativeTools: string[]; moxenPrompt: boolean; checklist: boolean; instructions: string; store: ThreadStore; skills: SessionSkills; delegated: boolean }) {
   return {
     mcpServers: setup.mcpServers,
     disabledMcpTools: setup.disabledMcpTools,
@@ -149,7 +149,10 @@ function sessionStart(setup: { mcpServers: McpServerSpec[]; disabledMcpTools: st
     checklist: setup.checklist,
     instructions: setup.instructions,
     store: setup.store,
-    moxenSkills: setup.moxenSkills,
+    moxenSkills: setup.skills.mode,
+    ...(setup.skills.folder ? { moxenSkillsFolder: setup.skills.folder } : {}),
+    hiddenMoxenSkills: setup.skills.hidden,
+    delegated: setup.delegated,
   };
 }
 
@@ -173,7 +176,7 @@ async function sessionSetup(
   ctx: OperationContext,
   thread: StoredThread,
   instanceId: string = thread.modelSelection.instanceId,
-): Promise<{ mcpServers: McpServerSpec[]; disabledMcpTools: string[]; disabledNativeTools: string[]; moxenPrompt: boolean; checklist: boolean; instructions: string; store: ThreadStore; instructionsUpdate: InstructionsUpdate | null; moxenSkills: "project" | "served" | "none" }> {
+): Promise<{ mcpServers: McpServerSpec[]; disabledMcpTools: string[]; disabledNativeTools: string[]; moxenPrompt: boolean; checklist: boolean; instructions: string; store: ThreadStore; instructionsUpdate: InstructionsUpdate | null; skills: SessionSkills; delegated: boolean }> {
   const project = await projectById(ctx.storeRoot, thread.projectId);
   const workspaceRoot = project?.workspaceRoot ?? (thread.env.path.trim() || null);
   const delegation = await delegationOf(ctx.store, thread.id);
@@ -240,28 +243,21 @@ async function sessionSetup(
     instructions: plan.systemPrompt,
     // So the session is watched between turns (background turns and tasks).
     store: ctx.store,
-    moxenSkills: await moxenSkillsMode(ctx, thread, delegation !== null),
+    skills: await resolveSessionSkills({
+      config: ctx.config,
+      kind,
+      workspaceRoot,
+      workingDirectory: thread.env.path,
+      delegated: delegation !== null,
+      orchestration: reach.orchestration,
+      bundledDir: locateBundledSkills(),
+    }),
+    delegated: delegation !== null,
     instructionsUpdate:
       plan.update === null
         ? null
         : { text: plan.update, delivered: () => record({ baseline: plan.next.baseline, delivered: plan.update! }) },
   };
-}
-
-/**
- * How moxen's own skills reach a session (`ProviderSessionStartInput.moxenSkills`).
- * A delegated task gets none: it has none of the tools they describe. Otherwise
- * they are put in the project's own skills folder when it has one, which the
- * provider reads itself; with no such folder (or the setting off) the provider is
- * pointed at the bundled folder instead. Never both, so no skill loads twice.
- */
-async function moxenSkillsMode(ctx: OperationContext, thread: StoredThread, isDelegated: boolean): Promise<"project" | "served" | "none"> {
-  if (isDelegated) return "none";
-  if (ctx.config.installSkills === false) return "served";
-  const workingDirectory = thread.env.path.trim();
-  if (workingDirectory === "") return "served";
-  const prepared = await prepareProjectSkills({ workingDirectory, bundledDir: locateBundledSkills() });
-  return prepared.target === null ? "served" : "project";
 }
 
 /** Whether two out-of-process specs reach the same server the same way. */

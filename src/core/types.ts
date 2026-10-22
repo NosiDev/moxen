@@ -34,11 +34,12 @@ export interface CliConfig {
    */
   autoContinueAtUsageLimit?: boolean;
   /**
-   * Put moxen's own skills into a project that already has a `.claude` or
-   * `.agents` folder (`core/skills/projectskills.ts`). On unless set to false;
-   * off, the providers are pointed at the bundled folder instead.
+   * The older switch for copying moxen's own skills into a project. Read only
+   * while `skills.moxen` is unset: false there means serve (`core/skills/delivery.ts`).
    */
   installSkills?: boolean;
+  /** How Moxen's own skills reach sessions (`core/skills/delivery.ts`). */
+  skills?: SkillsConfig;
   /**
    * Days after a thread is archived or deleted before its `moxen/*` branch is
    * deleted, locally and (when it was pushed) on `origin`: only a branch already
@@ -133,6 +134,8 @@ export interface HarnessProviderConfig {
   moxenTools?: boolean;
   /** Moxen's delegation tools (delegate, task status, models, cancel). Unset: `moxenTools`, else on. */
   orchestration?: boolean;
+  /** Moxen's own skills on this provider: false keeps them away, true serves them even with `skills.moxen` off. Unset: follows `skills.moxen`. */
+  moxenSkills?: boolean;
   /** Moxen's `web_fetch`. Unset: `moxenTools`, else on. */
   webFetch?: boolean;
   /** MCP servers this provider does not get, as comma-separated names. Unset: it gets every server the server entry itself offers it. Settings key: `providers.<kind>.mcpExclude`. */
@@ -178,6 +181,11 @@ export interface HarnessProviderConfig {
 export type KeyedSearchBackend = "exa" | "brave";
 
 /** How Moxen's web tools reach the web, for every provider: the Harness's own tools and the `web_fetch` Moxen offers Claude Code and OpenCode. */
+export interface SkillsConfig {
+  /** Copied into the project (served when it has no skills folder), served from Moxen's folder, or off. Unset: `installSkills`, else copy. */
+  moxen?: "copy" | "serve" | "off";
+}
+
 export interface WebConfig {
   /** `auto`: load a page in an installed Chrome or Chromium when a plain request cannot read it; `off`: never start one. */
   browser?: "auto" | "off";
@@ -292,6 +300,8 @@ export interface OpencodeProviderConfig {
   moxenTools?: boolean;
   /** Moxen's delegation tools (delegate, task status, models, cancel). Unset: `moxenTools`, else on. */
   orchestration?: boolean;
+  /** Moxen's own skills on this provider: false keeps them away, true serves them even with `skills.moxen` off. Unset: follows `skills.moxen`. */
+  moxenSkills?: boolean;
   /** Moxen's `web_fetch`. Unset: `moxenTools`, else on. */
   webFetch?: boolean;
   /** MCP servers this provider does not get, as comma-separated names. Unset: it gets every server the server entry itself offers it. Settings key: `providers.<kind>.mcpExclude`. */
@@ -313,7 +323,7 @@ export interface OpencodeProviderConfig {
   /** Thinking effort new threads on this provider start at. */
   thinkingEffort?: string;
   binaryPath?: string;
-  /** Tell spawned OpenCode servers about moxen's bundled skills. */
+  /** The older switch for serving moxen's skills to OpenCode; read only as a fallback for `moxenSkills` (`core/skills/delivery.ts`). */
   bundledSkills?: boolean;
   /** Whether spawned OpenCode servers compact on their own near the context limit. Unset: whatever OpenCode's own config says. */
   autoCompact?: boolean;
@@ -342,6 +352,8 @@ export interface ClaudeProviderConfig {
   moxenTools?: boolean;
   /** Moxen's delegation tools (delegate, task status, models, cancel). Unset: `moxenTools`, else on. */
   orchestration?: boolean;
+  /** Moxen's own skills on this provider: false keeps them away, true serves them even with `skills.moxen` off. Unset: follows `skills.moxen`. */
+  moxenSkills?: boolean;
   /** Moxen's `web_fetch`. Unset: `moxenTools`, else on. */
   webFetch?: boolean;
   /** MCP servers this provider does not get, as comma-separated names. Unset: it gets every server the server entry itself offers it. Settings key: `providers.<kind>.mcpExclude`. */
@@ -366,7 +378,7 @@ export interface ClaudeProviderConfig {
   thinkingDisplay?: "summarized" | "omitted";
   promptSuggestions?: boolean;
   partialMessages?: boolean;
-  /** Serve skills from `.agents/skills` (and moxen's bundled ones) to Claude Code with the `agent-skills` mod. */
+  /** Serve the user's own skills in `.agents/skills` to Claude Code with the `agent-skills` mod. Moxen's skills reach it either way (`skills.moxen`). */
   agentSkills?: boolean;
   /** Tokens at which Claude Code auto-compacts (100000 to 1000000); unset leaves its own default for the model. */
   autoCompactWindow?: number;

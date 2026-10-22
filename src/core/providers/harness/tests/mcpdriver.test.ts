@@ -168,7 +168,7 @@ describe("MCP tools in a session", () => {
 
   it("refuses, with the reason, a tool that needs approval in a session nobody can answer, and still runs a read-only one", async () => {
     const { driver, requests, events } = driverWith([call("c1", "mcp__files__write_thing", {}), call("c2", "mcp__files__echo", { text: "ok" }), answer("done")]);
-    await start(driver, { mcpServers: [stdioSpec(dir, "files")], runtimeMode: "approval-required", moxenSkills: "none" });
+    await start(driver, { mcpServers: [stdioSpec(dir, "files")], runtimeMode: "approval-required", moxenSkills: "none", delegated: true });
     await send(driver, "go");
     expect(opened(events)).toHaveLength(0);
     expect(lastResult(requests[1]!)).toMatch(/Calling mcp__files__write_thing needs approval .* without anyone to ask/);

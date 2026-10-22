@@ -43,4 +43,17 @@ describe("discoverSkills", () => {
     write(path.join(dir, "work", ".claude", "skills"), "plain", "Does the plain thing.\n\nMore.");
     expect(discoverSkills({ cwd: path.join(dir, "work"), home: path.join(dir, "home"), bundledDir: null, mode: "project" })).toMatchObject([{ name: "plain", description: "Does the plain thing." }]);
   });
+
+  it("leaves out Moxen's skills it is told to hide, bundled or copied, but never a user's skill of that name", () => {
+    const cwd = path.join(dir, "work");
+    const home = path.join(dir, "home");
+    const bundled = path.join(dir, "bundled");
+    write(bundled, "moxen-research", "---\ndescription: research\n---\nbody");
+    write(bundled, "moxen-threads", "---\ndescription: threads\n---\nbody");
+    write(path.join(cwd, ".claude", "skills"), "moxen-orchestrate", "---\ndescription: copy\n---\nbody");
+    fs.writeFileSync(path.join(cwd, ".claude", "skills", "moxen-orchestrate", ".moxen-skill.json"), "{}");
+    write(path.join(home, ".agents", "skills"), "mine", "---\nname: moxen-hidden\ndescription: mine\n---\nbody");
+    const found = discoverSkills({ cwd, home, bundledDir: bundled, mode: "served", hidden: ["moxen-orchestrate", "moxen-research", "moxen-hidden"] });
+    expect(found.map((skill) => skill.name)).toEqual(["moxen-hidden", "moxen-threads"]);
+  });
 });

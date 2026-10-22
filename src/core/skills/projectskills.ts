@@ -9,6 +9,8 @@
  *   else `.agents`     -> `.agents/skills`   (OpenCode itself; Claude through the `agent-skills` mod)
  *   neither            -> nothing is written; the providers are told about the bundled folder instead
  *
+ * Whether to copy at all is `skills.moxen` (`core/skills/delivery.ts`); serve or off takes the copies back out.
+ *
  * Rules that keep a skill from being loaded twice, or a user's own from being touched:
  *   - a skill the user already has under the same name — in the project's other skills
  *     folder, or in `~/.claude/skills` or `~/.agents/skills` — is left alone and not installed;
@@ -49,9 +51,11 @@ export interface PrepareSkillsResult {
   readonly removed: readonly string[];
   /** Skills left alone because the user already has one by that name. */
   readonly skipped: readonly string[];
+  /** Every copy of Moxen's in the target once done, by folder name: new, refreshed and already current. */
+  readonly managed: readonly string[];
 }
 
-const NOTHING: PrepareSkillsResult = { target: null, installed: [], updated: [], removed: [], skipped: [] };
+const NOTHING: PrepareSkillsResult = { target: null, installed: [], updated: [], removed: [], skipped: [], managed: [] };
 
 async function isDirectory(target: string): Promise<boolean> {
   return (await stat(target).catch(() => null))?.isDirectory() === true;
@@ -214,8 +218,31 @@ export async function prepareProjectSkills(input: PrepareSkillsInput): Promise<P
     }
 
     await updateGitExclude(workingDirectory, managed.map((name) => `${folder}/skills/${name}`)).catch(() => undefined);
-    return { target: folder, installed, updated, removed, skipped };
+    return { target: folder, installed, updated, removed, skipped, managed };
   } catch {
     return NOTHING;
+  }
+}
+
+/**
+ * Takes Moxen's copies back out of a project (`skills.moxen` serve or off): only folders it marked as its
+ * own, from both skills folders, and its block in `.git/info/exclude`. The user's own skills stay. Returns
+ * what went; nothing throws.
+ */
+export async function removeProjectSkills(workingDirectory: string): Promise<readonly string[]> {
+  try {
+    const removed: string[] = [];
+    for (const folder of [".claude", ".agents"] as const) {
+      const dir = path.join(workingDirectory, folder, "skills");
+      for (const name of await skillNames(dir)) {
+        if ((await readMarker(path.join(dir, name))) === null) continue;
+        await rm(path.join(dir, name), { recursive: true, force: true });
+        removed.push(name);
+      }
+    }
+    if (removed.length > 0) await updateGitExclude(workingDirectory, []).catch(() => undefined);
+    return removed;
+  } catch {
+    return [];
   }
 }

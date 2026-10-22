@@ -45,6 +45,8 @@ import { MCP_RUNNER_SETTING, MCP_SERVERS_SETTING } from "./mcpschema.js";
 import { describeMcpServers } from "./mcpview.js";
 import { HARNESS_PROFILES_SETTING } from "./providers/harness/profileschema.js";
 import { describeHarnessProfiles } from "./providers/harness/profileview.js";
+import { describeProviderSkills, providerSkillsOf, skillsDeliveryOf, type SkillsProviderKind } from "./skills/delivery.js";
+import { moxenToolsOf } from "./mcp.js";
 import { driverKindOfInstance, type CliConfig } from "./types.js";
 
 /** Where a setting shows up. Order is the order a settings page renders. */
@@ -278,7 +280,7 @@ export type SettingFallback =
   | { readonly text: string }
   | { readonly resolver: FallbackResolver };
 
-export type FallbackResolver = "handoffMode" | "handoffLine" | "compactionMode" | "compactLine" | "providerModel" | "webBrowser" | "privateNetwork" | "searchKey" | "searchKeyEnv" | "moxenTools";
+export type FallbackResolver = "handoffMode" | "handoffLine" | "compactionMode" | "compactLine" | "providerModel" | "webBrowser" | "privateNetwork" | "searchKey" | "searchKeyEnv" | "moxenTools" | "skillsDelivery" | "providerSkills";
 
 /** What is in force for an unset setting, worked out in core so a client only draws it. */
 export interface SettingEffective {
@@ -318,6 +320,25 @@ const COMPACTION_CHOICE_LABEL: Readonly<Record<Exclude<CompactionMode, "provider
 
 /** The sentence every Long threads group ends on, so the two lines are never read apart. */
 const LINES_INTERACT = "Hand-off is offered first when its line is lower than compaction's; past both, the lower one acts first.";
+
+/**
+ * A provider's own switch for Moxen's skills, three-way: unset follows 'Moxen's skills' on the Turns tab
+ * (`core/skills/delivery.ts`); the page shows what is in force beneath it.
+ */
+function moxenSkillsSetting(kind: "claude" | "opencode" | "harness"): SettingDescriptor {
+  const name = { claude: "Claude Code", opencode: "OpenCode", harness: "Moxen Harness" }[kind];
+  return {
+    key: `providers.${kind}.moxenSkills`,
+    label: "Moxen's skills",
+    description: `Whether ${name} threads get the skills Moxen ships (threads, handoff, orchestrate and the rest). Default follows 'Moxen's skills' on the Turns tab; Off keeps them from this provider, also when the project has copies; On serves them to it even when that is Off. Without Delegation tools, the skills that drive them stay out either way.`,
+    section: `provider:${kind}`,
+    group: "Tools",
+    kind: { type: "boolean" },
+    defaultValue: undefined,
+    fallback: { resolver: "providerSkills" },
+    appliesAt: "next-session",
+  };
+}
 
 /**
  * One Long threads group per provider, the same rows on every tab: who
@@ -544,12 +565,31 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     defaultValue: 14,
   },
   {
-    key: "installSkills",
-    label: "Install Moxen's skills in projects",
+    key: "skills.moxen",
+    label: "Moxen's skills",
     description:
-      "Put the skills Moxen ships into a project that already has a `.claude` or `.agents` folder (`.claude/skills` when it has both), so both providers find them there. Copies are kept current, listed in `.git/info/exclude`, and never replace a skill you already have. Off, or with neither folder, the providers are pointed at Moxen's own folder instead.",
+      "How the skills Moxen ships reach a thread. Copy: into a project that already has a `.claude` or `.agents` folder (`.claude/skills` when it has both), where every provider finds them; copies are kept current, listed in `.git/info/exclude`, and never replace a skill you already have, and a project with neither folder is served instead. Serve: each provider is pointed at Moxen's own folder and nothing is written into the project (copies Moxen made there are taken out). Off: no thread gets them. A provider's tab can switch them off for it alone, and a project's moxen.json can choose (`\"skills\": { \"moxen\": \"serve\" }`).",
     section: "turns",
     group: "Agent",
+    kind: {
+      type: "enum",
+      choices: [
+        choice("copy", "Copy into the project", "Into its .claude or .agents folder; served when it has neither."),
+        choice("serve", "Serve from Moxen", "Nothing written into the project."),
+        choice("off", "Off", "No thread gets them, unless a provider's tab turns them on."),
+      ],
+    },
+    defaultValue: undefined,
+    fallback: { resolver: "skillsDelivery" },
+    appliesAt: "next-session",
+  },
+  {
+    key: "installSkills",
+    label: "Install Moxen's skills in projects",
+    description: "Kept so older configs still load: off meant serve, which is what 'Moxen's skills' reads while it is unset.",
+    section: "turns",
+    group: "Agent",
+    hidden: true,
     kind: { type: "boolean" },
     defaultValue: true,
     appliesAt: "next-session",
@@ -870,6 +910,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     fallback: { resolver: "moxenTools" },
     appliesAt: "next-session",
   },
+  moxenSkillsSetting("claude"),
   {
     key: "providers.claude.webFetch",
     label: "Moxen's web_fetch",
@@ -1003,9 +1044,9 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   },
   {
     key: "providers.claude.agentSkills",
-    label: "Skills from .agents/skills",
+    label: "Your skills from .agents/skills",
     description:
-      "Offer the skills in a project's or your home `.agents/skills`, and moxen's own, to Claude Code through a mod, so none has to be copied into `.claude/skills`. A skill `.claude/skills` already has is left to Claude Code. Needs Claude Code 2.1.287 or newer.",
+      "Offer the skills in a project's or your home `.agents/skills` to Claude Code, which reads only `.claude/skills`, through a mod. A skill `.claude/skills` already has is left to Claude Code. Moxen's own skills reach Claude Code either way ('Moxen's skills', under Tools). Needs Claude Code 2.1.287 or newer.",
     section: "provider:claude",
     group: "Behaviour",
     kind: { type: "boolean" },
@@ -1108,6 +1149,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     fallback: { resolver: "moxenTools" },
     appliesAt: "next-session",
   },
+  moxenSkillsSetting("opencode"),
   {
     key: "providers.opencode.webFetch",
     label: "Moxen's web_fetch",
@@ -1230,13 +1272,13 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.opencode.bundledSkills",
     label: "Moxen's skills",
-    description:
-      "Offer the skills Moxen ships (threads, handoff, orchestrate and the rest) to the OpenCode servers it starts, through their `skills` config. Skills in a project's or your home `.agents/skills` need nothing: OpenCode reads those itself.",
+    description: "Kept so older configs still load: off, while Moxen's skills were served rather than copied, kept them from OpenCode, which is what 'Moxen's skills' under Tools reads while it is unset.",
     section: "provider:opencode",
     group: "Behaviour",
+    hidden: true,
     kind: { type: "boolean" },
     defaultValue: true,
-    appliesAt: "server-restart",
+    appliesAt: "next-session",
   },
 
   ...longThreadSettings("opencode"),
@@ -1291,6 +1333,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     fallback: { resolver: "moxenTools" },
     appliesAt: "next-session",
   },
+  moxenSkillsSetting("harness"),
   {
     key: "providers.harness.webFetch",
     label: "Moxen's web_fetch",
@@ -1763,6 +1806,8 @@ export interface SettingView {
   readonly order?: readonly WebOrderEntry[];
   /** What applies while the setting is unset (from its `fallback`), so a page's Default can name it. Absent when set, or when nothing more is known. */
   readonly effective?: SettingEffective;
+  /** What the setting amounts to with everything else taken into account, set or not ("Served by Moxen from its own folder"); a page shows it beneath. */
+  readonly inForce?: string;
 }
 
 /** A setting's value as a page writes it: a choice's label, On or Off, a number with its unit. */
@@ -1815,6 +1860,19 @@ function legacySearchSlot(config: CliConfig, descriptor: SettingDescriptor, fiel
 }
 
 const FALLBACK_RESOLVERS: Readonly<Record<FallbackResolver, (config: CliConfig, descriptor: SettingDescriptor) => SettingEffective | undefined>> = {
+  /** 'Moxen's skills', unset: the older `installSkills` (off meant serve), else copy (`skillsDeliveryOf`). */
+  skillsDelivery(config, descriptor) {
+    const found = skillsDeliveryOf(config);
+    return { value: found.value, label: formatSettingValue(descriptor, found.value), ...(found.key === null ? {} : { origin: `from ${found.key} in the config file` }) };
+  },
+  /** A provider's 'Moxen's skills', unset: an older switch that kept them away, else the Turns tab's delivery (`providerSkillsOf`). */
+  providerSkills(config, descriptor) {
+    const kind = /^providers\.(claude|opencode|harness)\./.exec(descriptor.key)?.[1] as SkillsProviderKind;
+    const own = providerSkillsOf(config, kind);
+    if (own.value === false) return { value: false, label: "Off", origin: `from ${own.key} in the config file` };
+    const on = skillsDeliveryOf(config).value !== "off";
+    return { value: on, label: on ? "On" : "Off", origin: settingPlace(descriptor, BY_KEY.get("skills.moxen")!) };
+  },
   /** A provider's delegation tools or web_fetch, unset: the older all-at-once `moxenTools` (`moxenToolsOf`), else on. */
   moxenTools(config, descriptor) {
     const kind = /^providers\.(claude|opencode|harness)\./.exec(descriptor.key)?.[1] as "claude" | "opencode" | "harness" | undefined;
@@ -1900,6 +1958,11 @@ function effectiveOf(config: CliConfig, descriptor: SettingDescriptor, depth = 0
   return { value: undefined, label: fallback.text };
 }
 
+/** What is in force for a setting whose outcome depends on more than its own value, keyed by its setting key. */
+const IN_FORCE: Readonly<Record<string, (config: CliConfig) => string>> = Object.fromEntries(
+  (["claude", "opencode", "harness"] as const).map((kind) => [`providers.${kind}.moxenSkills`, (config: CliConfig) => `In force: ${describeProviderSkills(config, kind, moxenToolsOf(config.providers?.[kind]).orchestration)}`]),
+);
+
 /** How each list setting's entries are described, keyed by its setting key. */
 const LIST_VIEWS: Readonly<Record<string, (config: CliConfig) => readonly ListItemView[]>> = {
   [HARNESS_PROFILES_SETTING.key]: describeHarnessProfiles,
@@ -1931,6 +1994,7 @@ export function describeSettings(config: CliConfig): readonly SettingView[] {
     const unavailable = web === null ? settingUnavailable(config, descriptor) : webOrderUnavailable(config, web.provider, web.role);
     const value = readSetting(config, descriptor.key);
     const effective = value === undefined || value === "" ? effectiveOf(config, descriptor) : undefined;
+    const inForce = IN_FORCE[descriptor.key]?.(config);
     return {
       descriptor,
       value,
@@ -1939,6 +2003,7 @@ export function describeSettings(config: CliConfig): readonly SettingView[] {
       ...(unavailable ? { unavailable } : {}),
       ...(web ? { order: webOrderEntries(config, web.provider, web.role) } : {}),
       ...(effective ? { effective } : {}),
+      ...(inForce ? { inForce } : {}),
     };
   });
 }

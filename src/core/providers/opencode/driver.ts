@@ -256,14 +256,26 @@ function subagentHistoryItems(messages: ReadonlyArray<OpencodeMessage>): Subagen
 /** How long a server stays up after it goes quiet before a pending tool-settings restart (see `reconcileServers`). */
 const RECONCILE_DELAY_MS = 1_500;
 
-/** What the server's config holds that Moxen decides: the tools left off and whether its own prompt replaces OpenCode's. */
+/**
+ * What the server's config holds that Moxen decides: the tools left off, whether its own prompt replaces OpenCode's,
+ * and Moxen's skills (the folder they are served from, when they are, and the ones to hide).
+ */
 interface ServerShape {
   readonly tools: string;
   readonly moxenPrompt: boolean;
+  readonly skills: ServerSkills;
 }
 
-const serverShape = (names: string | readonly string[] | undefined, moxenPrompt: boolean | undefined): ServerShape => ({ tools: canonicalToolList(names), moxenPrompt: moxenPrompt === true });
-const serverShapeKey = (shape: ServerShape | undefined): string => `${shape?.tools ?? ""}|${shape?.moxenPrompt === true}`;
+interface ServerSkills {
+  readonly dir: string | null;
+  /** Sorted, no repeats. */
+  readonly denied: readonly string[];
+}
+
+const NO_SKILLS: ServerSkills = { dir: null, denied: [] };
+
+const serverShape = (names: string | readonly string[] | undefined, moxenPrompt: boolean | undefined, skills: ServerSkills = NO_SKILLS): ServerShape => ({ tools: canonicalToolList(names), moxenPrompt: moxenPrompt === true, skills });
+const serverShapeKey = (shape: ServerShape | undefined): string => `${shape?.tools ?? ""}|${shape?.moxenPrompt === true}|${shape?.skills.dir ?? ""}|${shape?.skills.denied.join(",") ?? ""}`;
 
 /** A list of tool names as one comparable string: lower-cased, sorted, no repeats. */
 function canonicalToolList(names: string | readonly string[] | undefined): string {
@@ -474,9 +486,21 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
   readonly updateNativeTools = async (threadId: ThreadId, names: readonly string[], moxenPrompt = false): Promise<void> => {
     const session = this.sessions.get(threadId);
     if (!session || session.closed) return;
-    this.wantedServerConfig.set(session.workingDirectory, serverShape(names, moxenPrompt));
+    this.wantedServerConfig.set(session.workingDirectory, serverShape(names, moxenPrompt, this.wantedServerConfig.get(session.workingDirectory)?.skills));
     this.reconcileServers();
   };
+
+  /**
+   * Moxen's skills for the server this session runs on. The server is one per directory, so its skills are its
+   * threads' skills: a delegated task sharing the directory takes what is there rather than restarting the server
+   * under the thread that delegated it, and decides only for a server nobody started yet.
+   */
+  private serverSkillsFor(input: ProviderSessionStartInput): ServerSkills {
+    const current = this.wantedServerConfig.get(input.workingDirectory)?.skills;
+    if (input.delegated === true && current !== undefined) return current;
+    const served = input.moxenSkills === undefined || input.moxenSkills === "served";
+    return { dir: served ? this.bundledSkillsDir : null, denied: [...new Set(input.hiddenMoxenSkills ?? [])].sort() };
+  }
 
   /** Nothing is running on this server: no turn, no background command or subagent, nothing waiting on the user. */
   private serverIdle(key: string): boolean {
@@ -548,7 +572,7 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
     this.settings = normalizeOpencodeSettings(options.settings);
     this.baseEnv = options.env ?? process.env;
     this.transport = options.transport ?? new SpawnOpencodeTransport();
-    this.bundledSkillsDir = this.settings.bundledSkills ? (options.bundledSkillsDir ?? null) : null;
+    this.bundledSkillsDir = options.bundledSkillsDir ?? null;
     this.stallTimeoutMs = options.stallTimeoutMs ?? OPENCODE_STALL_TIMEOUT_MS;
     this.toolStallTimeoutMs = options.toolStallTimeoutMs ?? this.stallTimeoutMs * 6;
     this.interruptAckTimeoutMs = options.interruptAckTimeoutMs ?? 3000;
@@ -587,11 +611,7 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
     return null;
   }
 
-  private async connectionForSession(
-    threadId: ThreadId,
-    workingDirectory: string,
-    moxenSkills: "project" | "served" | "none" = "served",
-  ): Promise<OpencodeServerConnection> {
+  private async connectionForSession(threadId: ThreadId, workingDirectory: string): Promise<OpencodeServerConnection> {
     const key = workingDirectory;
     const existing = this.connections.get(key);
     if (existing) {
@@ -601,7 +621,8 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
       await this.ensurePump(key, connection);
       return connection;
     }
-    const shape = this.wantedServerConfig.get(key) ?? serverShape(undefined, false);
+    // Nothing asked yet (a skill listing before any session): Moxen's skills served, as a session gets them by default.
+    const shape = this.wantedServerConfig.get(key) ?? serverShape(undefined, false, { dir: this.bundledSkillsDir, denied: [] });
     this.spawnedServerConfig.set(key, shape);
     const pending = this.transport.ensureServer({
       settings: this.settings,
@@ -609,8 +630,8 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
       env: this.baseEnv,
       ...(shape.tools !== "" ? { disabledNativeTools: shape.tools } : {}),
       ...(shape.moxenPrompt ? { moxenPrompt: true } : {}),
-      // The server is one per directory and its config is fixed at spawn: whoever starts it decides.
-      ...(this.bundledSkillsDir && moxenSkills === "served" ? { skillsDirs: [this.bundledSkillsDir] } : {}),
+      ...(shape.skills.dir !== null ? { skillsDirs: [shape.skills.dir] } : {}),
+      ...(shape.skills.denied.length > 0 ? { deniedSkills: shape.skills.denied } : {}),
     });
     this.connections.set(key, pending);
     try {
@@ -858,8 +879,9 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
     this.attempt("OPENCODE_SPAWN_FAILED", `Could not start an OpenCode session for thread ${input.threadId}`, async () => {
       const existing = this.sessions.get(input.threadId);
       if (existing && !existing.closed) return this.describeSession(existing);
-      this.wantedServerConfig.set(input.workingDirectory, serverShape(input.disabledNativeTools, input.moxenPrompt));
-      const connection = await this.connectionForSession(input.threadId, input.workingDirectory, input.moxenSkills);
+      this.wantedServerConfig.set(input.workingDirectory, serverShape(input.disabledNativeTools, input.moxenPrompt, this.serverSkillsFor(input)));
+      this.reconcileServers();
+      const connection = await this.connectionForSession(input.threadId, input.workingDirectory);
       await this.registerMcpServers(connection, input.mcpServers ?? [], input.checklist !== false);
       // OpenCode keeps sessions on disk, so the previous one — from this
       // process or an earlier one — is reattached with its history rather

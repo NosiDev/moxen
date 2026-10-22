@@ -16,6 +16,11 @@ import type { Register } from 'claude-code'
  * `~/.agents/skills`, then the folder named by `MOXEN_SKILLS_DIR` (Moxen's own
  * bundled skills, which it sets for the sessions it starts). A skill that
  * `.claude/skills` already provides is left to Claude Code.
+ *
+ * Moxen's skills are the bundled ones and the copies it marked
+ * (`.moxen-skill.json`). For the sessions it starts, Moxen may also set
+ * `MOXEN_SKILLS_HIDE` (comma-separated names of its skills to leave out) and
+ * `MOXEN_OWN_SKILLS=0` (offer only Moxen's skills, none of the user's).
  */
 
 type Skill = {
@@ -31,6 +36,7 @@ type Skill = {
 }
 
 const TOOL = 'skill'
+const MARKER_FILE = '.moxen-skill.json'
 const TOOL_FULL_NAME = 'mcp__agent-skills__skill'
 /** Keeps the tool description, which rides in every request, to a size worth sending. */
 const LISTING_BUDGET = 8_000
@@ -93,6 +99,8 @@ export const register: Register = (on) => {
   on('session.start', async ($, e, next) => {
     const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? ''
     const bundled = (await $.env.get('MOXEN_SKILLS_DIR')) ?? ''
+    const hidden = new Set(((await $.env.get('MOXEN_SKILLS_HIDE')) ?? '').split(',').map((name) => name.trim()).filter((name) => name !== ''))
+    const ownSkills = (await $.env.get('MOXEN_OWN_SKILLS')) !== '0'
     const roots = [`${e.cwd}/.agents/skills`, home === '' ? '' : `${home}/.agents/skills`, bundled].filter((root) => root !== '')
     const claudeRoots = [`${e.cwd}/.claude/skills`, home === '' ? '' : `${home}/.claude/skills`].filter((root) => root !== '')
 
@@ -110,13 +118,16 @@ export const register: Register = (on) => {
         const dir = `${root}/${entry.name}`
         const file = `${dir}/SKILL.md`
         if (!(await $.fs.exists(file))) continue
+        const moxens = root === bundled || (await $.fs.exists(`${dir}/${MARKER_FILE}`))
+        if (!moxens && !ownSkills) continue
+        if (moxens && hidden.has(entry.name)) continue
         let provided = false
         for (const claudeRoot of claudeRoots) provided ||= await $.fs.exists(`${claudeRoot}/${entry.name}/SKILL.md`)
         if (provided) continue
         try {
           const { meta, body } = parseSkill(await $.fs.read(file))
           const name = meta.name && /^[\w-]{1,64}$/.test(meta.name) ? meta.name : entry.name
-          if (found.has(name)) continue
+          if (found.has(name) || (moxens && hidden.has(name))) continue
           found.set(name, {
             name,
             description: meta.description ?? `The ${name} skill`,

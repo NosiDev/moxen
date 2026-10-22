@@ -142,7 +142,7 @@ describe("the subagent tool", () => {
       say("Could not create it."),
       say("Reported."),
     ]);
-    const { turnId } = await begin(driver, { runtimeMode: "approval-required", moxenSkills: "none" });
+    const { turnId } = await begin(driver, { runtimeMode: "approval-required", moxenSkills: "none", delegated: true });
     await driver.awaitTurn("t1", turnId);
     expect(fs.existsSync(target)).toBe(false);
     expect(events.some((event) => event.type === "permission.request.opened")).toBe(false);

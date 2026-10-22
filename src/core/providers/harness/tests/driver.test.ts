@@ -179,7 +179,7 @@ describe("HarnessDriver", () => {
 
     it("refuses instead of waiting in a delegated session, where nobody can answer", async () => {
       const { driver, events, requests } = driverWith([call("c1", "bash", { command: "echo hi" }), answer("Could not.")]);
-      await start(driver, { runtimeMode: "approval-required", moxenSkills: "none" });
+      await start(driver, { runtimeMode: "approval-required", moxenSkills: "none", delegated: true });
       const { turnId } = await run(driver.sendTurn({ threadId: "t1", prompt: "go" }));
       await expect(driver.awaitTurn("t1", turnId)).resolves.toMatchObject({ status: "completed" });
       expect(opened(events)).toHaveLength(0);
@@ -321,7 +321,7 @@ describe("HarnessDriver", () => {
       await driver.awaitTurn("t1", turnId);
 
       const delegated = driverWith([answer("ok")]);
-      await start(delegated.driver, { moxenSkills: "none" });
+      await start(delegated.driver, { moxenSkills: "none", delegated: true });
       const sent = await run(delegated.driver.sendTurn({ threadId: "t1", prompt: "go" }));
       await delegated.driver.awaitTurn("t1", sent.turnId);
       expect(delegated.requests[0]!.tools.map((tool) => tool.name)).not.toContain("ask");

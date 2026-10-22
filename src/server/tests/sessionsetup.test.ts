@@ -323,6 +323,10 @@ describe("session setup", () => {
       expect(child.workingDirectory).toBe(worktree.path);
       expect(child.instructions).toContain("subagent");
       expect(child.instructions).toContain(`Commit your work on ${worktree.branch}`);
+      // Nobody answers a delegated task's questions, and it gets none of Moxen's skills.
+      expect(child.delegated).toBe(true);
+      expect(child.moxenSkills).toBe("none");
+      expect(startOf(parent.threadId)!.delegated).toBeUndefined();
     } finally {
       await connection.close();
     }
@@ -402,6 +406,84 @@ describe("moxen's own skills in a project", () => {
       expect(existsSync(path.join(harness.work, ".claude", "skills"))).toBe(false);
     } finally {
       await connection.close();
+    }
+  });
+});
+
+describe("one delivery setting for Moxen's skills", () => {
+  const handover = (connection: DirectConnection, cwd: string) =>
+    connection.dispatch({ type: "thread.handover", cwd, prompt: "go", wait: true, threadEnvMode: "local" });
+  const DELEGATION = ["moxen-orchestrate", "moxen-research"];
+
+  it("lets a project's moxen.json choose serve, which takes Moxen's copies back out", async () => {
+    const { harness, connection, startOf } = await connected();
+    try {
+      await mkdir(path.join(harness.work, ".claude"));
+      await handover(connection, harness.work);
+      expect(existsSync(path.join(harness.work, ".claude", "skills", "moxen-threads"))).toBe(true);
+      await mkdir(path.join(harness.work, ".claude", "skills", "mine"));
+      await writeFile(path.join(harness.work, ".claude", "skills", "mine", "SKILL.md"), "---\ndescription: Mine\n---\n");
+      await writeFile(path.join(harness.work, "moxen.json"), JSON.stringify({ skills: { moxen: "serve" } }));
+      const created = await handover(connection, harness.work);
+      expect(startOf(created.threadId)?.moxenSkills).toBe("served");
+      expect(existsSync(path.join(harness.work, ".claude", "skills", "moxen-threads"))).toBe(false);
+      // The user's own skill stays.
+      expect(existsSync(path.join(harness.work, ".claude", "skills", "mine", "SKILL.md"))).toBe(true);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("gives no session Moxen's skills when off, unless the provider's own switch turns them on (served)", async () => {
+    const off = await connected({ skills: { moxen: "off" } });
+    try {
+      const created = await handover(off.connection, off.harness.work);
+      expect(off.startOf(created.threadId)?.moxenSkills).toBe("none");
+    } finally {
+      await off.connection.close();
+    }
+    // The harness's installation default is OpenCode, so its section is the one in force.
+    const on = await connected({ skills: { moxen: "off" }, providers: { opencode: { moxenSkills: true } } });
+    try {
+      const created = await handover(on.connection, on.harness.work);
+      expect(on.startOf(created.threadId)?.moxenSkills).toBe("served");
+    } finally {
+      await on.connection.close();
+    }
+  });
+
+  it("hides the project's copies from a provider they are switched off for", async () => {
+    const { harness, connection, startOf } = await connected({ providers: { opencode: { moxenSkills: false } } });
+    try {
+      await mkdir(path.join(harness.work, ".claude"));
+      const created = await handover(connection, harness.work);
+      const start = startOf(created.threadId);
+      expect(start?.moxenSkills).toBe("none");
+      // Copied for the project (other providers read them), hidden from this one by every name they answer to.
+      expect(existsSync(path.join(harness.work, ".claude", "skills", "moxen-threads"))).toBe(true);
+      expect(start?.hiddenMoxenSkills).toEqual(expect.arrayContaining(["moxen-threads", "use-moxen-cli", "use-moxen"]));
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("leaves out the delegation skills for a provider with its delegation tools off", async () => {
+    const plain = await connected();
+    try {
+      const created = await handover(plain.connection, plain.harness.work);
+      expect(plain.startOf(created.threadId)?.hiddenMoxenSkills).toBeUndefined();
+    } finally {
+      await plain.connection.close();
+    }
+    for (const opencode of [{ orchestration: false }, { moxenTools: false }]) {
+      const { harness, connection, startOf } = await connected({ providers: { opencode } });
+      try {
+        const created = await handover(connection, harness.work);
+        expect(startOf(created.threadId)?.moxenSkills).toBe("served");
+        expect(startOf(created.threadId)?.hiddenMoxenSkills).toEqual(DELEGATION);
+      } finally {
+        await connection.close();
+      }
     }
   });
 });

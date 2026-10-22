@@ -100,4 +100,34 @@ describe('serving skills', () => {
     expect(tool).not.toContain('already')
     expect(registered.filter((entry) => entry.startsWith('command:')).sort()).toEqual(['command:mine', 'command:moxen-handoff', 'command:moxen-threads'])
   })
+
+  test('leaves out Moxen skills it is told to hide, and the user\'s own when they are switched off', async ($, on) => {
+    const files: Files = {
+      '/proj/.agents/skills/mine/SKILL.md': '---\ndescription: Mine\n---\nmine',
+      '/proj/.agents/skills/moxen-threads/SKILL.md': THREADS,
+      '/proj/.agents/skills/moxen-threads/.moxen-skill.json': '{}',
+      '/proj/.agents/skills/moxen-orchestrate/SKILL.md': '---\ndescription: Orchestrate copy\n---\nx',
+      '/proj/.agents/skills/moxen-orchestrate/.moxen-skill.json': '{}',
+      '/bundled/moxen-research/SKILL.md': '---\ndescription: Research\n---\nx',
+      '/bundled/moxen-doctor/SKILL.md': '---\ndescription: Doctor\n---\nx',
+    }
+    const fs = tree(files)
+    mock.env(on, { HOME: '/home/u', MOXEN_SKILLS_DIR: '/bundled', MOXEN_SKILLS_HIDE: 'moxen-orchestrate,moxen-research', MOXEN_OWN_SKILLS: '0' })
+    const registered: string[] = []
+    on('fs.list', async (_$, e) => ({ value: fs.list((e as { path: string }).path) }))
+    on('fs.exists', async (_$, e) => ({ value: fs.exists((e as { path: string }).path) }))
+    on('fs.read', async (_$, e) => ({ value: fs.read((e as { path: string }).path) }))
+    on('tool.register', async (_$, e) => {
+      registered.push(`tool:${(e as { description: string }).description}`)
+      return { value: undefined as never }
+    })
+    on('command.register', async (_$, e) => {
+      registered.push(`command:${(e as { name: string }).name}`)
+      return { value: undefined as never }
+    })
+    on('session.start', async (_$, e) => ({ cwd: e.cwd }))
+    await $.session.start({ cwd: '/proj', surface: null, isInteractive: false })
+
+    expect(registered.filter((entry) => entry.startsWith('command:')).sort()).toEqual(['command:moxen-doctor', 'command:moxen-threads'])
+  })
 })

@@ -162,6 +162,10 @@ interface ClaudeSession {
   readonly workingDirectory: string;
   /** How moxen's own skills reach this session; only `served` points the mod at the bundled folder. */
   readonly moxenSkills: "project" | "served" | "none";
+  /** Where the project's copies are. In `.agents/skills` only the mod offers them. */
+  readonly moxenSkillsFolder: ".claude" | ".agents" | null;
+  /** Moxen's skills this session must not offer (`ProviderSessionStartInput.hiddenMoxenSkills`). */
+  readonly hiddenMoxenSkills: readonly string[];
   /**
    * The assistant message streaming now, not yet known to be interim or
    * final. The next tool call or message makes it a note; `result` makes it
@@ -429,7 +433,7 @@ export class ClaudeDriver implements ProviderAdapter<CliError> {
     this.transport = options.transport ?? new SdkTransport();
     this.sessionApi = options.sessionApi ?? new SdkSessionApi();
     this.usageProbeTimeoutMs = options.usageProbeTimeoutMs ?? 15_000;
-    this.skillsMod = this.settings.agentSkills ? (options.skillsMod ?? null) : null;
+    this.skillsMod = options.skillsMod ?? null;
     this.handlePermissionRequest = (toolName, input, callbackOptions) =>
       this.onPermissionRequest(toolName, input, callbackOptions);
     this.handleUserDialog = (request, dialogOptions) => this.onUserDialog(request, dialogOptions);
@@ -516,6 +520,8 @@ export class ClaudeDriver implements ProviderAdapter<CliError> {
         threadId: input.threadId,
         workingDirectory: input.workingDirectory,
         moxenSkills: input.moxenSkills ?? "served",
+        moxenSkillsFolder: input.moxenSkillsFolder ?? null,
+        hiddenMoxenSkills: input.hiddenMoxenSkills ?? [],
         query: undefined as unknown as ClaudeQuery,
         input: new PromptQueue(),
         closed: false,
@@ -524,7 +530,14 @@ export class ClaudeDriver implements ProviderAdapter<CliError> {
         model: input.modelSelection?.model ?? null,
         effort: sessionWideEffort(effectiveEffortChoice(input.modelSelection)),
         mcpServers: input.mcpServers && input.mcpServers.length > 0 ? input.mcpServers : null,
-        disallowedTools: [...(input.disabledMcpTools ?? []), ...(input.disabledNativeTools ?? []), ...(input.checklist === false ? CHECKLIST_TOOLS : [])],
+        disallowedTools: [
+          ...(input.disabledMcpTools ?? []),
+          ...(input.disabledNativeTools ?? []),
+          ...(input.checklist === false ? CHECKLIST_TOOLS : []),
+          // Copies in `.claude/skills` are Claude Code's own to load: a deny rule is what keeps one out. Anywhere
+          // else only the mod offers them, and it is told; a rule there could only catch a user's skill of that name.
+          ...(input.moxenSkillsFolder === ".claude" ? (input.hiddenMoxenSkills ?? []).map((name) => `Skill(${name})`) : []),
+        ],
         instructions: input.instructions ?? null,
         isolation: input.isolation ?? null,
         sdkMessages: new Map(),
@@ -2386,10 +2399,18 @@ export class ClaudeDriver implements ProviderAdapter<CliError> {
     // The mod finds moxen's own skills here; `.agents/skills` it reads itself. An inherited value (moxen
     // launched from a moxen session) must not point a project- or delegated-skills session at the bundled folder.
     delete env["MOXEN_SKILLS_DIR"];
-    if (this.skillsMod?.bundledSkillsDir && session.moxenSkills === "served") env["MOXEN_SKILLS_DIR"] = this.skillsMod.bundledSkillsDir;
+    delete env["MOXEN_SKILLS_HIDE"];
+    delete env["MOXEN_OWN_SKILLS"];
+    const mod = this.skillsMod;
+    const served = mod?.bundledSkillsDir != null && session.moxenSkills === "served";
+    // The mod loads for the user's own `.agents/skills` (agentSkills) or for Moxen's when only it can deliver them.
+    const modNeeded = mod !== null && (this.settings.agentSkills || served || (session.moxenSkills === "project" && session.moxenSkillsFolder === ".agents"));
+    if (served) env["MOXEN_SKILLS_DIR"] = mod!.bundledSkillsDir!;
+    if (modNeeded && session.hiddenMoxenSkills.length > 0) env["MOXEN_SKILLS_HIDE"] = session.hiddenMoxenSkills.join(",");
+    if (modNeeded && !this.settings.agentSkills) env["MOXEN_OWN_SKILLS"] = "0";
     return {
       cwd: session.workingDirectory,
-      ...(this.skillsMod ? { plugins: [{ type: "local" as const, path: this.skillsMod.path }] } : {}),
+      ...(modNeeded ? { plugins: [{ type: "local" as const, path: mod!.path }] } : {}),
       ...(session.model ? { model: session.model } : {}),
       ...(session.resumeSessionId ? { resume: session.resumeSessionId } : {}),
       // Built per query: an in-process server instance connects to one query only, so a rebuilt one needs its own.

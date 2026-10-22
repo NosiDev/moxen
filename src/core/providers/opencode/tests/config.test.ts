@@ -65,6 +65,14 @@ describe("opencode config", () => {
     expect(JSON.parse(buildServerConfigContent(undefined, [], { auto: null, buffer: null }))).not.toHaveProperty("compaction");
   });
 
+  it("denies the skills it is given after the user's own rules, so the last match keeps them hidden", () => {
+    const content = JSON.parse(buildServerConfigContent(JSON.stringify({ permissions: [{ action: "skill", resource: "*", effect: "allow" }] }), [], {}, undefined, false, ["moxen-research"]));
+    expect(content.permissions).toEqual([
+      { action: "skill", resource: "*", effect: "allow" },
+      { action: "skill", resource: "moxen-research", effect: "deny" },
+    ]);
+  });
+
   it("pins share and update off in the injected config without clobbering the user's other keys", () => {
     expect(JSON.parse(buildServerConfigContent(undefined))).toEqual({ share: "disabled", update: "disable" });
     const merged = JSON.parse(

@@ -9,9 +9,11 @@
  * and `.agents/skills`, the user's own in the same two folders of the home
  * directory, and, in `served` mode, the skills bundled with moxen. A skill by
  * the same name is taken from the first of those only. In `none` mode (a
- * delegated task, which has none of moxen's tools to use them with) the skills
+ * delegated task, or Moxen's skills switched off for the Harness) the skills
  * moxen copied into the project (`.moxen-skill.json`) are left out too; the
- * user's and the project's own stay.
+ * user's and the project's own stay. `hidden` names Moxen's skills to leave out
+ * otherwise (the delegation skills, without delegation tools): only Moxen's own
+ * copies or bundled skills, never a user's skill of the same name.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -40,6 +42,8 @@ export interface DiscoverSkillsInput {
   readonly mode: SkillsMode;
   /** Moxen's bundled `skills/` folder, when the package has one. */
   readonly bundledDir: string | null;
+  /** Moxen's skills to leave out, by folder or name. */
+  readonly hidden?: readonly string[];
   readonly home?: string;
 }
 
@@ -106,11 +110,16 @@ export function discoverSkills(input: DiscoverSkillsInput): Skill[] {
     path.join(home, ".agents", "skills"),
     ...(input.mode === "served" && input.bundledDir ? [input.bundledDir] : []),
   ];
+  const hidden = new Set(input.hidden ?? []);
   const found = new Map<string, Skill>();
   for (const folder of folders) {
+    const bundled = folder === input.bundledDir;
     for (const dir of skillDirs(folder, input.mode === "none")) {
       const skill = readSkill(dir);
-      if (skill && !found.has(skill.name)) found.set(skill.name, skill);
+      if (!skill || found.has(skill.name)) continue;
+      const moxens = bundled || fs.existsSync(path.join(dir, MARKER_FILE));
+      if (moxens && (hidden.has(skill.name) || hidden.has(path.basename(dir)))) continue;
+      found.set(skill.name, skill);
     }
   }
   return [...found.values()].sort((left, right) => (left.name < right.name ? -1 : 1)).slice(0, MAX_SKILLS);

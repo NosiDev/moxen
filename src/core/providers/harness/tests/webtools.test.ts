@@ -155,7 +155,7 @@ describe("web tools in a session", () => {
 
   it("refuses another host in a task nobody can answer for, and says it was the web", async () => {
     const { driver, requests } = driverWith([call("c1", "web_search", { query: "anything" }), say("Could not search.")]);
-    const { turnId } = await begin(driver, { runtimeMode: "approval-required", moxenSkills: "none" });
+    const { turnId } = await begin(driver, { runtimeMode: "approval-required", moxenSkills: "none", delegated: true });
     await driver.awaitTurn("t1", turnId);
     expect(requests[1]!.messages.at(-1)).toMatchObject({ role: "tool", content: expect.stringMatching(/Reaching the web needs approval/) });
   });

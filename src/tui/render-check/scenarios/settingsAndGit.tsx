@@ -220,6 +220,7 @@ async function runSettings(): Promise<void> {
   }
   if (!claudeFrames.some((frame) => frame.split("\n").some((row) => row.includes("Compaction") && row.includes("Default (Moxen asks)")))) fail("the Claude Code tab does not say who compacts");
   if (!claudeFrames.some((frame) => frame.split("\n").some((row) => row.includes("Compact at") && row.includes("Default (80% of the window)")))) fail("the Claude Code tab does not say where it compacts");
+  if (seenOn("In force: Copied into a project") < 0) fail("the Claude Code tab does not say how Moxen's skills reach it");
   // Under the same headings, in the same order, as the other providers: Long threads before Setup.
   if (!(seenOn("Long threads") <= seenOn("Setup"))) fail("the Claude Code tab files Setup before Long threads");
 

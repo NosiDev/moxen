@@ -523,8 +523,11 @@ export async function ensureDriverSession(
     readonly moxenPrompt?: boolean;
     readonly checklist?: boolean;
     readonly instructions?: string | null;
-    /** How moxen's own skills reach the session (`ProviderSessionStartInput.moxenSkills`). */
+    /** How moxen's own skills reach the session (`ProviderSessionStartInput.moxenSkills` and the fields beside it). */
     readonly moxenSkills?: "project" | "served" | "none";
+    readonly moxenSkillsFolder?: ".claude" | ".agents";
+    readonly hiddenMoxenSkills?: readonly string[];
+    readonly delegated?: boolean;
     /** Watch the session for what happens between turns (`watchDriverSession`). */
     readonly store?: ThreadStore;
     /** After a turn the provider starts itself settles (`ExecuteTurnArgs.afterSettle`). */
@@ -556,6 +559,9 @@ export async function ensureDriverSession(
       ...(instructions ? { instructions } : {}),
       ...(isolation ? { isolation } : {}),
       ...(options.moxenSkills ? { moxenSkills: options.moxenSkills } : {}),
+      ...(options.moxenSkillsFolder ? { moxenSkillsFolder: options.moxenSkillsFolder } : {}),
+      ...(options.hiddenMoxenSkills && options.hiddenMoxenSkills.length > 0 ? { hiddenMoxenSkills: options.hiddenMoxenSkills } : {}),
+      ...(options.delegated === true ? { delegated: true } : {}),
     }),
   );
   // What a provider loaded when it started (or resumed) is what its rules were then: a later edit is news to it.

@@ -82,6 +82,8 @@ export function resolveSpawnedServerPassword(
  * `disabledNativeTools` (the provider's setting) switches OpenCode's own tools
  * off: `websearch: false`, and a `deny` rule per other tool, appended to the
  * user's own `permissions` (the last matching rule wins, so ours hold).
+ * `deniedSkills` (Moxen's skills a session must not have, `core/skills/delivery.ts`) become `skill` deny
+ * rules, appended the same way: OpenCode hides a denied skill from the model and refuses to load it.
  * `moxenPrompt` sets the `system` of the `build` and `plan` agents to Moxen's prompt, which replaces the base
  * prompt OpenCode picks for the model family; an agent the user already gave a `system` keeps theirs.
  * Unparseable content is replaced, not merged — a corrupt config would
@@ -95,6 +97,7 @@ export function buildServerConfigContent(
   disabledNativeTools?: string,
   /** Replace OpenCode's base prompt for its `build` and `plan` agents with Moxen's (`prompt.ts`). */
   moxenPrompt = false,
+  deniedSkills: readonly string[] = [],
 ): string {
   let parsed: Record<string, unknown> = {};
   if (existing && existing.trim().length > 0) {
@@ -116,13 +119,14 @@ export function buildServerConfigContent(
   const off = opencodeDisabledToolConfig(disabledNativeTools);
   const agents = moxenPrompt ? withMoxenSystem(parsed.agents, buildOpencodeSystemPrompt(disabledNativeTools)) : parsed.agents;
   const ownRules = Array.isArray(parsed.permissions) ? (parsed.permissions as unknown[]) : [];
+  const denies = deniedSkills.map((id) => ({ action: "skill", resource: id, effect: "deny" }));
   return JSON.stringify({
     ...parsed,
     ...(skills.length > 0 ? { skills } : {}),
     ...(Object.keys(merged).length > 0 ? { compaction: merged } : {}),
     ...(agents !== undefined ? { agents } : {}),
     ...(off.websearch === false ? { websearch: false } : {}),
-    ...(off.permissions ? { permissions: [...ownRules, ...off.permissions] } : {}),
+    ...(off.permissions || denies.length > 0 ? { permissions: [...ownRules, ...(off.permissions ?? []), ...denies] } : {}),
     share: "disabled",
     update: "disable",
   });
