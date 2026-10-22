@@ -30,7 +30,7 @@ import { MCP_RUNNER_SETTING, MCP_SERVERS_SETTING } from "./mcpschema.js";
 import { describeMcpServers } from "./mcpview.js";
 import { HARNESS_PROFILES_SETTING } from "./providers/harness/profileschema.js";
 import { describeHarnessProfiles } from "./providers/harness/profileview.js";
-import type { CliConfig } from "./types.js";
+import { driverKindOfInstance, type CliConfig } from "./types.js";
 
 /** Where a setting shows up. Order is the order a settings page renders. */
 export const SETTING_SECTIONS = [
@@ -70,6 +70,8 @@ export interface SettingChoice {
   readonly label: string;
   /** One line on what picking this does; shown beside the choice. */
   readonly description?: string;
+  /** Still accepted by `config set` and read from old files, but a page does not offer it. */
+  readonly hidden?: boolean;
 }
 
 export type SettingKind =
@@ -255,7 +257,7 @@ export type SettingFallback =
   | { readonly text: string }
   | { readonly resolver: FallbackResolver };
 
-export type FallbackResolver = "handoffTokens";
+export type FallbackResolver = "handoffTokens" | "providerModel";
 
 /** What is in force for an unset setting, worked out in core so a client only draws it. */
 export interface SettingEffective {
@@ -374,12 +376,13 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     kind: {
       type: "enum",
       choices: [
-        choice("auto", "Automatic", "Currently the project checkout; kept so it can get smarter without a config change."),
+        // Kept so old files and scripts still load; it always meant the project checkout, and reads as that.
+        { ...choice("auto", "Automatic", "The project checkout."), hidden: true },
         choice("local", "The project checkout", "Work directly in the project's folder."),
         choice("worktree", "Always a worktree", "Give each thread its own checkout on a new branch, so threads cannot step on each other."),
       ],
     },
-    defaultValue: "auto",
+    defaultValue: "local",
     envOverride: "MOXEN_THREAD_ENV_MODE",
   },
 
@@ -468,16 +471,17 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "provider",
     label: "Provider",
-    description: "The provider a new thread uses when nothing else names one.",
+    description: "The provider a new thread uses when neither the request nor the project names one. A project's own default wins over this.",
     section: "model",
     kind: { type: "string", placeholder: "claude", source: "provider" },
     defaultValue: undefined,
+    fallback: { text: "The first available: Claude Code when it is installed" },
     envOverride: "MOXEN_PROVIDER",
   },
   {
     key: "model",
     label: "Model",
-    description: "The model a new thread uses when nothing else names one. A provider's own 'Model' (on its tab) wins over this.",
+    description: "The model a new thread on the Provider above starts with. A model belongs to one provider, so this applies only to threads on that provider, and a provider's own 'Model' (on its tab) wins over it.",
     section: "model",
     kind: { type: "string", placeholder: "the provider's own default", source: "model" },
     defaultValue: undefined,
@@ -675,11 +679,12 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.claude.model",
     label: "Model",
-    description: "The model a new Claude Code thread starts with when nothing more specific names one. Unset: the Model setting on the New threads tab, then the provider's own default.",
+    description: "The model a new Claude Code thread starts with, when neither the request nor the project names one.",
     section: "provider:claude",
     group: "New threads",
     kind: { type: "string", placeholder: "the provider's own default", source: "model", providerKind: "claude" },
     defaultValue: undefined,
+    fallback: { resolver: "providerModel" },
   },
   {
     key: "providers.claude.thinkingEffort",
@@ -891,11 +896,12 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.opencode.model",
     label: "Model",
-    description: "The model a new OpenCode thread starts with when nothing more specific names one. Unset: the Model setting on the New threads tab, then the provider's own default.",
+    description: "The model a new OpenCode thread starts with, when neither the request nor the project names one.",
     section: "provider:opencode",
     group: "New threads",
     kind: { type: "string", placeholder: "the provider's own default", source: "model", providerKind: "opencode" },
     defaultValue: undefined,
+    fallback: { resolver: "providerModel" },
   },
   {
     key: "providers.opencode.thinkingEffort",
@@ -1051,11 +1057,12 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.harness.model",
     label: "Model",
-    description: "The model a new Moxen Harness thread starts with when nothing more specific names one. Unset: the Model setting on the New threads tab, then the provider's own default.",
+    description: "The model a new Moxen Harness thread starts with, when neither the request nor the project names one.",
     section: "provider:harness",
     group: "New threads",
     kind: { type: "string", placeholder: "the provider's own default", source: "model", providerKind: "harness" },
     defaultValue: undefined,
+    fallback: { resolver: "providerModel" },
   },
   {
     key: "providers.harness.thinkingEffort",
@@ -1453,6 +1460,15 @@ function settingPlace(from: SettingDescriptor, to: SettingDescriptor): string {
 const shareLabel = (percent: SettingValue): string => `${String(percent)}% of the window`;
 
 const FALLBACK_RESOLVERS: Readonly<Record<FallbackResolver, (config: CliConfig, descriptor: SettingDescriptor) => SettingEffective | undefined>> = {
+  /** A provider tab's Model, unset: the global Model when the global Provider is this one (`configuredModel`); else the provider's catalog default, which the picker names itself. */
+  providerModel(config, descriptor) {
+    const kind = /^providers\.(claude|opencode|harness)\.model$/.exec(descriptor.key)?.[1];
+    const global = BY_KEY.get("model")!;
+    const aimed = kind !== undefined && config.provider !== undefined && driverKindOfInstance(config.provider) === kind;
+    if (aimed && config.model !== undefined && config.model.trim() !== "") return { value: config.model, label: config.model, origin: settingPlace(descriptor, global) };
+    // Nothing more to say than the picker's own "Provider's default".
+    return undefined;
+  },
   /**
    * A fixed hand-off size, unset: the same precedence `resolveHandoff` applies
    * (`core/threads/longthreads.ts`). A provider's own share wins over the global
@@ -1497,6 +1513,18 @@ const LIST_VIEWS: Readonly<Record<string, (config: CliConfig) => readonly ListIt
   [MCP_SERVERS_SETTING.key]: (config) => describeMcpServers(config),
 };
 
+/**
+ * Why a setting does nothing in this config, for one that is not a web order:
+ * the global Model belongs to the global Provider, so with none it is ignored
+ * (`configuredModel`, `core/catalog/selection.ts`).
+ */
+function settingUnavailable(config: CliConfig, descriptor: SettingDescriptor): string | undefined {
+  if (descriptor.key !== "model" || (config.provider ?? "").trim() !== "") return undefined;
+  return (config.model ?? "").trim() !== ""
+    ? `Ignored: ${config.model} applies only once Provider above names its provider, because a model belongs to one.`
+    : "Applies once Provider above names one: a model belongs to one provider.";
+}
+
 /** A web order's provider and role, from its key. */
 function webOrderOf(descriptor: SettingDescriptor): { provider: "claude" | "opencode"; role: WebRole } | null {
   const match = /^providers\.(claude|opencode)\.web(Search|Fetch)Order$/.exec(descriptor.key);
@@ -1507,7 +1535,7 @@ export function describeSettings(config: CliConfig): readonly SettingView[] {
   return SETTINGS.map((descriptor) => {
     const items = LIST_VIEWS[descriptor.key]?.(config);
     const web = webOrderOf(descriptor);
-    const unavailable = web === null ? undefined : webOrderUnavailable(config, web.provider, web.role);
+    const unavailable = web === null ? settingUnavailable(config, descriptor) : webOrderUnavailable(config, web.provider, web.role);
     const value = readSetting(config, descriptor.key);
     const effective = value === undefined || value === "" ? effectiveOf(config, descriptor) : undefined;
     return {

@@ -144,10 +144,14 @@ export async function runSettingsModelList(): Promise<void> {
       model("gpt-astra", "GPT Astra", true, ["low", "high"]),
       model("gpt-luna", "GPT Luna", false, ["low", "high"]),
       model("gpt-terra", "GPT Terra", false, ["low", "high"]),
+      model("gpt-nova", "GPT Nova", false, ["low", "high"]),
+      model("gpt-vega", "GPT Vega", false, ["low", "high"]),
+      model("gpt-orion", "GPT Orion", false, ["low", "high"]),
     ]),
   ];
   const written: Array<[string, string]> = [];
-  const snapshot = { path: "/home/dev/.moxen/config.json", exists: true, settings: describeSettings(DEFAULTS_FOR_RENDER_CHECK) };
+  // The global Model belongs to the global Provider, so it lists that provider's models (with none, it waits for one).
+  const snapshot = { path: "/home/dev/.moxen/config.json", exists: true, settings: describeSettings({ ...DEFAULTS_FOR_RENDER_CHECK, provider: "opencode/openai" }) };
   const setup = await testRender(
     <SettingsModal
       snapshot={snapshot}
@@ -197,17 +201,17 @@ export async function runSettingsModelList(): Promise<void> {
   const opened = setup.captureCharFrame();
   console.log("--- settings page, model list ---");
   console.log(opened);
-  for (const expected of ["Search by name", "Claude", "OpenAI", "Claude Opus", "GPT Astra", "default"]) {
+  for (const expected of ["Search by name", "GPT Astra", "GPT Orion", "default"]) {
     if (!opened.includes(expected)) fail(`the model list is missing "${expected}"`);
   }
+  if (opened.includes("Claude Opus")) fail("the global Model lists another provider's models than the global Provider's");
   const lines = opened.split("\n");
   const at = (text: string) => lines.findIndex((row) => row.includes(text));
-  if (!(at("Claude Opus") < at("Claude Haiku") && at("Claude Haiku") < at("OpenAI") && at("GPT Astra") < at("GPT Sol"))) fail("the model list does not put each provider's default first under its heading");
+  if (!(at("GPT Astra") < at("GPT Sol"))) fail("the model list does not put the provider's default first");
   for (const letter of "luna") await act(async () => setup.mockInput.typeText(letter));
   await settle();
   const filtered = setup.captureCharFrame();
-  if (!filtered.includes("luna▏") || !filtered.includes("GPT Luna") || filtered.includes("Claude Opus") || filtered.includes("GPT Sol")) fail("typing did not narrow the model list to the match");
-  if (!filtered.includes("OpenAI")) fail("the matching model lost its provider heading");
+  if (!filtered.includes("luna▏") || !filtered.includes("GPT Luna") || filtered.includes("GPT Sol")) fail("typing did not narrow the model list to the match");
   await act(async () => setup.mockInput.pressEnter());
   await settle();
   if (written.length !== 1 || written[0]![0] !== "model" || written[0]![1] !== "gpt-luna") fail(`picking from the filtered list wrote ${JSON.stringify(written)}, not model=gpt-luna`);

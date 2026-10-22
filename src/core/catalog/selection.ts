@@ -112,7 +112,7 @@ export function asModelSelection(value: unknown): ModelSelection | null {
 }
 
 /** The defaults the user set on a provider's own settings page, for the provider an instance belongs to. */
-export function providerDefaults(config: CliConfig, instanceId: string): { runtimeMode?: RuntimeMode; model?: string; thinkingEffort?: string } {
+export function providerDefaults(config: Pick<CliConfig, "providers">, instanceId: string): { runtimeMode?: RuntimeMode; model?: string; thinkingEffort?: string } {
   const kind = driverKindOfInstance(instanceId);
   return kind === null ? {} : (config.providers?.[kind] ?? {});
 }
@@ -122,29 +122,78 @@ export function defaultRuntimeMode(config: CliConfig, instanceId: string): Runti
   return providerDefaults(config, instanceId).runtimeMode ?? config.runtimeMode;
 }
 
+/**
+ * Whether the global Model is aimed at threads on `instanceId`. A model
+ * belongs to one provider, so the global Model belongs to the global
+ * Provider: it applies to threads on that provider (or another instance of
+ * the same driver) and to no other. With no global Provider it applies to none.
+ */
+export function globalModelAimsAt(config: Pick<CliConfig, "provider">, instanceId: string): boolean {
+  const aimed = config.provider?.trim();
+  if (!aimed) return false;
+  if (aimed === instanceId) return true;
+  const kind = driverKindOfInstance(instanceId);
+  return kind !== null && driverKindOfInstance(aimed) === kind;
+}
+
+/**
+ * The model the settings start a new thread on `instanceId` with: the
+ * provider tab's Model, else the global Model when it is aimed at this
+ * provider. Undefined leaves it to the project's model or the catalog's
+ * default. The server resolves new threads with this, and a client marks the
+ * same model as the default in its picker, so the two cannot disagree.
+ */
+export function configuredModel(config: Pick<CliConfig, "provider" | "model" | "providers">, instanceId: string): string | undefined {
+  const own = providerDefaults(config, instanceId).model?.trim();
+  if (own) return own;
+  const global = config.model?.trim();
+  return global && globalModelAimsAt(config, instanceId) ? global : undefined;
+}
+
+/**
+ * The selection a new thread starts on. One rule, most specific first
+ * (`docs/threads.md`, "Which model a new thread gets"):
+ *
+ * - Provider: the request, the stored selection's (`base`: the project's
+ *   default, or the thread's own for a follow-up), the global Provider, then
+ *   the installation default.
+ * - Model: the request; the stored selection's model when it is on that
+ *   provider; the provider tab's Model; the global Model when it is aimed at
+ *   that provider; the installation default's model when it is.
+ * - Effort: the request, the provider tab's Effort, then the global Effort.
+ *
+ * `installation` is only asked when nothing else names a provider or a
+ * model, so a configured provider and model work with Claude Code absent.
+ */
 export function resolveModelSelection(
-  base: ModelSelection,
+  base: ModelSelection | null,
   config: CliConfig,
   options: ModelSelectionRequest,
+  installation: () => ModelSelection = () => defaultModelSelection(),
 ): ModelSelection {
-  const provider = nonEmptyOption(options.provider ?? config.provider, "provider");
-  const instanceId = provider ?? base.instanceId;
+  const requested = nonEmptyOption(options.provider, "provider");
+  const configured = nonEmptyOption(config.provider, "provider");
+  let fallback: ModelSelection | undefined;
+  const installed = (): ModelSelection => (fallback ??= installation());
+  const instanceId = requested ?? base?.instanceId ?? configured ?? installed().instanceId;
+  const stored = base !== null && base.instanceId === instanceId ? base : null;
+  const requestedModel = nonEmptyOption(options.model, "model") ?? stored?.model ?? configuredModel(config, instanceId);
   const own = providerDefaults(config, instanceId);
-  // The provider's own page is more specific than the global default.
-  const requestedModel = nonEmptyOption(options.model ?? own.model ?? config.model, "model");
-  const thinkingEffort = nonEmptyOption(
-    options.thinkingEffort ?? own.thinkingEffort ?? config.thinkingEffort,
-    "thinking effort",
-  );
-  if (provider !== undefined && provider !== base.instanceId && requestedModel === undefined) {
+  const thinkingEffort = nonEmptyOption(options.thinkingEffort ?? own.thinkingEffort ?? config.thinkingEffort, "thinking effort");
+  let model = requestedModel;
+  if (model === undefined) {
+    // Only the installation default is left; it names a model only for its own provider.
+    const install = fallback ?? tryInstallation(installed);
+    if (install?.instanceId === instanceId) model = install.model;
+  }
+  if (model === undefined) {
     throw new CliError(
       "MODEL_REQUIRED_FOR_PROVIDER",
-      `Provider instance ${provider} differs from the project default; select its model with --model.`,
-      { details: { provider, projectProvider: base.instanceId } },
+      `No model is set for provider instance ${instanceId}; select one with --model, or set its Model in the settings.`,
+      { details: { provider: instanceId, ...(base !== null ? { projectProvider: base.instanceId } : {}) } },
     );
   }
-  const model = requestedModel ?? base.model;
-  const selectionChanged = instanceId !== base.instanceId || model !== base.model;
+  const selectionChanged = base === null || instanceId !== base.instanceId || model !== base.model;
   const selections = selectionChanged ? [] : normalizeProviderOptions(base.options);
   const speedMode = options.speedMode ?? config.speedMode;
 
@@ -164,6 +213,15 @@ export function resolveModelSelection(
     model,
     ...(selections.length > 0 ? { options: selections } : {}),
   };
+}
+
+/** The installation default when there is one; null when none can be had (it is only a last resort here). */
+function tryInstallation(installed: () => ModelSelection): ModelSelection | null {
+  try {
+    return installed();
+  } catch {
+    return null;
+  }
 }
 
 /** Flag-level model request, resolved against the config and a base selection. */
@@ -203,5 +261,8 @@ export function followUpSelection(
   delete scoped.speedMode;
   delete scoped.thinkingEffort;
   delete scoped.providers;
-  return resolveModelSelection(base, scoped, { prompt, ...request });
+  // A switch to another provider names its model: the installation default is for new threads only.
+  return resolveModelSelection(base, scoped, { prompt, ...request }, () => {
+    throw new CliError("NO_DEFAULT_MODEL", "A follow-up does not fall back to the installation default.");
+  });
 }

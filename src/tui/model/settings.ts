@@ -1,4 +1,5 @@
-import { driverKindOfInstance } from "../../core/types.js";
+import { driverKindOfInstance, type CliConfig } from "../../core/types.js";
+import { configuredModel } from "../../core/catalog/selection.js";
 import type { ProviderSummary } from "../../core/catalog/summary.js";
 import { updateState, versionNumber, type UpdatableProvider } from "../../core/catalog/update.js";
 import type { SettingDescriptor, SettingEffective, SettingEnds, SettingSection, SettingValue, SettingView } from "../../core/configschema.js";
@@ -48,6 +49,8 @@ export type SettingControl =
       readonly searchable: boolean;
       /** What the Default option amounts to, when the setting is unset and core knows. */
       readonly effective?: SettingEffective;
+      /** The value in force is not one the catalog offers (a model another provider has, a level the model lacks): said beside it, still editable. */
+      readonly warning?: string;
     }
   | { readonly kind: "text"; readonly multiline: boolean }
   /** A key or token: typed into a masked input and kept in the OS keychain. */
@@ -182,19 +185,26 @@ function valueOf(settings: readonly SettingView[], key: string): string | undefi
 
 /**
  * The model a new thread on this provider starts with according to the
- * settings: the provider's own Model, else the global one when it is not
- * aimed at another provider. Undefined when neither is set, so the
- * provider's catalog default applies.
+ * settings, by the rule the server resolves new threads with
+ * (`configuredModel` in core): the provider's own Model, else the global one
+ * when the global Provider is this one. Undefined when neither applies, so
+ * the provider's catalog default does.
  */
 export function configuredDefaultModel(settings: readonly SettingView[], instanceId: string): string | undefined {
-  const kind = driverKindOfInstance(instanceId);
-  const own = kind === null ? undefined : valueOf(settings, `providers.${kind}.model`);
-  if (own !== undefined) return own;
+  const model = (kind: "claude" | "opencode" | "harness") => ({ model: valueOf(settings, `providers.${kind}.model`) });
+  const provider = valueOf(settings, "provider");
   const global = valueOf(settings, "model");
+  return configuredModel(
+    { ...(provider === undefined ? {} : { provider }), ...(global === undefined ? {} : { model: global }), providers: { claude: model("claude"), opencode: model("opencode"), harness: model("harness") } } as Pick<CliConfig, "provider" | "model" | "providers">,
+    instanceId,
+  );
+}
+
+/** Whose models a model setting picks from, for a warning: the provider of its page, else the global Provider. */
+function catalogName(settings: readonly SettingView[], providers: readonly ProviderSummary[], providerKind: "claude" | "opencode" | "harness" | undefined): string {
   const aimed = valueOf(settings, "provider");
-  if (global === undefined) return undefined;
-  if (aimed !== undefined && aimed !== instanceId && (kind === null || driverKindOfInstance(aimed) !== kind)) return undefined;
-  return global;
+  const provider = providers.find((entry) => (providerKind !== undefined ? driverKindOfInstance(entry.instanceId) === providerKind : entry.instanceId === aimed));
+  return provider?.displayName ?? provider?.instanceId ?? "the provider";
 }
 
 /** The catalog providers worth offering: enabled ones. */
@@ -227,6 +237,7 @@ function catalogOptions(
   settings: readonly SettingView[],
   providers: readonly ProviderSummary[],
   providerKind?: "claude" | "opencode" | "harness",
+  effective?: SettingEffective,
 ): SettingOption[] {
   const available = offered(providers);
   const providerId = valueOf(settings, "provider");
@@ -239,12 +250,12 @@ function catalogOptions(
         : available.filter((provider) => provider.instanceId === providerId);
   if (source === "provider") {
     return [
-      option("", "Each project's default", "Not overridden here: a project's own provider applies, else the first one available."),
+      option("", "First available", effective?.label ?? "Claude Code when it is installed"),
       ...available.map((provider) => option(provider.instanceId, provider.displayName ?? provider.instanceId)),
     ];
   }
   if (source === "model") {
-    const out: SettingOption[] = [option("", "Provider's default")];
+    const out: SettingOption[] = [effective === undefined ? option("", "Provider's default") : defaultOption(effective)];
     const seen = new Set<string>();
     for (const provider of scoped) {
       // Across providers each one's models sit under its own heading, the provider's default first.
@@ -265,20 +276,21 @@ function catalogOptions(
     }
     return out;
   }
-  // Effort: the levels the default model takes, or every level the
-  // offered models share a name for when no model is pinned.
-  const modelSlug = valueOf(settings, providerKind === undefined ? "model" : `providers.${providerKind}.model`);
-  const out: SettingOption[] = [option("", "Provider's default")];
+  // Effort: the levels the model a new thread would start on takes. On a
+  // provider's page (or with a global Provider) that is one model; with no
+  // global Provider the setting reaches every provider, so only the levels
+  // each provider's model takes are offered: none of them can be handed a
+  // level its model lacks.
+  const out: SettingOption[] = [effective === undefined ? option("", "Provider's default") : defaultOption(effective)];
+  const perProvider = scoped.flatMap((provider) => {
+    const slug = configuredDefaultModel(settings, provider.instanceId) ?? provider.models.find((model) => model.isDefault === true)?.slug;
+    const model = provider.models.find((candidate) => candidate.slug === slug) ?? (slug === undefined ? provider.models[0] : undefined);
+    const choices = model?.efforts.flatMap((descriptor) => descriptor.choices) ?? [];
+    return choices.length === 0 ? [] : [choices];
+  });
   const levels = new Map<string, { id: string; label: string; isDefault?: boolean | null | undefined }>();
-  for (const provider of scoped) {
-    for (const model of provider.models) {
-      if (modelSlug !== undefined && model.slug !== modelSlug) continue;
-      for (const descriptor of model.efforts) {
-        for (const choice of descriptor.choices) {
-          if (!levels.has(choice.id)) levels.set(choice.id, choice);
-        }
-      }
-    }
+  for (const choice of perProvider[0] ?? []) {
+    if (perProvider.every((choices) => choices.some((other) => other.id === choice.id)) && !levels.has(choice.id)) levels.set(choice.id, choice);
   }
   const fallback = defaultEffortId([...levels.values()]);
   for (const choice of levels.values()) out.push(choice.id === fallback ? option(choice.id, choice.label, describeEffort(choice.id, true), true) : option(choice.id, choice.label, describeEffort(choice.id, false)));
@@ -335,7 +347,7 @@ export function settingControl(
       options = [
         ...(descriptor.defaultValue === undefined ? [defaultOption(effective)] : []),
         ...kind.choices
-          .filter((choice) => !isUnsupportedMode(descriptor, choice.value, settings, providers))
+          .filter((choice) => choice.hidden !== true && !isUnsupportedMode(descriptor, choice.value, settings, providers))
           .map((choice) => option(choice.value, choice.label, choice.description)),
       ];
       break;
@@ -361,11 +373,18 @@ export function settingControl(
       if (kind.source === "handoff-models") return { kind: "handoff", models: handoffModelEntries(providers, kind.providerKind, value) };
       if (kind.source === undefined) return { kind: "text", multiline: kind.multiline === true };
       // No catalog yet (still loading): the list would be empty, not wrong.
-      options = catalogOptions(kind.source, settings, providers ?? [], kind.providerKind);
+      options = catalogOptions(kind.source, settings, providers ?? [], kind.providerKind, effective);
       break;
   }
   const current = value === undefined || value === "" ? "" : String(value);
-  if (!options.some((entry) => entry.value === current)) options = [option(current, current, "Set in the config file"), ...options];
+  const unknown = !options.some((entry) => entry.value === current);
+  // Only a loaded catalog can say a model or level is not there; while it loads, nothing is claimed.
+  const warning = unknown && kind.type === "string" && (kind.source === "model" || kind.source === "effort") && providers !== null && options.length > 1
+    ? kind.source === "model"
+      ? `${current} is not a model ${catalogName(settings, providers, kind.providerKind)} lists, so a new thread would ask for one it may not have.`
+      : `The model in force takes no '${current}' level, so its provider may refuse it or use its own.`
+    : undefined;
+  if (unknown) options = [option(current, current, "Set in the config file"), ...options];
   // A few short values read better side by side; names and long lists get a line each.
   const stops = options.filter((entry) => entry.value !== "");
   const slider =
@@ -373,7 +392,7 @@ export function settingControl(
   const ends: SettingEnds | undefined = kind.type === "string" ? { low: "Faster", high: "Smarter" } : kind.type === "integer" || kind.type === "duration" ? kind.ends : undefined;
   return { kind: "pick", options, layout: slider ? "slider" : "list", ...(slider && ends !== undefined ? { ends } : {}),
     ...(slider && kind.type === "string" && kind.source === "effort" ? { scale: "effort" as const } : {}), searchable: !slider && (options.length > 8 || (kind.type === "string" && kind.source === "model" && options.length > 6)),
-    ...(effective ? { effective } : {}) };
+    ...(effective ? { effective } : {}), ...(warning ? { warning } : {}) };
 }
 
 /**

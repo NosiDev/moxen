@@ -953,6 +953,7 @@ function SettingCard({
       <text content={prose(descriptor.description, item.unavailable !== undefined ? COLOR.faint : COLOR.dim)} bg={bg} wrapMode="word" selectable={false} />
       {tag !== "" && !inline ? <text fg={COLOR.faint} bg={bg} selectable={false}>{`Applies: ${tag.trim()}`}</text> : null}
       {item.unavailable !== undefined ? <text fg={COLOR.warn} bg={bg} wrapMode="word" selectable={false}>{item.unavailable}</text> : null}
+      {item.unavailable === undefined && item.control.kind === "pick" && item.control.warning !== undefined ? <text fg={COLOR.warn} bg={bg} wrapMode="word" selectable={false}>{item.control.warning}</text> : null}
     </box>
   );
 }

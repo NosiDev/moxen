@@ -33,7 +33,7 @@ import { latestVersions } from "../core/providers/latest.js";
 import type { LatestVersions } from "../core/catalog/update.js";
 import { EMPTY_SKILL_INVENTORY, type ProviderSummary } from "../core/catalog/summary.js";
 import { loadModelPrefs, providerModelPreferences, setModelHidden } from "../core/catalog/prefs.js";
-import { defaultModelSelection, defaultRuntimeMode, resolveModelSelection } from "../core/catalog/selection.js";
+import { defaultRuntimeMode, resolveModelSelection } from "../core/catalog/selection.js";
 import { defaultConfigPath, loadConfig, normalizeConfig, saveConfig, setConfigValueSecure } from "../core/config.js";
 import { duplicateListItem } from "../core/configlist.js";
 import { describeSettings, listTarget } from "../core/configschema.js";
@@ -919,7 +919,7 @@ export class DirectConnection implements ClientApi {
     // provider/model, the same resolution a CLI handover applies.
     const modelSelection =
       command.modelSelection ??
-      resolveModelSelection(project.defaultModelSelection ?? defaultModelSelection(), config, { prompt: "" });
+      resolveModelSelection(project.defaultModelSelection, config, { prompt: "" });
     const created = await createThread(store, {
       ...(command.threadId ? { id: command.threadId } : {}),
       projectId,

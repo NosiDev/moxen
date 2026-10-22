@@ -1272,7 +1272,7 @@ export async function handover(ctx: OperationContext, request: HandoverRequest):
   };
 
   const threadId = randomUUID();
-  const modelSelection = resolveModelSelection(project.defaultModelSelection ?? defaultModelSelection(), config, {
+  const modelSelection = resolveModelSelection(project.defaultModelSelection, config, {
     prompt,
     ...(request.provider !== undefined ? { provider: request.provider } : {}),
     ...(request.model !== undefined ? { model: request.model } : {}),

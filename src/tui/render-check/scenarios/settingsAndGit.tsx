@@ -167,21 +167,13 @@ async function runSettings(): Promise<void> {
   await setup.flush();
   for (let step = 0; step < 3; step += 1) await act(async () => setup.mockInput.pressArrow("up"));
 
-  // Model defaults list the catalog's models rather than asking for a slug.
+  // A model belongs to one provider: with no global Provider the global Model says it waits for one.
   await act(async () => setup.mockInput.pressTab());
   await setup.flush();
-  const model = setup.captureCharFrame().split("\n");
-  const modelRow = model.findIndex((row) => /│\s+Model\s/.test(row));
-  if (modelRow < 0) fail("New threads tab has no model row");
-  await act(async () => setup.mockMouse.click(model[modelRow]!.indexOf("Model") + 1, modelRow));
-  await setup.flush();
-  const models = setup.captureCharFrame();
-  console.log("--- settings page, model choices ---");
-  console.log(models);
-  if (!models.includes("Claude Opus 5") || !models.includes("Provider's default")) fail("the default model is not picked from the catalog");
-  await act(async () => setup.mockInput.pressEscape());
-  await act(async () => new Promise((resolve) => setTimeout(resolve, 150)));
-  await setup.flush();
+  const newThreads = setup.captureCharFrame();
+  console.log("--- settings page, New threads tab ---");
+  console.log(newThreads);
+  if (!newThreads.replace(/[│\s]+/g, " ").includes("Applies once Provider above names one")) fail("the global Model does not say it waits for a Provider");
 
   // The later sections: a restart-only setting says so, and a boolean
   // flips in place on click.
@@ -197,6 +189,20 @@ async function runSettings(): Promise<void> {
   await act(async () => setup.mockInput.pressKey("u"));
   await setup.flush();
   if (updated.join() !== "claude") fail(`pressing u on the Claude Code tab updated ${JSON.stringify(updated)}`);
+
+  // A provider's Model lists that provider's catalog rather than asking for a slug.
+  const claudeRows = setup.captureCharFrame().split("\n");
+  const modelRow = claudeRows.findIndex((row) => /│\s+Model\s/.test(row));
+  if (modelRow < 0) fail("the Claude Code tab has no model row");
+  await act(async () => setup.mockMouse.click(claudeRows[modelRow]!.indexOf("Model") + 1, modelRow));
+  await setup.flush();
+  const models = setup.captureCharFrame();
+  console.log("--- settings page, model choices ---");
+  console.log(models);
+  if (!models.includes("Claude Opus 5") || !models.includes("Provider's default")) fail("the default model is not picked from the catalog");
+  await act(async () => setup.mockInput.pressEscape());
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 150)));
+  await setup.flush();
 
   // The page runs New threads, Tools, Long threads, Behaviour, Setup: walk the whole of it.
   const claudeFrames: string[] = [];

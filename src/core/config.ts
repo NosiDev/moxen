@@ -33,7 +33,7 @@ export const DEFAULT_CONFIG: CliConfig = {
   projectPolicy: "create",
   workspaceMode: "repo",
   openMode: "auto",
-  threadEnvMode: "auto",
+  threadEnvMode: "local",
   runtimeMode: "full-access",
   interactionMode: "default",
   sessionTtl: "2m",
@@ -159,7 +159,8 @@ export function normalizeConfig(raw: unknown): CliConfig {
   if (input.threadEnvMode !== undefined) {
     const value = asString(input.threadEnvMode, "threadEnvMode") as ThreadEnvMode;
     if (!threadEnvModes.has(value)) throw new CliError("INVALID_CONFIG", "threadEnvMode is invalid.");
-    result.threadEnvMode = value;
+    // `auto` always meant the project checkout; it still loads, as what it meant.
+    result.threadEnvMode = value === "auto" ? "local" : value;
   }
   if (input.runtimeMode !== undefined) {
     const value = asString(input.runtimeMode, "runtimeMode") as RuntimeMode;
@@ -338,7 +339,7 @@ function applyEnvironmentOverrides(config: CliConfig): CliConfig {
   const openMode = envOverride("OPEN_MODE");
   if (openMode) next.openMode = openMode as OpenMode;
   const threadEnvMode = envOverride("THREAD_ENV_MODE");
-  if (threadEnvMode) next.threadEnvMode = threadEnvMode as ThreadEnvMode;
+  if (threadEnvMode) next.threadEnvMode = (threadEnvMode === "auto" ? "local" : threadEnvMode) as ThreadEnvMode;
   const runtimeMode = envOverride("RUNTIME_MODE");
   if (runtimeMode) next.runtimeMode = runtimeMode as RuntimeMode;
   const interactionMode = envOverride("INTERACTION_MODE");

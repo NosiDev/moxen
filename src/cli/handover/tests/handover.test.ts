@@ -113,6 +113,27 @@ describe("createHandoverThread", () => {
     expect(await listStoredProjects(storeRoot())).toHaveLength(0);
   });
 
+  it("leaves a global Model with no Provider to the provider it belongs to", async () => {
+    const harness = await testHarness();
+
+    // The installation default here is OpenCode (the harness pins it); a Claude slug set as the global Model must not reach it.
+    const result = await createHandoverThread({ ...harness.config, model: "claude-opus-5-5" }, {
+      cwd: harness.work,
+      prompt: "Handover",
+      dryRun: true,
+      openMode: "none",
+    });
+    expect(result.thread.createCommand).toMatchObject({ modelSelection: { instanceId: "opencode", model: "gpt-5.4" } });
+
+    const aimed = await createHandoverThread({ ...harness.config, provider: "opencode", model: "openai/gpt-6" }, {
+      cwd: harness.work,
+      prompt: "Handover",
+      dryRun: true,
+      openMode: "none",
+    });
+    expect(aimed.thread.createCommand).toMatchObject({ modelSelection: { instanceId: "opencode", model: "openai/gpt-6" } });
+  });
+
   it("uses the process working directory when cwd is omitted", async () => {
     const harness = await testHarness();
 
