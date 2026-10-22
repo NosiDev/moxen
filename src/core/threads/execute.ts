@@ -208,7 +208,7 @@ export function driverForInstance(
   // Provider settings are read here, once, because the driver owns the
   // spawned process: an already-running session cannot be moved to a
   // different binary or config directory. The schema says as much
-  // (`restartRequired`), so a change applies to the next server start.
+  // (`appliesAt: "server-restart"`), so a change applies to the next server start.
   if (key === "claude") driver = factories.claude?.() ?? new ClaudeDriver({ ...(providers?.claude ? { settings: providers.claude } : {}), skillsMod: locateSkillsMod() });
   else if (key === "opencode") driver = factories.opencode?.() ?? new OpenCodeDriver({ ...(providers?.opencode ? { settings: providers.opencode } : {}), bundledSkillsDir: locateBundledSkills() });
   else if (key === "harness") driver = factories.harness?.() ?? new HarnessDriver({ config: providers?.harness });

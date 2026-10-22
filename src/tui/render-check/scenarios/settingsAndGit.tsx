@@ -209,7 +209,7 @@ async function runSettings(): Promise<void> {
   const seenOn = (text: string) => claudeFrames.findIndex((frame) => frame.includes(text));
   console.log("--- settings page, Claude Code tab, last row ---");
   console.log(claudeFrames.at(-1));
-  for (const expected of ["Claude executable", "next start", "Compact long threads", "Hand off long threads", "Long threads", "Setup"]) {
+  for (const expected of ["Claude executable", "next server start", "Compact long threads", "Hand off long threads", "Long threads", "Setup"]) {
     if (seenOn(expected) < 0) fail(`the Claude Code tab never shows "${expected}"`);
   }
   if (!claudeFrames.some((frame) => frame.includes("Compact long threads") && frame.includes("Compact at") && frame.includes("80%"))) fail("the Claude Code tab does not offer who compacts, and at what share");
@@ -228,13 +228,18 @@ async function runSettings(): Promise<void> {
   if (!opencode.includes("2.0.24 is available")) fail("the OpenCode tab does not say a newer version is available");
   if (!opencode.includes("[ Update to 2.0.24 ]")) fail("the OpenCode update button does not name the version it updates to");
   let sawExecutable = false;
+  // A switch with no default of its own reads as what applies (OpenCode compacts unless told not to), never as Off.
+  let sawDefaultOn = false;
   for (let step = 0; step < 24 && !sawExecutable; step += 1) {
     await act(async () => setup.mockInput.pressArrow("down"));
     await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
     await setup.flush();
-    sawExecutable = setup.captureCharFrame().includes("OpenCode executable");
+    const frame = setup.captureCharFrame();
+    sawExecutable = frame.includes("OpenCode executable");
+    sawDefaultOn ||= frame.split("\n").some((row) => row.includes("Compact automatically") && row.includes("Default (On)"));
   }
   if (!sawExecutable) fail("the OpenCode tab does not show its executable");
+  if (!sawDefaultOn) fail("the OpenCode tab does not read an unset 'Compact automatically' as Default (On)");
   await act(async () => setup.mockInput.pressTab({ shift: true }));
   await setup.flush();
   await act(async () => setup.mockInput.pressTab({ shift: true }));

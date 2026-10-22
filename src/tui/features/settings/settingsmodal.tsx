@@ -10,7 +10,7 @@ import { WebOrderEditor } from "./weborder.js";
 import { HandoffModelsEditor } from "./handoffmodels.js";
 import { TextField } from "./textfield.js";
 import type { HarnessRun } from "./useSettings.js";
-import type { ListItemView } from "../../../core/configschema.js";
+import { APPLIES_AT_TEXT, type ListItemView } from "../../../core/configschema.js";
 import type { DiscoverResult } from "../../../core/types.js";
 import type { HarnessApiFormat } from "../../../core/types.js";
 import { ModalShell } from "../../ui/modalshell.js";
@@ -20,7 +20,7 @@ import { markModalDismissed } from "../../model/modalDismiss.js";
 import { useHover } from "../../hooks/useHover.js";
 import { COLOR, SURFACE, truncate } from "../../theme.js";
 import { splitInlineCode } from "../../model/inlinecode.js";
-import { providerVersionLine, settingControl, withHandoffModel, settingValueLabel, updatableProviderOf, type LatestView, type ProviderCheckView, type SettingControl, type SettingOption } from "../../model/settings.js";
+import { nextToggleValue, providerVersionLine, settingControl, withHandoffModel, settingValueLabel, updatableProviderOf, type LatestView, type ProviderCheckView, type SettingControl, type SettingOption } from "../../model/settings.js";
 import type { LatestVersions, UpdatableProvider } from "../../../core/catalog/update.js";
 import {
   SECTION_LABEL,
@@ -387,7 +387,7 @@ export function SettingsModal({
       return;
     }
     if (item.control.kind === "toggle") {
-      onSet(item.descriptor.key, item.value === true ? "false" : "true");
+      onSet(item.descriptor.key, nextToggleValue(item.control, item.value));
       return;
     }
     if (item.control.kind === "text" || item.control.kind === "secret") {
@@ -870,7 +870,7 @@ function SectionTab({ label, prefix, active, width, onSelect }: { label: string;
 function valueText(item: SettingItem): string {
   const label = settingValueLabel(item.descriptor, item.value, item.control, item.entries?.length);
   if (item.control.kind === "list") return `${label}  ›`;
-  if (item.control.kind === "toggle") return item.value === true ? "● On" : "○ Off";
+  if (item.control.kind === "toggle") return item.value === true ? "● On" : item.value === undefined && item.control.tristate === true ? `◌ ${label}` : "○ Off";
   if (item.control.kind === "pick" || item.control.kind === "handoff" || item.control.kind === "order") return `${label}  ›`;
   return label;
 }
@@ -902,7 +902,10 @@ function SettingCard({
   const secret = descriptor.kind.type === "secret";
   const bg = active ? SURFACE.hover : hovered ? SURFACE.border : SURFACE.raised;
   const shown = `${pending ? "· " : ""}${valueText(item)}`;
-  const note = descriptor.restartRequired === true ? "  next start" : "";
+  // When a change applies sits beside the label if both fit, else on a line of its own, so the label is never cut for it.
+  const tag = descriptor.appliesAt === undefined || descriptor.appliesAt === "now" ? "" : `  ${APPLIES_AT_TEXT[descriptor.appliesAt].tag}`;
+  const inline = tag !== "" && descriptor.label.length + tag.length <= width - shown.length - 4;
+  const note = inline ? tag : "";
   const labelWidth = Math.max(8, width - shown.length - note.length - 4);
   const valueColor = item.unavailable !== undefined
     ? COLOR.faint
@@ -911,7 +914,9 @@ function SettingCard({
     : item.control.kind === "toggle"
       ? value === true
         ? COLOR.added
-        : COLOR.dim
+        : value === undefined && item.control.tristate === true
+          ? COLOR.text
+          : COLOR.dim
       : explicit
         ? COLOR.accent
         : COLOR.text;
@@ -946,6 +951,7 @@ function SettingCard({
         />
       ) : null}
       <text content={prose(descriptor.description, item.unavailable !== undefined ? COLOR.faint : COLOR.dim)} bg={bg} wrapMode="word" selectable={false} />
+      {tag !== "" && !inline ? <text fg={COLOR.faint} bg={bg} selectable={false}>{`Applies: ${tag.trim()}`}</text> : null}
       {item.unavailable !== undefined ? <text fg={COLOR.warn} bg={bg} wrapMode="word" selectable={false}>{item.unavailable}</text> : null}
     </box>
   );

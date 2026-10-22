@@ -24,6 +24,7 @@ import { CliError } from "./errors.js";
 import { webOrderEntries, webOrderUnavailable, type WebOrderEntry, type WebRole } from "./webservers.js";
 import { CLAUDE_NATIVE_TOOLS, OPENCODE_NATIVE_TOOLS, type NativeTool } from "./nativetools.js";
 import { formatHandoffModels } from "./handoffmodels.js";
+import { numberLabel } from "./configformat.js";
 import { isSecretRef } from "./secrets.js";
 import { MCP_RUNNER_SETTING, MCP_SERVERS_SETTING } from "./mcpschema.js";
 import { describeMcpServers } from "./mcpview.js";
@@ -119,6 +120,12 @@ export interface ListField {
   /** Kept settable for old files, but an editor does not offer it. */
   readonly hidden?: boolean;
   readonly kind: ListFieldKind;
+  /**
+   * An editor shows this field only while the field at `path` (relative to the
+   * same item) holds one of `in`; `""` stands for unset, so a switch that is on
+   * unless told otherwise lists both `""` and `"true"`. The CLI lists it always.
+   */
+  readonly visibleWhen?: { readonly path: string; readonly in: readonly string[] };
 }
 
 export type ListFieldKind =
@@ -206,13 +213,58 @@ export interface SettingDescriptor {
   readonly defaultValue: SettingValue;
   /** A page shows this setting only while `key` holds one of `in` (its default counts). The CLI lists it always. */
   readonly visibleWhen?: { readonly key: string; readonly in: readonly string[] };
-  /**
-   * Read at driver construction, so a change reaches only sessions started
-   * after it. Surfaced to the user rather than silently half-applied.
-   */
-  readonly restartRequired?: boolean;
+  /** When a change takes effect, if not at once. Said here rather than in each description, so it is said one way. */
+  readonly appliesAt?: SettingAppliesAt;
+  /** What applies while the key is unset, for a setting with no default of its own. */
+  readonly fallback?: SettingFallback;
   /** `MOXEN_<name>` overrides this key; shown so an ignored edit is explicable. */
   readonly envOverride?: string;
+}
+
+/**
+ * When a change to a setting takes effect:
+ * - `now`: the next read, which is the next turn or the next screen;
+ * - `next-session`: a provider session reads it when it starts, so a thread already warm keeps what it had;
+ * - `provider-restart`: OpenCode reads it when its server starts; Moxen restarts that server once it is idle;
+ * - `server-restart`: the provider's driver reads it once, when Moxen's server starts.
+ */
+export type SettingAppliesAt = "now" | "next-session" | "provider-restart" | "server-restart";
+
+/** How a client says when a change applies: a short tag beside the value, and the sentence behind it. */
+export const APPLIES_AT_TEXT: Readonly<Record<Exclude<SettingAppliesAt, "now">, { readonly tag: string; readonly sentence: string }>> = {
+  "next-session": { tag: "next session", sentence: "A change reaches sessions started after it; a thread already running keeps what it had." },
+  "provider-restart": { tag: "restarts OpenCode", sentence: "OpenCode reads this when its server starts, so Moxen restarts the server once nothing is running on it." },
+  "server-restart": { tag: "next server start", sentence: "Read when Moxen's server starts: restart it (`moxen server stop`, then start) for a change to apply." },
+};
+
+/** Whether a change waits for Moxen's server to restart: what `--json config list` has always called `restartRequired`. */
+export function restartRequired(descriptor: SettingDescriptor): boolean {
+  return descriptor.appliesAt === "server-restart";
+}
+
+/**
+ * What applies while a key with no default of its own is unset:
+ * - `key`: another setting (a provider's Permissions falls back to the global one), followed down its own fallback;
+ * - `value` with `text`: a value this setting would hold, decided elsewhere (`text` says where: "OpenCode's own config");
+ * - `text` alone: what happens, when it is not a value of this setting ("70% of the window");
+ * - `resolver`: a rule in core over several keys (hand-off sizes).
+ */
+export type SettingFallback =
+  | { readonly key: string }
+  | { readonly value: SettingValue; readonly text: string }
+  | { readonly text: string }
+  | { readonly resolver: FallbackResolver };
+
+export type FallbackResolver = "handoffTokens";
+
+/** What is in force for an unset setting, worked out in core so a client only draws it. */
+export interface SettingEffective {
+  /** The value it amounts to, when it is one this setting could hold; undefined when it is not ("70% of the window"). */
+  readonly value: SettingValue;
+  /** The value as a page writes it: "Full access", "On", "50% of the window". */
+  readonly label: string;
+  /** Where it comes from, to follow the label after a comma: "from Permissions on the New threads tab". Absent when the label says it all. */
+  readonly origin?: string;
 }
 
 const choice = (value: string, label: string, description?: string): SettingChoice =>
@@ -225,29 +277,32 @@ function handoffSettings(kind: "claude" | "opencode" | "harness"): SettingDescri
     {
       key: `providers.${kind}.autoHandoff`,
       label: "Hand off long threads",
-      description: "What to do when a thread here fills its window: ask with a card, hand off by itself, or never. Default: the 'Hand off long threads' setting on the Turns tab.",
+      description: "What to do when a thread here fills its window: ask with a card, hand off by itself, or never.",
       section,
       group: "Long threads",
       kind: { type: "enum", choices: [choice("ask", "Ask"), choice("auto", "Automatic"), choice("off", "Off")] },
       defaultValue: undefined,
+      fallback: { key: "ui.autoHandoff" },
     },
     {
       key: `providers.${kind}.autoHandoffPercent`,
       label: "Hand off at",
-      description: "Share of the model's window at which a thread here is handed off, so a bigger window hands off later. Default: the 'Hand off at' setting on the Turns tab.",
+      description: "Share of the model's window at which a thread here is handed off, so a bigger window hands off later.",
       section,
       group: "Long threads",
       kind: { type: "integer", min: 10, max: 90, unit: "%", presets: [25, 50, 75], ends: { low: "Earlier", high: "Later" } },
       defaultValue: undefined,
+      fallback: { key: "ui.autoHandoffPercent" },
     },
     {
       key: `providers.${kind}.autoHandoffTokens`,
       label: "Hand off at a fixed size",
-      description: "Tokens of context at which a thread here is handed off, whatever the model's window. Wins over the share above. Default: the share.",
+      description: "Tokens of context at which a thread here is handed off, whatever the model's window. Wins over the share above.",
       section,
       group: "Long threads",
       kind: { type: "integer", min: 8_192, max: 2_000_000, binary: true, presets: [32_768, 65_536, 131_072, 262_144, 524_288], ends: { low: "Earlier", high: "Later" } },
       defaultValue: undefined,
+      fallback: { resolver: "handoffTokens" },
     },
     {
       key: `providers.${kind}.autoHandoffModels`,
@@ -396,6 +451,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     group: "Agent",
     kind: { type: "boolean" },
     defaultValue: true,
+    appliesAt: "next-session",
   },
   {
     key: "instructions",
@@ -405,6 +461,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     group: "Agent",
     kind: { type: "string", placeholder: "Appended to every session", multiline: true },
     defaultValue: undefined,
+    appliesAt: "next-session",
   },
 
   // -- model -----------------------------------------------------------------
@@ -434,6 +491,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     hidden: true,
     kind: { type: "enum", choices: [choice("standard", "Standard"), choice("fast", "Fast")] },
     defaultValue: undefined,
+    fallback: { text: "The provider's own" },
     envOverride: "MOXEN_SPEED_MODE",
   },
   {
@@ -533,11 +591,12 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "ui.autoHandoffTokens",
     label: "Hand off at a fixed size",
-    description: "Tokens of context at which a thread is handed off, whatever the model's window. Unset: the share above. Needs the provider to report how much context a thread uses.",
+    description: "Tokens of context at which a thread is handed off, whatever the model's window. Needs the provider to report how much context a thread uses.",
     section: "turns",
     group: "Long threads",
     kind: { type: "integer", min: 8_192, max: 2_000_000, binary: true, presets: [32_768, 65_536, 131_072, 262_144, 524_288], ends: { low: "Earlier", high: "Later" } },
     defaultValue: undefined,
+    fallback: { resolver: "handoffTokens" },
   },
 
   {
@@ -598,7 +657,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.claude.runtimeMode",
     label: "Permissions",
-    description: "How much a new Claude Code thread may do without asking. Unset: the Permissions setting on the New threads tab.",
+    description: "How much a new Claude Code thread may do without asking.",
     section: "provider:claude",
     group: "New threads",
     kind: {
@@ -611,6 +670,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
       ],
     },
     defaultValue: undefined,
+    fallback: { key: "runtimeMode" },
   },
   {
     key: "providers.claude.model",
@@ -624,16 +684,18 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.claude.thinkingEffort",
     label: "Effort",
-    description: "The reasoning effort a new Claude Code thread starts at, for models that take one. Unset: the Effort setting on the New threads tab.",
+    description: "The reasoning effort a new Claude Code thread starts at, for models that take one.",
     section: "provider:claude",
     group: "New threads",
     kind: { type: "string", placeholder: "the provider's own default", source: "effort", providerKind: "claude" },
     defaultValue: undefined,
+    fallback: { key: "thinkingEffort" },
   },
   {
     key: "providers.claude.moxenTools",
     label: "Moxen's tools",
-    description: "Give Claude Code threads Moxen's own tools (delegate, hand off, task status). Turn off for a provider you do not want orchestrating. Applies to the next session.",
+    description: "Give Claude Code threads Moxen's own tools (delegate, hand off, task status). Turn off for a provider you do not want orchestrating.",
+    appliesAt: "next-session",
     section: "provider:claude",
     group: "Tools",
     kind: { type: "boolean" },
@@ -642,7 +704,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.claude.mcpExclude",
     label: "MCP servers",
-    description: "Which of your MCP servers Claude Code threads get. Every server by default; switch off the ones this provider should not see. A server switched off on its own entry, or only offered to other providers, stays out either way. Applies to the next session.",
+    description: "Which of your MCP servers Claude Code threads get. Every server by default; switch off the ones this provider should not see. A server switched off on its own entry, or only offered to other providers, stays out either way.",
+    appliesAt: "next-session",
     section: "provider:claude",
     group: "Tools",
     kind: { type: "string", placeholder: "none switched off", source: "mcp-server" },
@@ -651,7 +714,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.claude.todos",
     label: "To-do list",
-    description: "Let Claude Code models keep a to-do list (the Tasks panel). Applies to the next session.",
+    description: "Let Claude Code models keep a to-do list (the Tasks panel).",
+    appliesAt: "next-session",
     section: "provider:claude",
     group: "Tools",
     kind: { type: "boolean" },
@@ -660,7 +724,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.claude.webSearchOrder",
     label: "Search order",
-    description: "The order Claude Code threads should try web search tools in, when you have more than one. Tick the ones to rank and move them up or down; the model is told to go to the next only if one fails or finds nothing useful. This is advice in the prompt: it does not turn any tool off (that is Built-in tools off), and the model may still pick another. It works only with the Brave Search and Exa servers from Moxen's own list: the tools whose options Moxen knows. Applies to the next session.",
+    description: "The order Claude Code threads should try web search tools in, when you have more than one. Tick the ones to rank and move them up or down; the model is told to go to the next only if one fails or finds nothing useful. This is advice in the prompt: it does not turn any tool off (that is Built-in tools off), and the model may still pick another. It works only with the Brave Search and Exa servers from Moxen's own list: the tools whose options Moxen knows.",
+    appliesAt: "next-session",
     section: "provider:claude",
     group: "Tools",
     kind: { type: "string", placeholder: "no preference", source: "web-order", web: "search" },
@@ -669,7 +734,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.claude.webFetchOrder",
     label: "Page reading order",
-    description: "The order Claude Code threads should try tools that read a page in, when you have more than one. Tick the ones to rank and move them up or down; the model is told to go to the next only if one fails or finds nothing useful. This is advice in the prompt: it does not turn any tool off (that is Built-in tools off), and the model may still pick another. It works only with Moxen's web_fetch and the Exa server from Moxen's own list: the tools whose options Moxen knows. Applies to the next session.",
+    description: "The order Claude Code threads should try tools that read a page in, when you have more than one. Tick the ones to rank and move them up or down; the model is told to go to the next only if one fails or finds nothing useful. This is advice in the prompt: it does not turn any tool off (that is Built-in tools off), and the model may still pick another. It works only with Moxen's web_fetch and the Exa server from Moxen's own list: the tools whose options Moxen knows.",
+    appliesAt: "next-session",
     section: "provider:claude",
     group: "Tools",
     kind: { type: "string", placeholder: "no preference", source: "web-order", web: "fetch" },
@@ -678,7 +744,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.claude.disabledNativeTools",
     label: "Built-in tools off",
-    description: "Claude Code's own tools to switch off, as comma-separated names: Read, Write, Edit, Bash, WebSearch, WebFetch, Agent, Skill, AskUserQuestion… (any name the provider lists works). The tool is removed from the model's list. Applies to the next session.",
+    description: "Claude Code's own tools to switch off, as comma-separated names: Read, Write, Edit, Bash, WebSearch, WebFetch, Agent, Skill, AskUserQuestion… (any name the provider lists works). The tool is removed from the model's list.",
+    appliesAt: "next-session",
     section: "provider:claude",
     group: "Tools",
     kind: { type: "string", placeholder: "none switched off", source: "native-tools", tools: CLAUDE_NATIVE_TOOLS },
@@ -692,7 +759,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     group: "Setup",
     kind: { type: "string", placeholder: "claude" },
     defaultValue: "claude",
-    restartRequired: true,
+    appliesAt: "server-restart",
   },
   {
     key: "providers.claude.homePath",
@@ -703,7 +770,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     group: "Setup",
     kind: { type: "string", placeholder: "~/.claude" },
     defaultValue: "",
-    restartRequired: true,
+    appliesAt: "server-restart",
   },
   {
     key: "providers.claude.thinkingDisplay",
@@ -720,7 +787,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
       ],
     },
     defaultValue: "summarized",
-    restartRequired: true,
+    appliesAt: "server-restart",
   },
   {
     key: "providers.claude.promptSuggestions",
@@ -730,7 +797,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     group: "Behaviour",
     kind: { type: "boolean" },
     defaultValue: true,
-    restartRequired: true,
+    appliesAt: "server-restart",
   },
   {
     key: "providers.claude.partialMessages",
@@ -741,7 +808,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     group: "Behaviour",
     kind: { type: "boolean" },
     defaultValue: true,
-    restartRequired: true,
+    appliesAt: "server-restart",
   },
   {
     key: "providers.claude.agentSkills",
@@ -752,7 +819,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     group: "Behaviour",
     kind: { type: "boolean" },
     defaultValue: true,
-    restartRequired: true,
+    appliesAt: "server-restart",
   },
   {
     key: "providers.claude.ultracode",
@@ -763,7 +830,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     group: "Behaviour",
     kind: { type: "boolean" },
     defaultValue: false,
-    restartRequired: true,
+    appliesAt: "server-restart",
   },
   {
     key: "providers.claude.autoCompact",
@@ -774,7 +841,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     group: "Long threads",
     kind: { type: "enum", choices: [choice("ask", "Ask"), choice("auto", "Automatic"), choice("claude", "Claude Code")] },
     defaultValue: "ask",
-    restartRequired: true,
+    appliesAt: "server-restart",
   },
   {
     key: "providers.claude.autoCompactPercent",
@@ -791,12 +858,13 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "Auto-compact window",
     visibleWhen: { key: "providers.claude.autoCompact", in: ["claude"] },
     description:
-      "Tokens of context at which Claude Code compacts the conversation on its own, from 100K to 1M. Left unset it uses the window tuned for the model. A lower window compacts earlier and keeps long sessions cheaper and sharper.",
+      "Tokens of context at which Claude Code compacts the conversation on its own, from 100K to 1M. A lower window compacts earlier and keeps long sessions cheaper and sharper.",
     section: "provider:claude",
     group: "Long threads",
     kind: { type: "integer", min: 100_000, max: 1_000_000, binary: true, presets: [131_072, 262_144, 524_288, 1_000_000], ends: { low: "Earlier", high: "Later" } },
     defaultValue: undefined,
-    restartRequired: true,
+    fallback: { text: "Tuned per model" },
+    appliesAt: "server-restart",
   },
 
   ...handoffSettings("claude"),
@@ -805,7 +873,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.opencode.runtimeMode",
     label: "Permissions",
-    description: "How much a new OpenCode thread may do without asking. Unset: the Permissions setting on the New threads tab.",
+    description: "How much a new OpenCode thread may do without asking.",
     section: "provider:opencode",
     group: "New threads",
     kind: {
@@ -818,6 +886,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
       ],
     },
     defaultValue: undefined,
+    fallback: { key: "runtimeMode" },
   },
   {
     key: "providers.opencode.model",
@@ -831,16 +900,18 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.opencode.thinkingEffort",
     label: "Effort",
-    description: "The reasoning effort a new OpenCode thread starts at, for models that take one. Unset: the Effort setting on the New threads tab.",
+    description: "The reasoning effort a new OpenCode thread starts at, for models that take one.",
     section: "provider:opencode",
     group: "New threads",
     kind: { type: "string", placeholder: "the provider's own default", source: "effort", providerKind: "opencode" },
     defaultValue: undefined,
+    fallback: { key: "thinkingEffort" },
   },
   {
     key: "providers.opencode.moxenTools",
     label: "Moxen's tools",
-    description: "Give OpenCode threads Moxen's own tools (delegate, hand off, task status). Turn off for a provider you do not want orchestrating. Applies to the next session.",
+    description: "Give OpenCode threads Moxen's own tools (delegate, hand off, task status). Turn off for a provider you do not want orchestrating.",
+    appliesAt: "next-session",
     section: "provider:opencode",
     group: "Tools",
     kind: { type: "boolean" },
@@ -849,7 +920,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.opencode.mcpExclude",
     label: "MCP servers",
-    description: "Which of your MCP servers OpenCode threads get. Every server by default; switch off the ones this provider should not see. A server switched off on its own entry, or only offered to other providers, stays out either way. Applies to the next session.",
+    description: "Which of your MCP servers OpenCode threads get. Every server by default; switch off the ones this provider should not see. A server switched off on its own entry, or only offered to other providers, stays out either way.",
+    appliesAt: "next-session",
     section: "provider:opencode",
     group: "Tools",
     kind: { type: "string", placeholder: "none switched off", source: "mcp-server" },
@@ -858,7 +930,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.opencode.todos",
     label: "To-do list",
-    description: "Let OpenCode models keep a to-do list (the Tasks panel). Applies to the next session.",
+    description: "Let OpenCode models keep a to-do list (the Tasks panel).",
+    appliesAt: "next-session",
     section: "provider:opencode",
     group: "Tools",
     kind: { type: "boolean" },
@@ -868,16 +941,18 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     key: "providers.opencode.moxenPrompt",
     label: "Moxen's system prompt",
     description:
-      "Replace the base system prompt OpenCode picks for the model's family with Moxen's, the one the Moxen Harness works from, written for OpenCode's tools. Your AGENTS.md files, skills, MCP guidance and Moxen's runtime instructions still apply, and an agent you gave your own `system` keeps it. OpenCode reads this when its server starts, so a change waits for the server to be idle and then restarts it.",
+      "Replace the base system prompt OpenCode picks for the model's family with Moxen's, the one the Moxen Harness works from, written for OpenCode's tools. Your AGENTS.md files, skills, MCP guidance and Moxen's runtime instructions still apply, and an agent you gave your own `system` keeps it.",
     section: "provider:opencode",
     group: "Tools",
     kind: { type: "boolean" },
     defaultValue: true,
+    appliesAt: "provider-restart",
   },
   {
     key: "providers.opencode.webSearchOrder",
     label: "Search order",
-    description: "The order OpenCode threads should try web search tools in, when you have more than one. Tick the ones to rank and move them up or down; the model is told to go to the next only if one fails or finds nothing useful. This is advice in the prompt: it does not turn any tool off (that is Built-in tools off), and the model may still pick another. It works only with the Brave Search and Exa servers from Moxen's own list: the tools whose options Moxen knows. Applies to the next session.",
+    description: "The order OpenCode threads should try web search tools in, when you have more than one. Tick the ones to rank and move them up or down; the model is told to go to the next only if one fails or finds nothing useful. This is advice in the prompt: it does not turn any tool off (that is Built-in tools off), and the model may still pick another. It works only with the Brave Search and Exa servers from Moxen's own list: the tools whose options Moxen knows.",
+    appliesAt: "next-session",
     section: "provider:opencode",
     group: "Tools",
     kind: { type: "string", placeholder: "no preference", source: "web-order", web: "search" },
@@ -886,7 +961,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.opencode.webFetchOrder",
     label: "Page reading order",
-    description: "The order OpenCode threads should try tools that read a page in, when you have more than one. Tick the ones to rank and move them up or down; the model is told to go to the next only if one fails or finds nothing useful. This is advice in the prompt: it does not turn any tool off (that is Built-in tools off), and the model may still pick another. It works only with Moxen's web_fetch and the Exa server from Moxen's own list: the tools whose options Moxen knows. Applies to the next session.",
+    description: "The order OpenCode threads should try tools that read a page in, when you have more than one. Tick the ones to rank and move them up or down; the model is told to go to the next only if one fails or finds nothing useful. This is advice in the prompt: it does not turn any tool off (that is Built-in tools off), and the model may still pick another. It works only with Moxen's web_fetch and the Exa server from Moxen's own list: the tools whose options Moxen knows.",
+    appliesAt: "next-session",
     section: "provider:opencode",
     group: "Tools",
     kind: { type: "string", placeholder: "no preference", source: "web-order", web: "fetch" },
@@ -895,7 +971,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.opencode.disabledNativeTools",
     label: "Built-in tools off",
-    description: "OpenCode's own tools to switch off, as comma-separated names: read, edit, glob, grep, shell, execute, websearch, webfetch, subagent, skill, question. The tool is removed from the model's list. OpenCode reads this when its server starts, so a change waits for the server to be idle and then restarts it. Applies to the next session.",
+    description: "OpenCode's own tools to switch off, as comma-separated names: read, edit, glob, grep, shell, execute, websearch, webfetch, subagent, skill, question. The tool is removed from the model's list.",
+    appliesAt: "provider-restart",
     section: "provider:opencode",
     group: "Tools",
     kind: { type: "string", placeholder: "none switched off", source: "native-tools", tools: OPENCODE_NATIVE_TOOLS },
@@ -912,29 +989,31 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     group: "Setup",
     kind: { type: "string", placeholder: "opencode" },
     defaultValue: "opencode",
-    restartRequired: true,
+    appliesAt: "server-restart",
   },
   {
     key: "providers.opencode.autoCompact",
     label: "Compact automatically",
     description:
-      "Whether the OpenCode servers Moxen starts summarise the conversation on their own when it nears the model's context limit. Unset: OpenCode's own config decides (on by default). Compacting by hand always works.",
+      "Whether the OpenCode servers Moxen starts summarise the conversation on their own when it nears the model's context limit. Compacting by hand always works.",
     section: "provider:opencode",
     group: "Long threads",
     kind: { type: "boolean" },
     defaultValue: undefined,
-    restartRequired: true,
+    fallback: { value: true, text: "unless OpenCode's own config turns it off" },
+    appliesAt: "server-restart",
   },
   {
     key: "providers.opencode.compactBuffer",
     label: "Compact when this much is left",
     description:
-      "Tokens kept free below the model's limit: automatic compaction starts once the conversation is within this of it, so a larger value compacts earlier. Unset: OpenCode's own 10% of the window.",
+      "Tokens kept free below the model's limit: automatic compaction starts once the conversation is within this of it, so a larger value compacts earlier.",
     section: "provider:opencode",
     group: "Long threads",
     kind: { type: "integer", min: 0, max: 1_000_000, binary: true, presets: [8_192, 16_384, 32_768, 65_536, 131_072], ends: { low: "Later", high: "Earlier" } },
     defaultValue: undefined,
-    restartRequired: true,
+    fallback: { text: "OpenCode's own 10% of the window" },
+    appliesAt: "server-restart",
   },
   {
     key: "providers.opencode.bundledSkills",
@@ -945,7 +1024,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     group: "Behaviour",
     kind: { type: "boolean" },
     defaultValue: true,
-    restartRequired: true,
+    appliesAt: "server-restart",
   },
 
   ...handoffSettings("opencode"),
@@ -954,7 +1033,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.harness.runtimeMode",
     label: "Permissions",
-    description: "How much a new Moxen Harness thread may do without asking. Unset: the Permissions setting on the New threads tab.",
+    description: "How much a new Moxen Harness thread may do without asking.",
     section: "provider:harness",
     group: "New threads",
     kind: {
@@ -967,6 +1046,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
       ],
     },
     defaultValue: undefined,
+    fallback: { key: "runtimeMode" },
   },
   {
     key: "providers.harness.model",
@@ -980,16 +1060,18 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.harness.thinkingEffort",
     label: "Effort",
-    description: "The reasoning effort a new Moxen Harness thread starts at, for models that take one. Unset: the Effort setting on the New threads tab.",
+    description: "The reasoning effort a new Moxen Harness thread starts at, for models that take one.",
     section: "provider:harness",
     group: "New threads",
     kind: { type: "string", placeholder: "the provider's own default", source: "effort", providerKind: "harness" },
     defaultValue: undefined,
+    fallback: { key: "thinkingEffort" },
   },
   {
     key: "providers.harness.moxenTools",
     label: "Moxen's tools",
-    description: "Give Moxen Harness threads Moxen's own tools (delegate, hand off, task status). Turn off for a provider you do not want orchestrating. Applies to the next session.",
+    description: "Give Moxen Harness threads Moxen's own tools (delegate, hand off, task status). Turn off for a provider you do not want orchestrating.",
+    appliesAt: "next-session",
     section: "provider:harness",
     group: "Tools",
     kind: { type: "boolean" },
@@ -998,7 +1080,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.harness.mcpExclude",
     label: "MCP servers",
-    description: "Which of your MCP servers Moxen Harness threads get. Every server by default; switch off the ones this provider should not see. A server switched off on its own entry, or only offered to other providers, stays out either way. Applies to the next session.",
+    description: "Which of your MCP servers Moxen Harness threads get. Every server by default; switch off the ones this provider should not see. A server switched off on its own entry, or only offered to other providers, stays out either way.",
+    appliesAt: "next-session",
     section: "provider:harness",
     group: "Tools",
     kind: { type: "string", placeholder: "none switched off", source: "mcp-server" },
@@ -1007,7 +1090,8 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.harness.todos",
     label: "To-do list",
-    description: "Let Moxen Harness models keep a to-do list (the Tasks panel). Applies to the next session.",
+    description: "Let Moxen Harness models keep a to-do list (the Tasks panel).",
+    appliesAt: "next-session",
     section: "provider:harness",
     group: "Tools",
     kind: { type: "boolean" },
@@ -1018,11 +1102,12 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.harness.slots",
     label: "Requests at once",
-    description: "How many requests a model server takes at the same time, for profiles that do not say (a profile's own 'Server slots' wins). Subagents, summaries and titles queue behind it. Unset: no limit. A single-GPU llama.cpp server is usually 1; /btw is refused while a turn runs on a server with one slot.",
+    description: "How many requests a model server takes at the same time, for profiles that do not say (a profile's own 'Server slots' wins). Subagents, summaries and titles queue behind it. A single-GPU llama.cpp server is usually 1; /btw is refused while a turn runs on a server with one slot.",
     section: "provider:harness",
     group: "Concurrency",
     kind: { type: "integer", min: 1, max: 64, presets: [1, 2, 4, 8], ends: { low: "Fewer", high: "More" } },
     defaultValue: undefined,
+    fallback: { text: "No limit" },
   },
   {
     key: "providers.harness.autoCompact",
@@ -1043,16 +1128,18 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     hidden: true,
     kind: { type: "integer", min: 30, max: 95, unit: "%", presets: [50, 60, 70, 80, 90] },
     defaultValue: undefined,
+    fallback: { text: "'Compact at' in tokens" },
   },
   {
     key: "providers.harness.autoCompactTokens",
     label: "Compact at",
     description:
-      "Tokens of context at which to compact. Unset: 70% of the window for windows of 128K or more and 60% for smaller ones; at least 16K tokens are always left free. Needs the model's contextWindow in its profile.",
+      "Tokens of context at which to compact. At least 16K tokens are always left free. Needs the model's contextWindow in its profile.",
     section: "provider:harness",
     group: "Long threads",
     kind: { type: "integer", min: 8_192, max: 2_000_000, binary: true, presets: [32_768, 65_536, 131_072, 262_144, 524_288], ends: { low: "Earlier", high: "Later" } },
     defaultValue: undefined,
+    fallback: { text: "70% of the window (60% under 128K)" },
   },
   {
     key: "providers.harness.keepRecentTokens",
@@ -1129,6 +1216,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     group: "Web",
     kind: { type: "string", placeholder: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" },
     defaultValue: undefined,
+    visibleWhen: { key: "providers.harness.webBrowser", in: ["auto"] },
   },
   {
     key: "providers.harness.webPrivateNetwork",
@@ -1341,6 +1429,66 @@ export interface SettingView {
   readonly unavailable?: string;
   /** For a web order: the tools it can rank, with the ones this provider cannot use marked. */
   readonly order?: readonly WebOrderEntry[];
+  /** What applies while the setting is unset (from its `fallback`), so a page's Default can name it. Absent when set, or when nothing more is known. */
+  readonly effective?: SettingEffective;
+}
+
+/** A setting's value as a page writes it: a choice's label, On or Off, a number with its unit. */
+export function formatSettingValue(descriptor: SettingDescriptor, value: SettingValue): string {
+  if (value === undefined || value === "") return "Default";
+  const kind = descriptor.kind;
+  if (kind.type === "enum") return kind.choices.find((option) => option.value === String(value))?.label ?? String(value);
+  if (kind.type === "boolean" || typeof value === "boolean") return value === true ? "On" : "Off";
+  if (kind.type === "secret") return "Saved in the keychain";
+  if (kind.type === "integer" && typeof value === "number") return `${numberLabel(value, kind.binary)}${kind.unit ?? ""}`;
+  return String(value);
+}
+
+/** Where a fallback setting lives, said from the page of the one that falls back to it. */
+function settingPlace(from: SettingDescriptor, to: SettingDescriptor): string {
+  return from.section === to.section ? `from '${to.label}'` : `from '${to.label}' on the ${SECTION_LABEL[to.section]} tab`;
+}
+
+/** A share of the window, as a hand-off line reads when it is not a fixed size. */
+const shareLabel = (percent: SettingValue): string => `${String(percent)}% of the window`;
+
+const FALLBACK_RESOLVERS: Readonly<Record<FallbackResolver, (config: CliConfig, descriptor: SettingDescriptor) => SettingEffective | undefined>> = {
+  /**
+   * A fixed hand-off size, unset: the same precedence `resolveHandoff` applies
+   * (`core/threads/longthreads.ts`). A provider's own share wins over the global
+   * size, which wins over the global share.
+   */
+  handoffTokens(config, descriptor) {
+    const global = BY_KEY.get("ui.autoHandoffTokens")!;
+    const globalShare = BY_KEY.get("ui.autoHandoffPercent")!;
+    const kind = /^providers\.(claude|opencode|harness)\.autoHandoffTokens$/.exec(descriptor.key)?.[1];
+    if (kind !== undefined) {
+      const ownShare = BY_KEY.get(`providers.${kind}.autoHandoffPercent`)!;
+      const share = readSetting(config, ownShare.key);
+      if (share !== undefined) return { value: undefined, label: shareLabel(share), origin: settingPlace(descriptor, ownShare) };
+      const size = readSetting(config, global.key);
+      if (size !== undefined && size !== "") return { value: size, label: formatSettingValue(global, size), origin: settingPlace(descriptor, global) };
+    }
+    return { value: undefined, label: shareLabel(readSetting(config, globalShare.key)), origin: settingPlace(descriptor, globalShare) };
+  },
+};
+
+/** What applies while `descriptor` is unset, following a chain of fallback keys (a few links at most). */
+function effectiveOf(config: CliConfig, descriptor: SettingDescriptor, depth = 0): SettingEffective | undefined {
+  const fallback = descriptor.fallback;
+  if (fallback === undefined || depth > 4) return undefined;
+  if ("resolver" in fallback) return FALLBACK_RESOLVERS[fallback.resolver](config, descriptor);
+  if ("key" in fallback) {
+    const target = BY_KEY.get(fallback.key);
+    if (target === undefined) return undefined;
+    const origin = settingPlace(descriptor, target);
+    const value = readSetting(config, target.key);
+    if (value !== undefined && value !== "") return { value, label: formatSettingValue(target, value), origin };
+    const deeper = effectiveOf(config, target, depth + 1);
+    return deeper === undefined ? undefined : { value: deeper.value, label: deeper.label, origin };
+  }
+  if ("value" in fallback) return { value: fallback.value, label: formatSettingValue(descriptor, fallback.value), origin: fallback.text };
+  return { value: undefined, label: fallback.text };
 }
 
 /** How each list setting's entries are described, keyed by its setting key. */
@@ -1360,13 +1508,16 @@ export function describeSettings(config: CliConfig): readonly SettingView[] {
     const items = LIST_VIEWS[descriptor.key]?.(config);
     const web = webOrderOf(descriptor);
     const unavailable = web === null ? undefined : webOrderUnavailable(config, web.provider, web.role);
+    const value = readSetting(config, descriptor.key);
+    const effective = value === undefined || value === "" ? effectiveOf(config, descriptor) : undefined;
     return {
       descriptor,
-      value: readSetting(config, descriptor.key),
+      value,
       explicit: walk(config, descriptor.key.split(".")) !== undefined,
       ...(items ? { items } : {}),
       ...(unavailable ? { unavailable } : {}),
       ...(web ? { order: webOrderEntries(config, web.provider, web.role) } : {}),
+      ...(effective ? { effective } : {}),
     };
   });
 }

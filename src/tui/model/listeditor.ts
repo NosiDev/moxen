@@ -124,8 +124,15 @@ function shownValue(field: ListField, view: ListFieldView | undefined): { shown:
 export function itemRows(fields: readonly ListField[], item: ListItemView): readonly EditorRow[] {
   const rows: EditorRow[] = [];
   let group: string | null = null;
+  /** A field's value as `visibleWhen` compares it: what is set, else what applies, else `""` for unset. */
+  const held = (path: string): string => {
+    const view = item.fields.find((entry) => entry.path === path);
+    const value = view?.value ?? view?.effective?.value;
+    return value === undefined ? "" : String(value);
+  };
   for (const field of fields) {
     if (field.hidden === true) continue;
+    if (field.visibleWhen !== undefined && !field.visibleWhen.in.includes(held(field.visibleWhen.path))) continue;
     const view = item.fields.find((entry) => entry.path === field.path);
     if (field.group !== group) {
       group = field.group;

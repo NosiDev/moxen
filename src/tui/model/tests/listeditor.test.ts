@@ -39,3 +39,32 @@ describe("list editor rows", () => {
     expect(modelRows.find((row) => row.kind === "field" && row.path === "family")).toMatchObject({ shown: "qwen3", origin: "the model's name" });
   });
 });
+
+describe("fields that depend on another field of the same item", () => {
+  const rowsFor = (profile: Record<string, unknown>) => {
+    const settings = describeSettings(normalizeConfig({ providers: { harness: { profiles: [{ id: "p", baseUrl: "http://h", models: [{ id: "m" }], ...profile }] } } }));
+    const list = settings.find((entry) => entry.descriptor.key === "providers.harness.profiles")!;
+    const fields = (list.descriptor.kind as Extract<typeof list.descriptor.kind, { type: "list" }>).fields;
+    return itemRows(fields, list.items![0]!).flatMap((row) => (row.kind === "field" ? [row.path] : []));
+  };
+
+  it("hides the loop-guard counts while their switch is off, and shows them while it is on or unset", () => {
+    expect(rowsFor({})).toEqual(expect.arrayContaining(["loopGuard.repeatWarn", "loopGuard.repeatStop", "loopGuard.textRepeats"]));
+    const off = rowsFor({ loopGuard: { calls: false, text: false } });
+    expect(off).not.toContain("loopGuard.repeatWarn");
+    expect(off).not.toContain("loopGuard.repeatStop");
+    expect(off).not.toContain("loopGuard.textRepeats");
+    expect(off).toContain("loopGuard.calls");
+  });
+
+  it("offers only the template quirks the profile's API format reads", () => {
+    const chat = rowsFor({});
+    expect(chat).toEqual(expect.arrayContaining(["quirks.systemRole", "quirks.reasoningField", "quirks.mergeAdjacentRoles"]));
+    expect(chat).not.toContain("quirks.cacheControl");
+    expect(chat).not.toContain("quirks.sendReasoning");
+    const anthropic = rowsFor({ apiFormat: "anthropic" });
+    expect(anthropic).toEqual(expect.arrayContaining(["quirks.cacheControl", "quirks.anthropicThinking", "quirks.reasoningReplay", "quirks.parallelToolCalls"]));
+    expect(anthropic).not.toContain("quirks.systemRole");
+    expect(rowsFor({ apiFormat: "responses" })).toContain("quirks.sendReasoning");
+  });
+});

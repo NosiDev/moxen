@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { ProviderSummary } from "../../../core/catalog/summary.js";
-import { describeSettings, settingDescriptor } from "../../../core/configschema.js";
+import { describeSettings, restartRequired, settingDescriptor, SETTINGS } from "../../../core/configschema.js";
 import { DEFAULT_CONFIG, normalizeConfig } from "../../../core/config.js";
 import type { CliConfig } from "../../../core/types.js";
-import { configuredDefaultModel, handoffModelEntries, handoffStops, handoffTokensLabel, providerVersionLine, settingControl, settingValueLabel, updatableProviderOf, withHandoffModel, type ProviderCheckView } from "../settings.js";
+import { configuredDefaultModel, defaultLabel, handoffModelEntries, nextToggleValue, handoffStops, handoffTokensLabel, providerVersionLine, settingControl, settingValueLabel, updatableProviderOf, withHandoffModel, type ProviderCheckView } from "../settings.js";
 
 function provider(instanceId: string, models: Array<{ slug: string; name: string; efforts?: string[]; hidden?: boolean }>, enabled = true): ProviderSummary {
   return {
@@ -107,7 +107,7 @@ describe("settingControl", () => {
   it("labels values by what they mean", () => {
     const descriptor = settingDescriptor("speedMode")!;
     const pick = control("speedMode");
-    expect(settingValueLabel(descriptor, undefined, pick)).toBe("Default");
+    expect(settingValueLabel(descriptor, undefined, pick)).toBe("Default (The provider's own)");
     expect(settingValueLabel(descriptor, "fast", pick)).toBe("Fast");
     const model = control("model", { ...DEFAULT_CONFIG, model: "gpt-6" });
     expect(settingValueLabel(settingDescriptor("model")!, "gpt-6", model)).toBe("GPT-6");
@@ -180,7 +180,7 @@ describe("an integer setting that is unset by default", () => {
     if (picked.kind !== "pick") return;
     expect(picked.options.map((entry) => entry.label)).toEqual(["Default", "128K", "256K", "512K", "1M"]);
     expect(picked.options[0]!.value).toBe("");
-    expect(settingValueLabel(descriptor, undefined, picked)).toBe("Default");
+    expect(settingValueLabel(descriptor, undefined, picked)).toBe("Default (Tuned per model)");
     expect(picked.layout).toBe("slider");
   });
 
@@ -308,3 +308,82 @@ describe("per-model hand-off sizes on a provider's page", () => {
     expect(label("opus=500000, sonnet=100000")).toBe("2 models");
   });
 });
+
+describe("a yes/no setting with no default of its own", () => {
+  const key = "providers.opencode.autoCompact";
+  const descriptor = settingDescriptor(key)!;
+  const at = (value: boolean | undefined) => {
+    const config = value === undefined ? DEFAULT_CONFIG : normalizeConfig({ providers: { opencode: { autoCompact: value } } });
+    const settings = describeSettings(config);
+    const view = settings.find((entry) => entry.descriptor.key === key)!;
+    return { view, control: settingControl(descriptor, view.value, settings, null) };
+  };
+
+  it("reads as the default it falls back to, not as off", () => {
+    const { control } = at(undefined);
+    expect(control).toMatchObject({ kind: "toggle", tristate: true });
+    expect(settingValueLabel(descriptor, undefined, control)).toBe("Default (On)");
+    expect(settingValueLabel(descriptor, true, at(true).control)).toBe("On");
+    expect(settingValueLabel(descriptor, false, at(false).control)).toBe("Off");
+  });
+
+  it("goes unset, on, off and back to unset", () => {
+    const { control } = at(undefined);
+    if (control.kind !== "toggle") throw new Error("not a toggle");
+    expect([undefined, true, false].map((value) => nextToggleValue(control, value))).toEqual(["true", "false", ""]);
+    const twoWay = control.tristate === true ? { kind: "toggle" as const } : control;
+    expect([true, false].map((value) => nextToggleValue(twoWay, value))).toEqual(["false", "true"]);
+  });
+});
+
+describe("what Default names", () => {
+  const effective = (key: string, config: CliConfig = DEFAULT_CONFIG) => describeSettings(config).find((entry) => entry.descriptor.key === key)?.effective;
+
+  it("follows a provider's setting to the global one, and says where it is", () => {
+    expect(effective("providers.claude.runtimeMode")).toEqual({ value: "full-access", label: "Full access", origin: "from 'Permissions' on the New threads tab" });
+    expect(effective("providers.claude.runtimeMode", normalizeConfig({ runtimeMode: "approval-required" }))?.label).toBe("Supervised");
+    expect(effective("providers.claude.runtimeMode", normalizeConfig({ providers: { claude: { runtimeMode: "auto" } } }))).toBeUndefined();
+    const pick = control("providers.claude.runtimeMode");
+    expect(pick.kind === "pick" && pick.options[0]).toMatchObject({ value: "", label: "Default", description: "Full access, from 'Permissions' on the New threads tab" });
+    expect(settingValueLabel(settingDescriptor("providers.claude.runtimeMode")!, undefined, pick)).toBe("Default (Full access)");
+  });
+
+  it("works out a fixed hand-off size the way the server does", () => {
+    expect(effective("ui.autoHandoffTokens")?.label).toBe("50% of the window");
+    expect(effective("providers.claude.autoHandoffTokens")).toMatchObject({ label: "50% of the window", origin: "from 'Hand off at' on the Turns tab" });
+    expect(effective("providers.claude.autoHandoffTokens", normalizeConfig({ ui: { autoHandoffTokens: 131_072 } }))).toMatchObject({ value: 131_072, label: "128K" });
+    // A provider's own share wins over the global fixed size.
+    expect(effective("providers.claude.autoHandoffTokens", normalizeConfig({ ui: { autoHandoffTokens: 131_072 }, providers: { claude: { autoHandoffPercent: 40 } } }))).toMatchObject({ value: undefined, label: "40% of the window", origin: "from 'Hand off at'" });
+  });
+
+  it("marks the preset a fallback lands on, so a slider opens there", () => {
+    const share = control("providers.claude.autoHandoffPercent");
+    expect(share.kind === "pick" && share.options.find((entry) => entry.isDefault === true)?.value).toBe("50");
+  });
+
+  it("names something for every unset enum, number and switch a page offers", () => {
+    const unnamed = describeSettings(DEFAULT_CONFIG).filter(
+      (view) => view.descriptor.hidden !== true && view.descriptor.defaultValue === undefined && ["enum", "integer", "boolean"].includes(view.descriptor.kind.type) && view.effective === undefined,
+    );
+    expect(unnamed.map((view) => view.descriptor.key)).toEqual([]);
+    expect(defaultLabel(undefined)).toBe("Default");
+  });
+});
+
+describe("when a change applies", () => {
+  it("is a tag, not a sentence in the description", () => {
+    for (const descriptor of SETTINGS) {
+      expect(descriptor.description).not.toMatch(/Applies to the next session|reads this when its server starts/);
+    }
+  });
+
+  it("keeps restartRequired for exactly the settings that wait for Moxen's server", () => {
+    const flagged = SETTINGS.filter(restartRequired).map((descriptor) => descriptor.key);
+    expect(flagged).toContain("providers.claude.binaryPath");
+    expect(flagged).toContain("providers.opencode.compactBuffer");
+    expect(flagged).not.toContain("providers.claude.moxenTools");
+    expect(settingDescriptor("providers.claude.moxenTools")!.appliesAt).toBe("next-session");
+    expect(settingDescriptor("providers.opencode.moxenPrompt")!.appliesAt).toBe("provider-restart");
+  });
+});
+

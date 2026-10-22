@@ -52,6 +52,28 @@ const MODEL_FIELDS: readonly ListField[] = [
   },
 ];
 
+/** The API formats a quirk is read for (unset `apiFormat` is Chat Completions); a quirk no format in force reads is not offered. */
+const CHAT_ONLY = { path: "apiFormat", in: ["", "chat"] } as const;
+const QUIRK_FORMATS: Readonly<Record<string, ListField["visibleWhen"]>> = {
+  systemFirstOnly: CHAT_ONLY,
+  mergeAdjacentRoles: CHAT_ONLY,
+  assistantAfterToolResult: CHAT_ONLY,
+  toolResultsAsUser: CHAT_ONLY,
+  toolResultName: CHAT_ONLY,
+  systemRole: CHAT_ONLY,
+  emptyAssistantContent: CHAT_ONLY,
+  reasoningField: CHAT_ONLY,
+  cacheControl: { path: "apiFormat", in: ["anthropic"] },
+  anthropicThinking: { path: "apiFormat", in: ["anthropic"] },
+  sendReasoning: { path: "apiFormat", in: ["responses"] },
+};
+
+/** The quirk's field with its format gate, when it has one. */
+const gated = (field: ListField): ListField => {
+  const when = QUIRK_FORMATS[field.path.replace(/^quirks\./, "")];
+  return when === undefined ? field : { ...field, visibleWhen: when };
+};
+
 const QUIRK_BOOLEANS: ReadonlyArray<readonly [string, string, string]> = [
   ["systemFirstOnly", "System message only first", "On: later reminders are sent as user messages. Off: sent as system messages."],
   ["mergeAdjacentRoles", "Merge same-side messages", "On: consecutive messages from the same role are joined (for templates that need strict alternation)."],
@@ -64,7 +86,7 @@ const QUIRK_BOOLEANS: ReadonlyArray<readonly [string, string, string]> = [
   ["sendReasoning", "Send reasoning settings (Responses)", "On: send the `reasoning` field (effort, summaries, encrypted reasoning for replay). Off for a model that is not a reasoning model."],
 ];
 
-const QUIRK_FIELDS: readonly ListField[] = [
+const QUIRK_FIELDS: readonly ListField[] = ([
   ...QUIRK_BOOLEANS.map(([name, label, description]): ListField => ({
     path: `quirks.${name}`,
     label,
@@ -147,7 +169,7 @@ const QUIRK_FIELDS: readonly ListField[] = [
       ],
     },
   },
-];
+] as ListField[]).map(gated);
 
 export const HARNESS_PROFILE_FIELDS: readonly ListField[] = [
   { path: "label", label: "Name", description: "How the profile is called in the model picker. Defaults to its id.", group: "Endpoint", kind: { type: "string" } },
@@ -253,10 +275,10 @@ export const HARNESS_PROFILE_FIELDS: readonly ListField[] = [
     kind: { type: "boolean" },
   },
   { path: "loopGuard.calls", label: "Catch repeated tool calls", description: "Warn, then end the turn, when the model makes the same tool call (or the same few calls in turn) again and again. Unset: on.", group: "Behaviour", kind: { type: "boolean" } },
-  { path: "loopGuard.repeatWarn", label: "Warn after identical calls", description: "The same tool call, getting the same answer, this many times in one turn gets a warning. A call that answers differently each time (a test run, a re-read after an edit) is progress and is not counted. Unset: 4.", group: "Behaviour", kind: { type: "integer", presets: [3, 4, 5, 8], ends: { low: "Sooner", high: "Later" } } },
-  { path: "loopGuard.repeatStop", label: "Stop after identical calls", description: "…and this many ends the turn. It is never earlier than the warning. Unset: 6.", group: "Behaviour", kind: { type: "integer", presets: [5, 6, 8, 12], ends: { low: "Sooner", high: "Later" } } },
+  { path: "loopGuard.repeatWarn", label: "Warn after identical calls", description: "The same tool call, getting the same answer, this many times in one turn gets a warning. A call that answers differently each time (a test run, a re-read after an edit) is progress and is not counted. Unset: 4.", group: "Behaviour", visibleWhen: { path: "loopGuard.calls", in: ["", "true"] }, kind: { type: "integer", presets: [3, 4, 5, 8], ends: { low: "Sooner", high: "Later" } } },
+  { path: "loopGuard.repeatStop", label: "Stop after identical calls", description: "…and this many ends the turn. It is never earlier than the warning. Unset: 6.", group: "Behaviour", visibleWhen: { path: "loopGuard.calls", in: ["", "true"] }, kind: { type: "integer", presets: [5, 6, 8, 12], ends: { low: "Sooner", high: "Later" } } },
   { path: "loopGuard.text", label: "Catch repeated text", description: "Cut a reply off when it, or its reasoning, repeats one stretch of text over and over. Turn it off if it ends replies that were fine. Unset: on.", group: "Behaviour", kind: { type: "boolean" } },
-  { path: "loopGuard.textRepeats", label: "Stop repeated text after", description: "A reply repeating one stretch of text this many times is cut off. Unset: 10.", group: "Behaviour", kind: { type: "integer", presets: [6, 10, 20], ends: { low: "Sooner", high: "Later" } } },
+  { path: "loopGuard.textRepeats", label: "Stop repeated text after", description: "A reply repeating one stretch of text this many times is cut off. Unset: 10.", group: "Behaviour", visibleWhen: { path: "loopGuard.text", in: ["", "true"] }, kind: { type: "integer", presets: [6, 10, 20], ends: { low: "Sooner", high: "Later" } } },
   {
     path: "systemPromptAppend",
     label: "Extra instructions",

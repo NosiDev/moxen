@@ -15,7 +15,7 @@ import {
   setConfigValueSecure,
   type ConfigKey,
 } from "../core/config.js";
-import { describeSettings, isSettingKey, listTarget, readSetting, secretKeyName } from "../core/configschema.js";
+import { describeSettings, isSettingKey, listTarget, readSetting, restartRequired, secretKeyName } from "../core/configschema.js";
 import { readListValue } from "../core/configlist.js";
 import { addProfile, duplicateProfile, editProfile, exportProfile, importProfile, listProfiles, probeProfile, removeProfile, showProfile, testProfile } from "./harness/harness.js";
 import type { MergeStrategy } from "../server/api.js";
@@ -501,7 +501,9 @@ configCommand
         value: view.value ?? null,
         explicit: view.explicit,
         ...(view.items ? { items: view.items.map((item) => ({ id: item.id, label: item.title, summary: item.summary })) } : {}),
-        ...(view.descriptor.restartRequired === true ? { restartRequired: true } : {}),
+        ...(restartRequired(view.descriptor) ? { restartRequired: true } : {}),
+        ...(view.descriptor.appliesAt !== undefined && view.descriptor.appliesAt !== "now" ? { appliesAt: view.descriptor.appliesAt } : {}),
+        ...(view.effective ? { effective: view.effective } : {}),
       }));
       writeSuccess(
         { path: context.configPath, exists: context.configExists, settings },

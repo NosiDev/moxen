@@ -1,7 +1,7 @@
 import { driverKindOfInstance } from "../../core/types.js";
 import type { ProviderSummary } from "../../core/catalog/summary.js";
 import { updateState, versionNumber, type UpdatableProvider } from "../../core/catalog/update.js";
-import type { SettingDescriptor, SettingEnds, SettingSection, SettingValue, SettingView } from "../../core/configschema.js";
+import type { SettingDescriptor, SettingEffective, SettingEnds, SettingSection, SettingValue, SettingView } from "../../core/configschema.js";
 import { defaultEffortId, describeEffort } from "./display.js";
 import { numberLabel } from "./numberlabel.js";
 import { handoffModelsFromText, handoffModelsToText } from "./autohandoff.js";
@@ -33,7 +33,8 @@ export interface SettingOption {
 
 /** How a setting is edited on the page. */
 export type SettingControl =
-  | { readonly kind: "toggle" }
+  /** `tristate`: the setting has no default of its own, so it can also be unset (Default), and `effective` says what that amounts to. */
+  | { readonly kind: "toggle"; readonly tristate?: boolean; readonly effective?: SettingEffective }
   | {
       readonly kind: "pick";
       readonly options: readonly SettingOption[];
@@ -45,6 +46,8 @@ export type SettingControl =
       readonly scale?: "effort";
       /** Long enough that typing narrows it. */
       readonly searchable: boolean;
+      /** What the Default option amounts to, when the setting is unset and core knows. */
+      readonly effective?: SettingEffective;
     }
   | { readonly kind: "text"; readonly multiline: boolean }
   /** A key or token: typed into a masked input and kept in the OS keychain. */
@@ -154,6 +157,17 @@ function durationLabel(value: string): string {
   const count = Number(match[1]);
   const unit = { ms: "millisecond", s: "second", m: "minute", h: "hour" }[match[2] as "ms" | "s" | "m" | "h"];
   return `${count} ${unit}${count === 1 ? "" : "s"}`;
+}
+
+/** The Default option of a setting with no default of its own: it names what applies instead, as core worked it out. */
+function defaultOption(effective: SettingEffective | undefined): SettingOption {
+  if (effective === undefined) return option("", "Default", "Nothing is set here.");
+  return option("", "Default", effective.origin === undefined ? effective.label : `${effective.label}, ${effective.origin}`);
+}
+
+/** The value a page writes for an unset setting: "Default (Full access)". */
+export function defaultLabel(effective: SettingEffective | undefined): string {
+  return effective === undefined ? "Default" : `Default (${effective.label})`;
 }
 
 /** A preset, marked when it is the value a setting has unless told otherwise. */
@@ -306,6 +320,9 @@ export function settingControl(
   providers: readonly ProviderSummary[] | null,
 ): SettingControl {
   const kind = descriptor.kind;
+  const effective = descriptor.defaultValue === undefined ? settings.find((view) => view.descriptor.key === descriptor.key)?.effective : undefined;
+  // A preset is marked as what applies by default: the setting's own default, else what its fallback amounts to.
+  const applies = descriptor.defaultValue ?? effective?.value;
   let options: SettingOption[];
   switch (kind.type) {
     case "list":
@@ -313,10 +330,10 @@ export function settingControl(
     case "secret":
       return { kind: "secret" };
     case "boolean":
-      return { kind: "toggle" };
+      return descriptor.defaultValue === undefined ? { kind: "toggle", tristate: true, ...(effective ? { effective } : {}) } : { kind: "toggle" };
     case "enum":
       options = [
-        ...(descriptor.defaultValue === undefined ? [option("", "Default", "Not overridden here: the provider's own default applies.")] : []),
+        ...(descriptor.defaultValue === undefined ? [defaultOption(effective)] : []),
         ...kind.choices
           .filter((choice) => !isUnsupportedMode(descriptor, choice.value, settings, providers))
           .map((choice) => option(choice.value, choice.label, choice.description)),
@@ -326,8 +343,8 @@ export function settingControl(
       if (kind.presets === undefined) return { kind: "text", multiline: false };
       options = [
         // A key unset by default needs a way back to unset, which is also what it reads as at first.
-        ...(descriptor.defaultValue === undefined ? [option("", "Default", "Not overridden here: the provider's own default applies.")] : []),
-        ...kind.presets.map((preset) => presetOption(String(preset), `${numberLabel(preset, kind.binary)}${kind.unit ?? ""}`, descriptor.defaultValue)),
+        ...(descriptor.defaultValue === undefined ? [defaultOption(effective)] : []),
+        ...kind.presets.map((preset) => presetOption(String(preset), `${numberLabel(preset, kind.binary)}${kind.unit ?? ""}`, applies)),
       ];
       break;
     case "duration":
@@ -355,7 +372,18 @@ export function settingControl(
     (kind.type === "integer" || kind.type === "duration" || (kind.type === "string" && kind.source === "effort")) && stops.length >= 2 && stops.length <= 8 && stops.every((entry) => (entry.short ?? entry.label).length <= 20);
   const ends: SettingEnds | undefined = kind.type === "string" ? { low: "Faster", high: "Smarter" } : kind.type === "integer" || kind.type === "duration" ? kind.ends : undefined;
   return { kind: "pick", options, layout: slider ? "slider" : "list", ...(slider && ends !== undefined ? { ends } : {}),
-    ...(slider && kind.type === "string" && kind.source === "effort" ? { scale: "effort" as const } : {}), searchable: !slider && (options.length > 8 || (kind.type === "string" && kind.source === "model" && options.length > 6)) };
+    ...(slider && kind.type === "string" && kind.source === "effort" ? { scale: "effort" as const } : {}), searchable: !slider && (options.length > 8 || (kind.type === "string" && kind.source === "model" && options.length > 6)),
+    ...(effective ? { effective } : {}) };
+}
+
+/**
+ * What pressing a switch writes. A two-way switch flips. A three-way one goes
+ * unset, on, off, then back to unset (`""` clears the key), so the page can
+ * always return to what applies when nothing is set here.
+ */
+export function nextToggleValue(control: Extract<SettingControl, { kind: "toggle" }>, value: SettingValue): string {
+  if (control.tristate !== true) return value === true ? "false" : "true";
+  return value === undefined ? "true" : value === true ? "false" : "";
 }
 
 /** A setting's value as the page shows it. */
@@ -385,12 +413,15 @@ export function settingValueLabel(descriptor: SettingDescriptor, value: SettingV
     const set = control.models.filter((model) => model.tokens !== null).length;
     return set === 0 ? "None set" : `${set} model${set === 1 ? "" : "s"}`;
   }
-  if (descriptor.kind.type === "boolean") return value === true ? "On" : "Off";
+  if (descriptor.kind.type === "boolean") {
+    if (control.kind === "toggle" && control.tristate === true && value === undefined) return defaultLabel(control.effective);
+    return value === true ? "On" : "Off";
+  }
   if (descriptor.kind.type === "secret") return value === undefined || value === "" ? "No key saved" : "Saved in the keychain";
   if (control.kind === "pick") {
     const current = value === undefined || value === "" ? "" : String(value);
     const match = control.options.find((entry) => entry.value === current);
-    if (match !== undefined) return match.label;
+    if (match !== undefined) return match.value === "" && match.label === "Default" ? defaultLabel(control.effective) : match.label;
   }
   if (value === undefined || value === "") return "Default";
   if (descriptor.kind.type === "integer") return `${typeof value === "number" ? numberLabel(value, descriptor.kind.binary) : String(value)}${descriptor.kind.unit ?? ""}`;
