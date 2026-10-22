@@ -11,7 +11,8 @@ export const MCP_SERVER_FIELDS: readonly ListField[] = [
   {
     path: "type",
     label: "Kind",
-    description: "A program Moxen starts (stdio) or a server it connects to over HTTP. Unset: stdio, or HTTP when there is a URL and no command.",
+    description: "A program Moxen starts (stdio) or a server it connects to over HTTP.",
+    unset: { text: "stdio, or HTTP when there is a URL and no command" },
     group: "Connection",
     kind: { type: "enum", choices: [choice("stdio", "Program", "Started on this machine; talks over standard input and output."), choice("http", "HTTP", "Connects to a URL.")] },
   },
@@ -53,7 +54,7 @@ export const MCP_SERVER_FIELDS: readonly ListField[] = [
   {
     path: "providers",
     label: "Offered to",
-    description: "Kept so older files still load: which providers got this server. It is read once, as the MCP servers checklist on each provider's tab (a provider it left out has the server switched off there), and never decides anything on its own. Setting it does the same.",
+    description: "Kept so older files still load: which providers got this server. It is read once, as each provider's MCP servers checklist (a provider it left out has the server switched off there), and never decides anything on its own. Setting it does the same.",
     group: "Who gets it",
     hidden: true,
     kind: { type: "words", separator: "comma" },
@@ -93,7 +94,8 @@ export const MCP_RUNNER_SETTING: SettingDescriptor = {
 export const MCP_SERVERS_SETTING: SettingDescriptor = {
   key: "mcpServers",
   label: "Servers",
-  description: "MCP servers every thread can use. A project's moxen.json can add to or remove from this list. Applies from the next session.",
+  description: "MCP servers every thread can use. A project's moxen.json can add to or remove from this list.",
+  appliesAt: "next-session",
   section: "mcp",
   kind: { type: "list", noun: "server", keyed: true, add: "mcp-server", fields: MCP_SERVER_FIELDS, actions: ["duplicate", "test"] },
   defaultValue: undefined,

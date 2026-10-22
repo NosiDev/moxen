@@ -261,7 +261,7 @@ describe("a provider's own tools and web preference on its page", () => {
     expect(view(normalizeConfig({ mcpServers: { search: brave }, providers: { claude: { mcpExclude: "search" } } }), search).unavailable).toBeDefined();
     // A search server of someone else's, however it is named, is not one Moxen can guide.
     expect(view(normalizeConfig({ mcpServers: { "brave-search": { type: "stdio", command: "npx", args: ["-y", "some-other-brave-server"] } } }), search).unavailable).toBeDefined();
-    expect(view(normalizeConfig({}), search).descriptor.description).toContain("does not turn any tool off");
+    expect(view(normalizeConfig({}), search).descriptor.description).toContain("no tool is switched off");
   });
 
   it("lists the ranked tools first in their order, then the rest, and shows the ranking as the value", () => {

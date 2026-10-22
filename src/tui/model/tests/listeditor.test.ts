@@ -17,7 +17,9 @@ describe("list editor rows", () => {
     expect(field("compaction.tokens")).toMatchObject({ shown: "128K", origin: "the Moxen Harness setting", explicit: false });
     expect(field("compaction.fraction")).toBeUndefined();
     expect(field("compaction.keepRecentTokens")).toMatchObject({ shown: "33,000", origin: null, explicit: true });
-    expect(field("slots")).toMatchObject({ shown: "Default", origin: null });
+    // What applies unset is said on the row, from the schema, not in the description.
+    expect(field("slots")).toMatchObject({ shown: "Default", origin: "the Moxen Harness's own Requests at once" });
+    expect(field("loopGuard.repeatWarn")).toMatchObject({ shown: "4", origin: "the default" });
   });
 
   it("offers a way back to unset on every field, three ways on a boolean, and typing for a number outside the presets", () => {

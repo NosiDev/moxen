@@ -204,3 +204,41 @@ describe("where settings live", () => {
     expect(SETTINGS.filter((descriptor) => tabs.test(descriptor.description)).map((descriptor) => descriptor.key)).toEqual([]);
   });
 });
+
+describe("descriptions say what a setting changes, and nothing the page generates", () => {
+  type Field = { readonly path: string; readonly description: string; readonly hidden?: boolean; readonly kind: { readonly type: string; readonly fields?: readonly Field[]; readonly choices?: readonly { readonly description?: string }[] } };
+  const texts: Array<[string, string]> = [];
+  const walk = (key: string, fields: readonly Field[]) => {
+    for (const field of fields) {
+      if (field.hidden === true) continue;
+      texts.push([`${key}.${field.path}`, field.description]);
+      for (const option of field.kind.choices ?? []) if (option.description) texts.push([`${key}.${field.path}`, option.description]);
+      if (field.kind.fields) walk(`${key}.${field.path}`, field.kind.fields);
+    }
+  };
+  for (const descriptor of SETTINGS) {
+    if (descriptor.hidden === true) continue;
+    texts.push([descriptor.key, descriptor.description]);
+    const kind = descriptor.kind as Field["kind"];
+    for (const option of kind.choices ?? []) if (option.description) texts.push([descriptor.key, option.description]);
+    if (kind.fields) walk(descriptor.key, kind.fields);
+  }
+
+  it("never says when it applies, what applies unset, or which tab another setting is on", () => {
+    const generated = /Applies to the next session|Applies from the next session|restarts|Unset:|Default:|\btabs?\b/;
+    expect(texts.filter(([, text]) => generated.test(text)).map(([key]) => key)).toEqual([]);
+  });
+
+  it("uses one word per concept", () => {
+    // Command and key names in backticks are names, not prose.
+    expect(texts.filter(([, text]) => /hand-off|handover|summari[sz]e the conversation/i.test(text.replace(/`[^`]*`/g, ""))).map(([key]) => key)).toEqual([]);
+  });
+
+  it("writes each provider's shared settings from one template", () => {
+    // The Harness alone adds where its profiles' own instructions go.
+    const strip = (key: string) => settingDescriptor(key)!.description.replace(/, then a profile's own Profile instructions/, "").replace(/Claude Code|OpenCode|Moxen Harness/g, "<provider>").replace(/\b(an?) <provider>/g, "a <provider>");
+    for (const field of ["orchestration", "webFetch", "mcpExclude", "todos", "moxenSkills", "instructions", "autoContinueAtUsageLimit"]) {
+      expect(new Set(["claude", "opencode", "harness"].map((kind) => strip(`providers.${kind}.${field}`))).size, field).toBe(1);
+    }
+  });
+});

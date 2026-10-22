@@ -150,6 +150,11 @@ export interface ListField {
   readonly hidden?: boolean;
   /** Said once under the group's heading; carried by any one field of the group. */
   readonly groupDescription?: string;
+  /**
+   * What applies while the field is unset, when the item view has nothing better to say: a value
+   * the field could hold, or a few words ("the server's"). A page shows it as the field's Default.
+   */
+  readonly unset?: { readonly value: SettingValue } | { readonly text: string };
   readonly kind: ListFieldKind;
   /**
    * An editor shows this field only while the field at `path` (relative to the
@@ -325,25 +330,114 @@ const COMPACTION_TEXT: Readonly<Record<LongThreadKind, { readonly own: string; r
   harness: {
     own: "Automatic",
     description:
-      "Summarise the conversation on its own past 'Compact at', between turns and in the middle of a long one, and when the server refuses a prompt as too long. Off leaves /compact and the rescue for a refused prompt.",
+      "Compact the thread on its own past 'Compact at', between turns and in the middle of a long one, and when the server refuses a prompt as too long. Off leaves /compact and the rescue for a refused prompt.",
   },
 };
 
 const COMPACTION_CHOICE_LABEL: Readonly<Record<Exclude<CompactionMode, "provider">, string>> = { ask: "Moxen asks", auto: "Moxen does it", off: "Off" };
 
 /** The sentence every Long threads group ends on, so the two lines are never read apart. */
-const LINES_INTERACT = "Hand-off is offered first when its line is lower than compaction's; past both, the lower one acts first.";
+const LINES_INTERACT = "Handing off is offered first when its line is lower than compaction's; past both, the lower one acts first.";
+
+const PROVIDER_NAME: Readonly<Record<"claude" | "opencode" | "harness", string>> = { claude: "Claude Code", opencode: "OpenCode", harness: "Moxen Harness" };
+
+/**
+ * One Tools group per provider, from one template so the three tabs cannot drift: Moxen's own tools
+ * and skills, MCP reach, the to-do list, and (Claude Code, OpenCode) the web orders and the
+ * provider's own tools to switch off.
+ */
+function toolSettings(kind: "claude" | "opencode" | "harness"): SettingDescriptor[] {
+  const name = PROVIDER_NAME[kind];
+  const section = `provider:${kind}` as const;
+  const base = { section, group: "Tools", appliesAt: "next-session" } as const;
+  const settings: SettingDescriptor[] = [
+    {
+      ...base,
+      key: `providers.${kind}.orchestration`,
+      label: "Delegation tools",
+      description: `Give ${name} threads Moxen's tools for coordinating threads: delegate a task to another thread, follow it, list the models it could run on, cancel it. Moxen's web_fetch is switched on its own.`,
+      kind: { type: "boolean" },
+      defaultValue: undefined,
+      fallback: { resolver: "moxenTools" },
+    },
+    moxenSkillsSetting(kind),
+    {
+      ...base,
+      key: `providers.${kind}.webFetch`,
+      label: "Moxen's web_fetch",
+      description: `Give ${name} threads Moxen's web_fetch: it reads a page as text, and loads it in a browser when a plain request cannot. It follows the global Web tools settings.`,
+      kind: { type: "boolean" },
+      defaultValue: undefined,
+      fallback: { resolver: "moxenTools" },
+    },
+    {
+      ...base,
+      key: `providers.${kind}.moxenTools`,
+      label: "Moxen's tools",
+      description: "Kept so older configs still load: Moxen's tools all at once. Off turns off both 'Delegation tools' and 'Moxen's web_fetch' while those are unset.",
+      hidden: true,
+      kind: { type: "boolean" },
+      defaultValue: true,
+    },
+    {
+      ...base,
+      key: `providers.${kind}.mcpExclude`,
+      label: "MCP servers",
+      description: `Which of your MCP servers ${name} threads get: switch off the ones this provider should not see. A server switched off on its own entry stays out either way.`,
+      kind: { type: "string", placeholder: "none switched off", source: "mcp-server" },
+      defaultValue: undefined,
+    },
+    {
+      ...base,
+      key: `providers.${kind}.todos`,
+      label: "To-do list",
+      description: `Let ${name} models keep a to-do list (the Tasks panel).`,
+      kind: { type: "boolean" },
+      defaultValue: true,
+    },
+  ];
+  if (kind === "harness") return settings;
+  const advice = "It is advice in the prompt: no tool is switched off, and the model may still pick another.";
+  return [
+    ...settings,
+    {
+      ...base,
+      key: `providers.${kind}.webSearchOrder`,
+      label: "Search order",
+      description: `The order ${name} threads should try web search tools in, when there is more than one; the model moves to the next only if one fails or finds nothing useful. ${advice}`,
+      kind: { type: "string", placeholder: "no preference", source: "web-order", web: "search" },
+      defaultValue: undefined,
+    },
+    {
+      ...base,
+      key: `providers.${kind}.webFetchOrder`,
+      label: "Page reading order",
+      description: `The order ${name} threads should try tools that read a page in, when there is more than one; the model moves to the next only if one fails or finds nothing useful. ${advice}`,
+      kind: { type: "string", placeholder: "no preference", source: "web-order", web: "fetch" },
+      defaultValue: undefined,
+    },
+    {
+      ...base,
+      key: `providers.${kind}.disabledNativeTools`,
+      label: "Built-in tools off",
+      description: `${name}'s own tools to switch off: each is taken out of the model's list.`,
+      ...(kind === "opencode" ? { appliesAt: "provider-restart" as const } : {}),
+      kind: { type: "string", placeholder: "none switched off", source: "native-tools", tools: kind === "claude" ? CLAUDE_NATIVE_TOOLS : OPENCODE_NATIVE_TOOLS },
+      defaultValue: undefined,
+    },
+  ];
+}
 
 /**
  * A provider's own switch for Moxen's skills, three-way: unset follows the global 'Moxen's skills'
  * (`core/skills/delivery.ts`); the page shows what is in force beneath it.
  */
 function moxenSkillsSetting(kind: "claude" | "opencode" | "harness"): SettingDescriptor {
-  const name = { claude: "Claude Code", opencode: "OpenCode", harness: "Moxen Harness" }[kind];
+  const name = PROVIDER_NAME[kind];
   return {
     key: `providers.${kind}.moxenSkills`,
     label: "Moxen's skills",
-    description: `Whether ${name} threads get the skills Moxen ships (threads, handoff, orchestrate and the rest). Default follows the global 'Moxen's skills'; Off keeps them from this provider, also when the project has copies; On serves them to it even when that is Off. Without Delegation tools, the skills that drive them stay out either way.`,
+    description: `Whether ${name} threads get the skills Moxen ships (threads, hand off, orchestrate and the rest). Off keeps them from this provider even when the project has copies; On serves them to it even when the global setting is off. Without Delegation tools, the skills that drive them stay out either way.`,
     section: `provider:${kind}`,
     group: "Tools",
     kind: { type: "boolean" },
@@ -358,7 +452,7 @@ function moxenSkillsSetting(kind: "claude" | "opencode" | "harness"): SettingDes
  * provider's threads get, and whether a usage limit is waited out. Unset, each follows the global one.
  */
 function sessionSettings(kind: "claude" | "opencode" | "harness"): SettingDescriptor[] {
-  const name = { claude: "Claude Code", opencode: "OpenCode", harness: "Moxen Harness" }[kind];
+  const name = PROVIDER_NAME[kind];
   const section = `provider:${kind}` as const;
   return [
     {
@@ -374,7 +468,7 @@ function sessionSettings(kind: "claude" | "opencode" | "harness"): SettingDescri
     {
       key: `providers.${kind}.sessionTtl`,
       label: "Idle session lifetime",
-      description: `How long a ${name} session stays warm with nothing happening on it, before it is ended (the next message resumes it). ${{ claude: "Each is a Claude Code process.", opencode: "Sessions share one OpenCode server per folder.", harness: "A local server re-reads the whole prompt when a session comes back." }[kind]} Default follows the global one.`,
+      description: `How long ${kind === "claude" ? "a" : kind === "opencode" ? "an" : "a"} ${name} session stays warm with nothing happening on it, before it is ended (the next message resumes it). ${{ claude: "Each is a Claude Code process.", opencode: "Sessions share one OpenCode server per folder.", harness: "A local server re-reads the whole prompt when a session comes back." }[kind]}`,
       section,
       group: "Sessions",
       kind: { type: "duration", presets: DURATION_PRESETS, ends: { low: "Shorter", high: "Longer" } },
@@ -385,7 +479,7 @@ function sessionSettings(kind: "claude" | "opencode" | "harness"): SettingDescri
     {
       key: `providers.${kind}.autoContinueAtUsageLimit`,
       label: "Continue after a usage limit",
-      description: `When a plan limit stops a ${name} turn, schedule a continue for just after it resets. Limits are per account, so this can be on for a subscription and off for a metered key. Default follows the global one.`,
+      description: `When a plan limit stops ${kind === "opencode" ? "an" : "a"} ${name} turn, schedule a continue for just after it resets. Limits are per account, so this can be on for a subscription and off for a metered key.`,
       section,
       group: "Sessions",
       kind: { type: "boolean" },
@@ -604,7 +698,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     key: "autoContinueAtUsageLimit",
     label: "Continue after a usage limit",
     description:
-      "When a plan limit stops a turn, schedule a continue for just after it resets, at most 'Continues in a row' times. Off by default: it runs work while nobody is watching. Each provider can say otherwise for itself.",
+      "When a plan limit stops a turn, schedule a continue for just after it resets, at most 'Continues in a row' times. It runs work while nobody is watching. Each provider can say otherwise for itself.",
     section: "sessions",
     kind: { type: "boolean" },
     defaultValue: false,
@@ -734,7 +828,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "ui.hideBinaryDiffs",
     label: "Hide binary files in diffs",
-    description: "Leave images, archives and other binary files out of the Diff tab, which can only say that they changed. Ignored files are never in a diff.",
+    description: "Leave images, archives and other binary files out of the Diff panel, which can only say that they changed. Ignored files are never in a diff.",
     section: "interface",
     kind: { type: "boolean" },
     defaultValue: true,
@@ -742,7 +836,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "ui.defaultSidePanel",
     label: "Side panel on open",
-    description: "Which tab the side panel shows the first time it is opened in a session.",
+    description: "Which view the side panel shows the first time it is opened in a session.",
     section: "interface",
     kind: {
       type: "enum",
@@ -758,7 +852,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "ui.contextRefreshSeconds",
     label: "Context refresh",
-    description: "How often an open Context tab re-reads the live breakdown.",
+    description: "How often an open Context panel re-reads the live breakdown.",
     section: "interface",
     kind: { type: "integer", min: 1, max: 600, unit: "s", presets: [1, 2, 3, 5, 10, 15, 30, 60, 120], ends: { low: "More often", high: "Less often" } },
     defaultValue: 5,
@@ -775,7 +869,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     key: "longThreads.handoff",
     label: "Hand off",
     description:
-      "Models make more tool-call mistakes as the window fills, so a thread past 'Hand off at' moves to a fresh one opened with a handoff of the work so far. Ask shows a card with the action; Automatic does it by itself once no turn, subthread or background task is running; until then the card stays with a button to hand off by hand. Each provider can change it.",
+      "Models make more tool-call mistakes as the window fills, so a thread past 'Hand off at' moves to a fresh one, opened with a summary of the work so far. Ask shows a card with the action; Automatic does it by itself once no turn, subthread or background task is running; until then the card stays with a button to hand off by hand. Each provider can change it.",
     section: "long-threads",
     kind: { type: "enum", choices: [choice("ask", "Ask"), choice("auto", "Automatic"), choice("off", "Off")] },
     defaultValue: undefined,
@@ -842,11 +936,12 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "web.browserPath",
     label: "Browser program",
-    description: "The Chrome or Chromium program web_fetch starts. Left unset, the usual places are searched.",
+    description: "The Chrome or Chromium program web_fetch starts.",
     section: "agent",
     group: "Web tools",
     kind: { type: "string", placeholder: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" },
     defaultValue: undefined,
+    fallback: { text: "Looked for in the usual places" },
     visibleWhen: { key: "web.browser", in: ["", "auto"] },
   },
   {
@@ -883,7 +978,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     key: "git.autoFetch",
     label: "Fetch before listing",
     description:
-      "Run `git fetch` before reading history, so remote branches are current. Off by default: it touches the network on a panel open.",
+      "Run `git fetch` before reading history, so remote branches are current. It touches the network each time the panel opens.",
     section: "git",
     kind: { type: "boolean" },
     defaultValue: false,
@@ -953,90 +1048,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     defaultValue: undefined,
     fallback: { key: "thinkingEffort" },
   },
-  {
-    key: "providers.claude.orchestration",
-    label: "Delegation tools",
-    description: "Give Claude Code threads Moxen's tools for coordinating threads: delegate a task to another thread, read its status, list the models to delegate to, cancel it. Off for a provider you do not want orchestrating; Moxen's web_fetch is switched on its own.",
-    section: "provider:claude",
-    group: "Tools",
-    kind: { type: "boolean" },
-    defaultValue: undefined,
-    fallback: { resolver: "moxenTools" },
-    appliesAt: "next-session",
-  },
-  moxenSkillsSetting("claude"),
-  {
-    key: "providers.claude.webFetch",
-    label: "Moxen's web_fetch",
-    description: "Give Claude Code threads Moxen's web_fetch, which reads a page as text and loads it in a browser when a plain request cannot (it follows the global Web tools settings).",
-    section: "provider:claude",
-    group: "Tools",
-    kind: { type: "boolean" },
-    defaultValue: undefined,
-    fallback: { resolver: "moxenTools" },
-    appliesAt: "next-session",
-  },
-  {
-    key: "providers.claude.moxenTools",
-    label: "Moxen's tools",
-    description: "Kept so older configs still load: Moxen's tools all at once. Off turns off both 'Delegation tools' and 'Moxen's web_fetch' while those are unset.",
-    section: "provider:claude",
-    group: "Tools",
-    hidden: true,
-    kind: { type: "boolean" },
-    defaultValue: true,
-    appliesAt: "next-session",
-  },
-  {
-    key: "providers.claude.mcpExclude",
-    label: "MCP servers",
-    description: "Which of your MCP servers Claude Code threads get. Every server by default; switch off the ones this provider should not see. A server switched off on its own entry, or only offered to other providers, stays out either way.",
-    appliesAt: "next-session",
-    section: "provider:claude",
-    group: "Tools",
-    kind: { type: "string", placeholder: "none switched off", source: "mcp-server" },
-    defaultValue: undefined,
-  },
-  {
-    key: "providers.claude.todos",
-    label: "To-do list",
-    description: "Let Claude Code models keep a to-do list (the Tasks panel).",
-    appliesAt: "next-session",
-    section: "provider:claude",
-    group: "Tools",
-    kind: { type: "boolean" },
-    defaultValue: true,
-  },
-  {
-    key: "providers.claude.webSearchOrder",
-    label: "Search order",
-    description: "The order Claude Code threads should try web search tools in, when you have more than one. Tick the ones to rank and move them up or down; the model is told to go to the next only if one fails or finds nothing useful. This is advice in the prompt: it does not turn any tool off (that is Built-in tools off), and the model may still pick another. It works only with the Brave Search and Exa servers from Moxen's own list: the tools whose options Moxen knows.",
-    appliesAt: "next-session",
-    section: "provider:claude",
-    group: "Tools",
-    kind: { type: "string", placeholder: "no preference", source: "web-order", web: "search" },
-    defaultValue: undefined,
-  },
-  {
-    key: "providers.claude.webFetchOrder",
-    label: "Page reading order",
-    description: "The order Claude Code threads should try tools that read a page in, when you have more than one. Tick the ones to rank and move them up or down; the model is told to go to the next only if one fails or finds nothing useful. This is advice in the prompt: it does not turn any tool off (that is Built-in tools off), and the model may still pick another. It works only with Moxen's web_fetch and the Exa server from Moxen's own list: the tools whose options Moxen knows.",
-    appliesAt: "next-session",
-    section: "provider:claude",
-    group: "Tools",
-    kind: { type: "string", placeholder: "no preference", source: "web-order", web: "fetch" },
-    defaultValue: undefined,
-  },
-  {
-    key: "providers.claude.disabledNativeTools",
-    label: "Built-in tools off",
-    description: "Claude Code's own tools to switch off, as comma-separated names: Read, Write, Edit, Bash, WebSearch, WebFetch, Agent, Skill, AskUserQuestion… (any name the provider lists works). The tool is removed from the model's list.",
-    appliesAt: "next-session",
-    section: "provider:claude",
-    group: "Tools",
-    kind: { type: "string", placeholder: "none switched off", source: "native-tools", tools: CLAUDE_NATIVE_TOOLS },
-    defaultValue: undefined,
-  },
+  ...toolSettings("claude"),
   {
     key: "providers.claude.binaryPath",
     label: "Claude executable",
@@ -1193,60 +1205,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     defaultValue: undefined,
     fallback: { key: "thinkingEffort" },
   },
-  {
-    key: "providers.opencode.orchestration",
-    label: "Delegation tools",
-    description: "Give OpenCode threads Moxen's tools for coordinating threads: delegate a task to another thread, read its status, list the models to delegate to, cancel it. Off for a provider you do not want orchestrating; Moxen's web_fetch is switched on its own.",
-    section: "provider:opencode",
-    group: "Tools",
-    kind: { type: "boolean" },
-    defaultValue: undefined,
-    fallback: { resolver: "moxenTools" },
-    appliesAt: "next-session",
-  },
-  moxenSkillsSetting("opencode"),
-  {
-    key: "providers.opencode.webFetch",
-    label: "Moxen's web_fetch",
-    description: "Give OpenCode threads Moxen's web_fetch, which reads a page as text and loads it in a browser when a plain request cannot (it follows the global Web tools settings).",
-    section: "provider:opencode",
-    group: "Tools",
-    kind: { type: "boolean" },
-    defaultValue: undefined,
-    fallback: { resolver: "moxenTools" },
-    appliesAt: "next-session",
-  },
-  {
-    key: "providers.opencode.moxenTools",
-    label: "Moxen's tools",
-    description: "Kept so older configs still load: Moxen's tools all at once. Off turns off both 'Delegation tools' and 'Moxen's web_fetch' while those are unset.",
-    section: "provider:opencode",
-    group: "Tools",
-    hidden: true,
-    kind: { type: "boolean" },
-    defaultValue: true,
-    appliesAt: "next-session",
-  },
-  {
-    key: "providers.opencode.mcpExclude",
-    label: "MCP servers",
-    description: "Which of your MCP servers OpenCode threads get. Every server by default; switch off the ones this provider should not see. A server switched off on its own entry, or only offered to other providers, stays out either way.",
-    appliesAt: "next-session",
-    section: "provider:opencode",
-    group: "Tools",
-    kind: { type: "string", placeholder: "none switched off", source: "mcp-server" },
-    defaultValue: undefined,
-  },
-  {
-    key: "providers.opencode.todos",
-    label: "To-do list",
-    description: "Let OpenCode models keep a to-do list (the Tasks panel).",
-    appliesAt: "next-session",
-    section: "provider:opencode",
-    group: "Tools",
-    kind: { type: "boolean" },
-    defaultValue: true,
-  },
+  ...toolSettings("opencode"),
   {
     key: "providers.opencode.moxenPrompt",
     label: "Moxen's system prompt",
@@ -1257,36 +1216,6 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     kind: { type: "boolean" },
     defaultValue: true,
     appliesAt: "provider-restart",
-  },
-  {
-    key: "providers.opencode.webSearchOrder",
-    label: "Search order",
-    description: "The order OpenCode threads should try web search tools in, when you have more than one. Tick the ones to rank and move them up or down; the model is told to go to the next only if one fails or finds nothing useful. This is advice in the prompt: it does not turn any tool off (that is Built-in tools off), and the model may still pick another. It works only with the Brave Search and Exa servers from Moxen's own list: the tools whose options Moxen knows.",
-    appliesAt: "next-session",
-    section: "provider:opencode",
-    group: "Tools",
-    kind: { type: "string", placeholder: "no preference", source: "web-order", web: "search" },
-    defaultValue: undefined,
-  },
-  {
-    key: "providers.opencode.webFetchOrder",
-    label: "Page reading order",
-    description: "The order OpenCode threads should try tools that read a page in, when you have more than one. Tick the ones to rank and move them up or down; the model is told to go to the next only if one fails or finds nothing useful. This is advice in the prompt: it does not turn any tool off (that is Built-in tools off), and the model may still pick another. It works only with Moxen's web_fetch and the Exa server from Moxen's own list: the tools whose options Moxen knows.",
-    appliesAt: "next-session",
-    section: "provider:opencode",
-    group: "Tools",
-    kind: { type: "string", placeholder: "no preference", source: "web-order", web: "fetch" },
-    defaultValue: undefined,
-  },
-  {
-    key: "providers.opencode.disabledNativeTools",
-    label: "Built-in tools off",
-    description: "OpenCode's own tools to switch off, as comma-separated names: read, edit, glob, grep, shell, execute, websearch, webfetch, subagent, skill, question. The tool is removed from the model's list.",
-    appliesAt: "provider-restart",
-    section: "provider:opencode",
-    group: "Tools",
-    kind: { type: "string", placeholder: "none switched off", source: "native-tools", tools: OPENCODE_NATIVE_TOOLS },
-    defaultValue: undefined,
   },
   // `serverUrl` (an external server) is left out on purpose: v2 authenticates every
   // call and Moxen reads the external server's password only from config, so a URL
@@ -1378,60 +1307,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     defaultValue: undefined,
     fallback: { key: "thinkingEffort" },
   },
-  {
-    key: "providers.harness.orchestration",
-    label: "Delegation tools",
-    description: "Give Moxen Harness threads Moxen's tools for coordinating threads: delegate a task to another thread, read its status, list the models to delegate to, cancel it. Off for a provider you do not want orchestrating; Moxen's web_fetch is switched on its own.",
-    section: "provider:harness",
-    group: "Tools",
-    kind: { type: "boolean" },
-    defaultValue: undefined,
-    fallback: { resolver: "moxenTools" },
-    appliesAt: "next-session",
-  },
-  moxenSkillsSetting("harness"),
-  {
-    key: "providers.harness.webFetch",
-    label: "Moxen's web_fetch",
-    description: "Give Moxen Harness threads Moxen's web_fetch, which reads a page as text and loads it in a browser when a plain request cannot (it follows the global Web tools settings).",
-    section: "provider:harness",
-    group: "Tools",
-    kind: { type: "boolean" },
-    defaultValue: undefined,
-    fallback: { resolver: "moxenTools" },
-    appliesAt: "next-session",
-  },
-  {
-    key: "providers.harness.moxenTools",
-    label: "Moxen's tools",
-    description: "Kept so older configs still load: Moxen's tools all at once. Off turns off both 'Delegation tools' and 'Moxen's web_fetch' while those are unset.",
-    section: "provider:harness",
-    group: "Tools",
-    hidden: true,
-    kind: { type: "boolean" },
-    defaultValue: true,
-    appliesAt: "next-session",
-  },
-  {
-    key: "providers.harness.mcpExclude",
-    label: "MCP servers",
-    description: "Which of your MCP servers Moxen Harness threads get. Every server by default; switch off the ones this provider should not see. A server switched off on its own entry, or only offered to other providers, stays out either way.",
-    appliesAt: "next-session",
-    section: "provider:harness",
-    group: "Tools",
-    kind: { type: "string", placeholder: "none switched off", source: "mcp-server" },
-    defaultValue: undefined,
-  },
-  {
-    key: "providers.harness.todos",
-    label: "To-do list",
-    description: "Let Moxen Harness models keep a to-do list (the Tasks panel).",
-    appliesAt: "next-session",
-    section: "provider:harness",
-    group: "Tools",
-    kind: { type: "boolean" },
-    defaultValue: true,
-  },
+  ...toolSettings("harness"),
   // These apply to every profile; a profile's own `compaction` fields (in the profile list below) win.
   // The driver reads the config on every turn, so none of this needs a restart.
   {
@@ -1511,7 +1387,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
       {
         key: `providers.harness.webSearchKeyEnvs.${backend}`,
         label: `${name} key variable`,
-        description: "Instead of saving a key: the NAME of an environment variable that holds it, as the Moxen server sees it. A saved key wins over this.",
+        description: "Instead of saving a key: the NAME of an environment variable that holds it, as the Moxen server sees it. A key saved in the keychain wins over this variable; Moxen's own MOXEN_* variables are the other way round and beat the config file.",
         section: "provider:harness",
         group: "Web search",
         kind: { type: "string", placeholder: backend === "exa" ? "EXA_API_KEY" : "BRAVE_API_KEY" },

@@ -72,9 +72,9 @@ export function fieldControl(field: ListField, value: SettingValue, choices: rea
     current === "" || options.some((entry) => entry.value === current) ? options : [{ value: current, label: current, description: "Set in the config file" }, ...options];
   switch (kind.type) {
     case "boolean":
-      return { kind: "pick", options: [{ value: "", label: "Default", description: "Not set here: what the description above says applies." }, { value: "true", label: "On" }, { value: "false", label: "Off" }] };
+      return { kind: "pick", options: [{ value: "", label: "Default", description: "Not set here: what the row shows applies." }, { value: "true", label: "On" }, { value: "false", label: "Off" }] };
     case "enum":
-      return { kind: "pick", options: withCurrent([{ value: "", label: "Default", description: "Not set here: what the description above says applies." }, ...kind.choices.map((choice) => ({ value: choice.value, label: choice.label, ...(choice.description ? { description: choice.description } : {}) }))]) };
+      return { kind: "pick", options: withCurrent([{ value: "", label: "Default", description: "Not set here: what the row shows applies." }, ...kind.choices.map((choice) => ({ value: choice.value, label: choice.label, ...(choice.description ? { description: choice.description } : {}) }))]) };
     case "integer":
     case "number": {
       if (kind.presets === undefined) return { kind: "text", multiline: false };
@@ -82,7 +82,7 @@ export function fieldControl(field: ListField, value: SettingValue, choices: rea
       return {
         kind: "pick",
         options: withCurrent([
-          { value: "", label: "Default", description: "Not set here: what the description above says applies." },
+          { value: "", label: "Default", description: "Not set here: what the row shows applies." },
           ...kind.presets.map((preset) => ({ value: String(preset), label: `${numberLabel(preset)}${unit}` })),
           { value: TEXT_OPTION, label: "Another value…" },
         ]),
@@ -99,7 +99,7 @@ export function fieldControl(field: ListField, value: SettingValue, choices: rea
     case "list":
       return { kind: "text", multiline: false };
     case "effort":
-      return { kind: "pick", options: withCurrent([{ value: "", label: "Default", description: "Not set here: what the description above says applies." }, ...choices.map((choice) => ({ value: choice.value, label: choice.label, ...(choice.description ? { description: choice.description } : {}) }))]) };
+      return { kind: "pick", options: withCurrent([{ value: "", label: "Default", description: "Not set here: what the row shows applies." }, ...choices.map((choice) => ({ value: choice.value, label: choice.label, ...(choice.description ? { description: choice.description } : {}) }))]) };
   }
 }
 
@@ -120,6 +120,8 @@ function shownValue(field: ListField, view: ListFieldView | undefined): { shown:
   };
   if (value !== undefined) return { shown: format(value), origin: null };
   if (effective !== undefined) return { shown: format(effective.value), origin: effective.origin };
+  // What the schema says applies while it is unset, said on the row rather than in the description.
+  if (field.unset !== undefined) return "value" in field.unset ? { shown: format(field.unset.value), origin: "the default" } : { shown: "Default", origin: field.unset.text };
   return { shown: field.kind.type === "secret" ? "No key saved" : "Default", origin: null };
 }
 
