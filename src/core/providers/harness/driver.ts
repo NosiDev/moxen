@@ -32,7 +32,7 @@ import { mcpSignature, type McpServerSpec } from "../../mcp.js";
 import { locateBundledSkills } from "../bundledskills.js";
 import { resolveStoreRoot } from "../../threads/store.js";
 import type { TurnUsage } from "../../threads/types.js";
-import type { HarnessProfileConfig, HarnessProviderConfig, InteractionMode, ModelSelection, RuntimeMode } from "../../types.js";
+import type { HarnessProfileConfig, HarnessProviderConfig, InteractionMode, ModelSelection, RuntimeMode, WebConfig } from "../../types.js";
 import type {
   ApprovalRequestId,
   BackgroundTaskSummary,
@@ -240,6 +240,8 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
   };
 
   private config: HarnessProviderConfig | undefined;
+  /** The shared web settings (`web`), which the Harness's web tools follow like every provider's. */
+  private web: WebConfig | undefined;
   private readonly sessionsDir: string;
   private readonly env: NodeJS.ProcessEnv;
   private readonly transport: TurnConfig["transport"] | undefined;
@@ -271,12 +273,13 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
   /** Environment variables that hold keys moxen uses; commands the model runs do not inherit them. */
   private secretEnvNames(): string[] {
     const names = (this.config?.profiles ?? []).map((profile) => profile.apiKeyEnv);
-    names.push(this.config?.webSearchKeyEnv);
+    names.push(this.config?.webSearchKeyEnv, ...Object.values(this.config?.webSearchKeyEnvs ?? {}));
     return names.filter((name): name is string => typeof name === "string" && name !== "");
   }
 
-  setConfig(config: HarnessProviderConfig | undefined): void {
+  setConfig(config: HarnessProviderConfig | undefined, web?: WebConfig): void {
     this.config = config;
+    this.web = web;
   }
 
   get streamEvents(): Stream.Stream<ProviderRuntimeEvent> {
@@ -628,7 +631,7 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
 
   /** The web tools; they read the web settings on every call, so a change applies to the next one. */
   private webTools(): Array<HarnessTool<never>> {
-    const settings = () => resolveWebSettings(this.config, this.env);
+    const settings = () => resolveWebSettings(this.config, this.env, this.web);
     return [webFetchTool(settings), webSearchTool(settings)] as unknown as Array<HarnessTool<never>>;
   }
 

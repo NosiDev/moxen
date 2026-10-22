@@ -57,10 +57,10 @@ function apiKey(context: SearchContext): string {
   const saved = cachedSecret(context.settings.keyRef);
   if (saved !== undefined) return saved.trim();
   const name = context.settings.keyEnv;
-  if (!name) throw new SearchSetupError(`${context.settings.backend} needs an API key. Save one in the Moxen Harness settings (Search key), or name the environment variable that holds it in webSearchKeyEnv.`);
-  if (!ENV_NAME.test(name)) throw new SearchSetupError("webSearchKeyEnv must be the NAME of an environment variable, not the key itself.");
+  if (!name) throw new SearchSetupError(`${context.settings.backend} needs an API key. Save one in the Moxen Harness settings (its key, under Web), or name the environment variable that holds it (its key variable).`);
+  if (!ENV_NAME.test(name)) throw new SearchSetupError("The key variable must be the NAME of an environment variable, not the key itself.");
   const value = context.env[name]?.trim();
-  if (!value) throw new SearchSetupError(`The environment variable ${name} (webSearchKeyEnv) is not set where Moxen's server runs.`);
+  if (!value) throw new SearchSetupError(`The environment variable ${name} (the key variable) is not set where Moxen's server runs.`);
   return value;
 }
 

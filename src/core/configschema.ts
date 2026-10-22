@@ -257,7 +257,7 @@ export type SettingFallback =
   | { readonly text: string }
   | { readonly resolver: FallbackResolver };
 
-export type FallbackResolver = "handoffTokens" | "providerModel";
+export type FallbackResolver = "handoffTokens" | "providerModel" | "webBrowser" | "privateNetwork" | "searchKey" | "searchKeyEnv";
 
 /** What is in force for an unset setting, worked out in core so a client only draws it. */
 export interface SettingEffective {
@@ -601,6 +601,39 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     kind: { type: "integer", min: 8_192, max: 2_000_000, binary: true, presets: [32_768, 65_536, 131_072, 262_144, 524_288], ends: { low: "Earlier", high: "Later" } },
     defaultValue: undefined,
     fallback: { resolver: "handoffTokens" },
+  },
+
+  // -- web tools (shared by every provider) ----------------------------------
+  {
+    key: "web.browser",
+    label: "Browser for web pages",
+    description:
+      "When a page cannot be read with a plain request (it turns the request away, or builds its content with scripts), Moxen's web_fetch can load it in an installed Chrome or Chromium, headless and with a throwaway profile (none of your cookies or logins). This is the web_fetch every provider gets from Moxen and the Moxen Harness's own. Never: no thread starts a browser.",
+    section: "turns",
+    group: "Web tools",
+    kind: { type: "enum", choices: [choice("auto", "When needed", "Use an installed Chrome or Chromium."), choice("off", "Never")] },
+    defaultValue: undefined,
+    fallback: { resolver: "webBrowser" },
+  },
+  {
+    key: "web.browserPath",
+    label: "Browser program",
+    description: "The Chrome or Chromium program web_fetch starts. Left unset, the usual places are searched.",
+    section: "turns",
+    group: "Web tools",
+    kind: { type: "string", placeholder: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" },
+    defaultValue: undefined,
+    visibleWhen: { key: "web.browser", in: ["", "auto"] },
+  },
+  {
+    key: "web.privateNetwork",
+    label: "Web tools reach private networks",
+    description: "Let Moxen's web tools, on every provider, reach addresses on your local network (10.x, 192.168.x and the like). This machine's own servers are always allowed; cloud metadata addresses never are.",
+    section: "turns",
+    group: "Web tools",
+    kind: { type: "boolean" },
+    defaultValue: undefined,
+    fallback: { resolver: "privateNetwork" },
   },
 
   {
@@ -1175,25 +1208,54 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     },
     defaultValue: "duckduckgo",
   },
+  // One key per search service, so switching services never sends one's key to the other.
+  ...(["exa", "brave"] as const).flatMap((backend): SettingDescriptor[] => {
+    const name = backend === "exa" ? "Exa" : "Brave Search";
+    const visibleWhen = { key: "providers.harness.webSearch", in: [backend] };
+    return [
+      {
+        key: `providers.harness.webSearchKeys.${backend}`,
+        label: `${name} key`,
+        description: `The ${name} key, typed once and kept in the OS keychain; it never appears in the config file or on screen.`,
+        section: "provider:harness",
+        group: "Web",
+        kind: { type: "secret" },
+        defaultValue: undefined,
+        fallback: { resolver: "searchKey" },
+        visibleWhen,
+      },
+      {
+        key: `providers.harness.webSearchKeyEnvs.${backend}`,
+        label: `${name} key variable`,
+        description: "Instead of saving a key: the NAME of an environment variable that holds it, as the Moxen server sees it. A saved key wins over this.",
+        section: "provider:harness",
+        group: "Web",
+        kind: { type: "string", placeholder: backend === "exa" ? "EXA_API_KEY" : "BRAVE_API_KEY" },
+        defaultValue: undefined,
+        fallback: { resolver: "searchKeyEnv" },
+        visibleWhen,
+      },
+    ];
+  }),
   {
     key: "providers.harness.webSearchKey",
-    label: "Search key",
-    description: "The Exa or Brave key, typed once and kept in the OS keychain; it never appears in the config file or on screen.",
+    label: "Search key (single slot)",
+    description: "Kept so older configs still load: the one slot Exa and Brave shared. It is read only while no service has a key of its own, for the service selected then; switching services on the page first files it under the one it was for.",
     section: "provider:harness",
     group: "Web",
+    hidden: true,
     kind: { type: "secret" },
     defaultValue: undefined,
-    visibleWhen: { key: "providers.harness.webSearch", in: ["exa", "brave"] },
   },
   {
     key: "providers.harness.webSearchKeyEnv",
-    label: "Search key variable",
-    description: "Instead of saving a key: the NAME of an environment variable that holds it, as the Moxen server sees it. A saved key wins over this.",
+    label: "Search key variable (single slot)",
+    description: "Kept so older configs still load: as the single key slot, for the environment variable's name.",
     section: "provider:harness",
     group: "Web",
+    hidden: true,
     kind: { type: "string", placeholder: "EXA_API_KEY" },
     defaultValue: undefined,
-    visibleWhen: { key: "providers.harness.webSearch", in: ["exa", "brave"] },
   },
   {
     key: "providers.harness.searxngUrl",
@@ -1207,32 +1269,33 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   },
   {
     key: "providers.harness.webBrowser",
-    label: "Browser for web pages",
-    description:
-      "When a page cannot be read with a plain request (it turns the request away, or builds its content with scripts), web_fetch can load it in an installed Chrome or Chromium, headless and with a throwaway profile (none of your cookies or logins). Off never starts one.",
+    label: "Browser for web pages (Harness)",
+    description: "Kept so older configs still load: now 'Browser for web pages' on the Turns tab (web.browser), which every provider's web_fetch follows and which wins when set.",
     section: "provider:harness",
     group: "Web",
-    kind: { type: "enum", choices: [choice("auto", "When needed", "Use an installed Chrome or Chromium."), choice("off", "Never")] },
-    defaultValue: "auto",
+    hidden: true,
+    kind: { type: "enum", choices: [choice("auto", "When needed"), choice("off", "Never")] },
+    defaultValue: undefined,
   },
   {
     key: "providers.harness.webBrowserPath",
-    label: "Browser program",
-    description: "The Chrome or Chromium program to use. Left unset, the usual places are searched.",
+    label: "Browser program (Harness)",
+    description: "Kept so older configs still load: now 'Browser program' on the Turns tab (web.browserPath), which wins when set.",
     section: "provider:harness",
     group: "Web",
+    hidden: true,
     kind: { type: "string", placeholder: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" },
     defaultValue: undefined,
-    visibleWhen: { key: "providers.harness.webBrowser", in: ["auto"] },
   },
   {
     key: "providers.harness.webPrivateNetwork",
-    label: "Web tools reach private networks",
-    description: "Let web_fetch reach addresses on your local network (10.x, 192.168.x and the like). This machine's own servers are always allowed; cloud metadata addresses never are.",
+    label: "Web tools reach private networks (Harness)",
+    description: "Kept so older configs still load: opened private networks for the Moxen Harness's web tools only. Now 'Web tools reach private networks' on the Turns tab (web.privateNetwork), one switch for every provider, which wins when set.",
     section: "provider:harness",
     group: "Web",
+    hidden: true,
     kind: { type: "boolean" },
-    defaultValue: false,
+    defaultValue: undefined,
   },
   ...handoffSettings("harness"),
   HARNESS_PROFILES_SETTING,
@@ -1406,6 +1469,35 @@ export function parseSettingValue(descriptor: SettingDescriptor, raw: string): S
  * pinning the empty string.
  */
 export function writeSetting(config: CliConfig, key: string, value: SettingValue): CliConfig {
+  const written = writeSettingValue(config, key, value);
+  return key === "providers.harness.webSearch" ? fileLegacySearchKey(config, written) : written;
+}
+
+/**
+ * Switching search services: a key still in the older single slot is filed
+ * under the service it was used for before the switch, so it is never sent to
+ * the new one. The slot itself stays (an older build sharing the file reads
+ * it), and the secret is not copied: the new slot holds the same keychain
+ * reference.
+ */
+function fileLegacySearchKey(before: CliConfig, after: CliConfig): CliConfig {
+  const harness = before.providers?.harness;
+  const previous = harness?.webSearch;
+  if (usesPerServiceKeys(before) || (previous !== "exa" && previous !== "brave")) return after;
+  const key = harness?.webSearchKey;
+  const keyEnv = harness?.webSearchKeyEnv;
+  if (!key && !keyEnv) return after;
+  const next = after.providers?.harness ?? {};
+  return {
+    ...after,
+    providers: {
+      ...after.providers,
+      harness: { ...next, ...(key ? { webSearchKeys: { [previous]: key } } : {}), ...(keyEnv ? { webSearchKeyEnvs: { [previous]: keyEnv } } : {}) },
+    },
+  };
+}
+
+function writeSettingValue(config: CliConfig, key: string, value: SettingValue): CliConfig {
   const descriptor = settingDescriptor(key);
   if (!descriptor) throw new CliError("INVALID_CONFIG_KEY", `Unknown config key: ${key}`);
   const clears = value === "" && descriptor.defaultValue !== "";
@@ -1453,13 +1545,50 @@ export function formatSettingValue(descriptor: SettingDescriptor, value: Setting
 
 /** Where a fallback setting lives, said from the page of the one that falls back to it. */
 function settingPlace(from: SettingDescriptor, to: SettingDescriptor): string {
+  if (to.hidden === true) return `from ${to.key} in the config file`;
   return from.section === to.section ? `from '${to.label}'` : `from '${to.label}' on the ${SECTION_LABEL[to.section]} tab`;
 }
 
 /** A share of the window, as a hand-off line reads when it is not a fixed size. */
 const shareLabel = (percent: SettingValue): string => `${String(percent)}% of the window`;
 
+/** The search service a per-service key row is for, from its key. */
+const searchBackendOf = (descriptor: SettingDescriptor): "exa" | "brave" | undefined => /\.(exa|brave)$/.exec(descriptor.key)?.[1] as "exa" | "brave" | undefined;
+
+/** Whether a file uses one key slot per search service; until it does, the older single slot stands for the selected service. */
+function usesPerServiceKeys(config: CliConfig): boolean {
+  const harness = config.providers?.harness;
+  return Object.keys(harness?.webSearchKeys ?? {}).length > 0 || Object.keys(harness?.webSearchKeyEnvs ?? {}).length > 0;
+}
+
+/** The older single slot, when it is what a per-service row amounts to: no service has its own yet, and this is the one selected. */
+function legacySearchSlot(config: CliConfig, descriptor: SettingDescriptor, field: "webSearchKey" | "webSearchKeyEnv"): string | undefined {
+  const harness = config.providers?.harness;
+  if (usesPerServiceKeys(config) || harness?.webSearch !== searchBackendOf(descriptor)) return undefined;
+  const value = harness?.[field];
+  return value === undefined || value === "" ? undefined : value;
+}
+
 const FALLBACK_RESOLVERS: Readonly<Record<FallbackResolver, (config: CliConfig, descriptor: SettingDescriptor) => SettingEffective | undefined>> = {
+  /** The shared browser setting, unset: the Harness's older key when the file has it (`webPolicy`), else When needed. */
+  webBrowser(config, descriptor) {
+    const legacy = config.providers?.harness?.webBrowser;
+    const when = legacy === "off" ? "off" : "auto";
+    return { value: when, label: formatSettingValue(descriptor, when), ...(legacy === undefined ? {} : { origin: "from providers.harness.webBrowser in the config file" }) };
+  },
+  /** The shared private-network switch, unset: off, except that the Harness's older switch still opens its own tools. */
+  privateNetwork(config) {
+    return config.providers?.harness?.webPrivateNetwork === true
+      ? { value: undefined, label: "Moxen Harness only", origin: "from providers.harness.webPrivateNetwork in the config file" }
+      : { value: false, label: "Off" };
+  },
+  searchKey(config, descriptor) {
+    return legacySearchSlot(config, descriptor, "webSearchKey") === undefined ? undefined : { value: undefined, label: "Saved in the keychain", origin: "in the single key slot from before each service had its own" };
+  },
+  searchKeyEnv(config, descriptor) {
+    const name = legacySearchSlot(config, descriptor, "webSearchKeyEnv");
+    return name === undefined ? undefined : { value: name, label: name, origin: "in the single key slot from before each service had its own" };
+  },
   /** A provider tab's Model, unset: the global Model when the global Provider is this one (`configuredModel`); else the provider's catalog default, which the picker names itself. */
   providerModel(config, descriptor) {
     const kind = /^providers\.(claude|opencode|harness)\.model$/.exec(descriptor.key)?.[1];

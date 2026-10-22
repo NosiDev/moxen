@@ -47,6 +47,7 @@ export interface CliConfig {
   branchPruneDays?: number;
   /** TUI presentation; ignored by the CLI, which has no panels. */
   ui?: UiConfig;
+  web?: WebConfig;
   git?: GitConfig;
   forge?: ForgeConfig;
   /** Per-provider settings, read when that provider's driver is built. */
@@ -134,17 +135,33 @@ export interface HarnessProviderConfig {
   slots?: number;
   /** Where `web_search` looks: duckduckgo (no account), exa or brave (a key), searxng (your instance). */
   webSearch?: string;
-  /** The NAME of the environment variable holding the Exa or Brave key. Never the key. */
+  /** Each search service's own key: a `keychain:` reference per backend, so switching services never sends one's key to the other. */
+  webSearchKeys?: Partial<Record<KeyedSearchBackend, string>>;
+  /** Each search service's own key variable: the NAME of an environment variable, never the key. A saved key wins over it. */
+  webSearchKeyEnvs?: Partial<Record<KeyedSearchBackend, string>>;
+  /** Older single slot for "the Exa or Brave key", read only while no per-service key is set (`resolveWebSettings`). Kept for files an older build shares. */
   webSearchKeyEnv?: string;
-  /** A `keychain:` reference to the Exa or Brave key saved in the OS keychain. Wins over `webSearchKeyEnv`. */
+  /** Older single slot, as `webSearchKeyEnv`: a `keychain:` reference. */
   webSearchKey?: string;
   /** Address of a SearXNG instance. */
   searxngUrl?: string;
-  /** `auto`: use an installed Chrome or Chromium for pages a plain request cannot read; `off`: never. */
+  /** Older keys for what is now the shared `web` section; read when it leaves them unset (`webPolicy`). */
   webBrowser?: string;
   webBrowserPath?: string;
-  /** Let the web tools reach private-network addresses (this machine is always allowed; cloud metadata never). */
+  /** Older key: opened private networks for the Moxen Harness's web tools only. */
   webPrivateNetwork?: boolean;
+}
+
+/** The search services that take a key of their own. */
+export type KeyedSearchBackend = "exa" | "brave";
+
+/** How Moxen's web tools reach the web, for every provider: the Harness's own tools and the `web_fetch` Moxen offers Claude Code and OpenCode. */
+export interface WebConfig {
+  /** `auto`: load a page in an installed Chrome or Chromium when a plain request cannot read it; `off`: never start one. */
+  browser?: "auto" | "off";
+  browserPath?: string;
+  /** Let the web tools reach private-network addresses (this machine is always allowed; cloud metadata never). */
+  privateNetwork?: boolean;
 }
 
 /** A profile's own compaction settings, over the defaults above. Not in the settings schema: a profile list is edited as a whole. */

@@ -110,7 +110,7 @@ export async function fetchPage(rawUrl: string, options: { readonly render?: boo
   if (!url) return failure("That is not a valid address. Give a full URL such as https://example.com/page.");
   const executable = findBrowser(context.browser, context.env);
   if (options.render === true) {
-    return executable ? await throughBrowser(url, executable, context) : failure("No browser is available to render the page. Install Chrome or Chromium, or set webBrowserPath in the harness settings; or fetch without render.");
+    return executable ? await throughBrowser(url, executable, context) : failure("No browser is available to render the page. Install Chrome or Chromium, or set Browser program (web.browserPath) in the settings; or fetch without render. If 'Browser for web pages' is Never, no browser is started.");
   }
 
   let response: HttpResponse;
@@ -127,7 +127,7 @@ export async function fetchPage(rawUrl: string, options: { readonly render?: boo
   if (response.status >= 400 || challenged || (response.status === 202 && /html/.test(type))) {
     if ((blocked || challenged) && executable) return await throughBrowser(url, executable, context);
     const hint = blocked || challenged ? " It may be turning away automated requests." : "";
-    const nobrowser = (blocked || challenged) && !executable && context.browser.mode !== "off" ? " No browser was found to try the page through; install Chrome or Chromium, or set webBrowserPath in the harness settings." : "";
+    const nobrowser = (blocked || challenged) && !executable && context.browser.mode !== "off" ? " No browser was found to try the page through; install Chrome or Chromium, or set Browser program (web.browserPath) in the settings." : "";
     return failure(`${url.hostname} answered ${response.status}.${hint}${nobrowser}`);
   }
 

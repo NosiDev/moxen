@@ -14,6 +14,7 @@ import { openThreadStore } from "../../../core/threads/store.js";
 import { sendTurn } from "../../../core/threads/threads.js";
 import { serveMcp } from "../stdio.js";
 import { callMoxenTool, moxenToolsFor } from "../tools.js";
+import { webPolicy } from "../../../core/providers/harness/web/settings.js";
 
 async function setup(harnessOptions: Parameters<typeof testHarness>[0] = {}) {
   const starts: Array<Record<string, unknown>> = [];
@@ -312,5 +313,20 @@ describe("moxen web_fetch", () => {
       const result = await callMoxenTool(api, "t1", "web_fetch", { url });
       expect(result.isError).toBe(true);
     }
+  });
+  it("starts no browser when the shared setting says never, whichever provider asks", async () => {
+    const off = { web: async () => webPolicy({ browser: "off" }, undefined, false) };
+    const rendered = await callMoxenTool(api, "t1", "web_fetch", { url: "https://example.com/", render: true }, off);
+    expect(rendered).toMatchObject({ isError: true });
+    expect(rendered.text).toContain("No browser is available");
+    // The Harness's older key says the same for every provider now.
+    const legacy = await callMoxenTool(api, "t1", "web_fetch", { url: "https://example.com/", render: true }, { web: async () => webPolicy(undefined, { webBrowser: "off" }, false) });
+    expect(legacy.text).toContain("No browser is available");
+  });
+
+  it("keeps cloud metadata out even when private networks are allowed", async () => {
+    const open = { web: async () => webPolicy({ privateNetwork: true }, undefined, false) };
+    const result = await callMoxenTool(api, "t1", "web_fetch", { url: "http://169.254.169.254/latest/meta-data/" }, open);
+    expect(result.isError).toBe(true);
   });
 });

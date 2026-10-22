@@ -84,9 +84,9 @@ export function refusalFor(kind: AddressClass, policy: NetworkPolicy): string | 
     case "loopback":
       return null;
     case "private":
-      return policy.allowPrivate ? null : "That address is on a private network. The web tool only reaches this machine and the public internet; allow private networks in the harness settings (webPrivateNetwork) if you mean to.";
+      return policy.allowPrivate ? null : "That address is on a private network. The web tool only reaches this machine and the public internet; allow 'Web tools reach private networks' (web.privateNetwork) in the settings if you mean to.";
     case "linklocal":
-      return policy.allowPrivate ? null : "That address is link-local, which is where cloud metadata services and some local devices live. It is refused unless private networks are allowed in the harness settings (webPrivateNetwork).";
+      return policy.allowPrivate ? null : "That address is link-local, which is where cloud metadata services and some local devices live. It is refused unless 'Web tools reach private networks' (web.privateNetwork) is on in the settings.";
     case "metadata":
       return "That address is a cloud metadata service. It is never reached by the web tool.";
     case "unspecified":

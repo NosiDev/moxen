@@ -14,6 +14,7 @@ import path from "node:path";
 
 import { CliError } from "../../core/errors.js";
 import { fetchPage } from "../../core/providers/harness/web/fetch.js";
+import { webPolicy, type WebPolicy } from "../../core/providers/harness/web/settings.js";
 import type { DelegatedTaskStatus } from "../../core/threads/views.js";
 import type { ClientApi } from "../api.js";
 
@@ -250,7 +251,7 @@ export async function callMoxenTool(
   parentThreadId: string,
   name: string,
   args: Record<string, unknown>,
-  options: { readonly sleep?: (ms: number) => Promise<void>; readonly delegated?: boolean } = {},
+  options: { readonly sleep?: (ms: number) => Promise<void>; readonly delegated?: boolean; readonly web?: () => Promise<WebPolicy> } = {},
 ): Promise<ToolResult> {
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   // Hidden from the list, and refused here too: a client can call a tool it was never shown.
@@ -271,7 +272,7 @@ export async function callMoxenTool(
         return ok({ recorded: recorded.steps, ...(note === null ? {} : { note }) });
       }
       case "web_fetch":
-        return await webFetchTool(args);
+        return await webFetchTool(args, (await options.web?.()) ?? webPolicy(undefined, undefined, false));
       case "task_cancel": {
         const taskId = argString(args, "taskId", true)!;
         const cancelled = await api.dispatch({ type: "thread.task.cancel", parentThreadId, taskId });
@@ -289,19 +290,18 @@ export async function callMoxenTool(
 
 /**
  * The Harness's `web_fetch`, offered to every provider: the same request, the
- * same refusal to reach cloud metadata or the local network, the same browser
- * fallback. No approval step of its own — the provider's permission prompt for
- * an MCP tool is the user's say here. The local network stays off; the
- * Harness setting that opens it is the Harness's.
+ * same refusal to reach cloud metadata, and the shared `web` settings for the
+ * browser fallback and the local network (`webPolicy`). No approval step of
+ * its own — the provider's permission prompt for an MCP tool is the user's say here.
  */
-async function webFetchTool(args: Record<string, unknown>): Promise<ToolResult> {
+async function webFetchTool(args: Record<string, unknown>, policy: WebPolicy): Promise<ToolResult> {
   const url = argString(args, "url", true)!;
   const result = await fetchPage(
     url,
     { render: args.render === true },
     {
-      policy: { allowPrivate: false },
-      browser: { mode: "auto", path: undefined },
+      policy: { allowPrivate: policy.allowPrivate },
+      browser: policy.browser,
       env: process.env,
       artifactDir: path.join(os.tmpdir(), "moxen-web"),
       signal: AbortSignal.timeout(60_000),

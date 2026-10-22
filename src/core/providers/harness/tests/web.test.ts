@@ -391,7 +391,7 @@ describe("web_search", () => {
       res.writeHead(401, { "content-type": "application/json" });
       res.end("{}");
     });
-    expect((await searchWeb("q", 3, searchContext("exa"))).content).toMatch(/webSearchKeyEnv/);
+    expect((await searchWeb("q", 3, searchContext("exa"))).content).toMatch(/its key variable/);
     expect((await searchWeb("q", 3, searchContext("exa", { keyEnv: "NOT_SET" }))).content).toMatch(/NOT_SET .*not set/);
     expect((await searchWeb("q", 3, searchContext("exa", { keyEnv: "sk-live-abc123def" }))).content).toMatch(/NAME of an environment variable/);
     const refused = await searchWeb("q", 3, searchContext("exa", { keyEnv: "EXA_KEY", env: { EXA_KEY: "exa-secret" } }));

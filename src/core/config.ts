@@ -16,6 +16,7 @@ import type {
   ForgeConfig,
   GitConfig,
   HarnessProviderConfig,
+  KeyedSearchBackend,
   InteractionMode,
   OpencodeProviderConfig,
   OpenMode,
@@ -26,6 +27,7 @@ import type {
   ThreadEnvMode,
   UpdatesConfig,
   UiConfig,
+  WebConfig,
   WorkspaceMode,
 } from "./types.js";
 
@@ -215,6 +217,8 @@ export function normalizeConfig(raw: unknown): CliConfig {
     const servers = parseMcpServers(input.mcpServers, "config") as Record<string, McpServerEntry>;
     if (Object.keys(servers).length > 0) result.mcpServers = servers;
   }
+  const web = normalizeSection<WebConfig>(input.web, "web", ["browser", "browserPath", "privateNetwork"]);
+  if (web) result.web = web;
   const ui = normalizeSection<UiConfig>(input.ui, "ui", ["backdrop", "modelScenes", "hideBinaryDiffs", "defaultSidePanel", "contextRefreshSeconds", "usageRefreshSeconds", "autoHandoff", "autoHandoffPercent", "autoHandoffTokens"]);
   if (ui) result.ui = ui;
   const git = normalizeSection<GitConfig>(input.git, "git", ["historyLimit", "autoFetch"]);
@@ -321,7 +325,10 @@ function normalizeProviders(raw: unknown): ProvidersConfig | undefined {
     const withProfiles = normalizeHarnessConfig(input.harness);
     const defaults = normalizeSection<HarnessProviderConfig>(input.harness, "providers.harness", ["runtimeMode", "model", "thinkingEffort", "moxenTools", "todos", "mcpExclude", "autoHandoff", "autoHandoffTokens", "autoHandoffPercent", "slots", "autoCompact", "autoCompactPercent", "autoCompactTokens", "keepRecentTokens", "webSearch", "webSearchKey", "webSearchKeyEnv", "searxngUrl", "webBrowser", "webBrowserPath", "webPrivateNetwork"]);
     const models = handoffModelsOf(input.harness, "providers.harness");
-    if (withProfiles || defaults || models) result.harness = { ...defaults, ...withProfiles, ...models };
+    const section = asSection(input.harness, "providers.harness");
+    const keys = normalizeSection<Partial<Record<KeyedSearchBackend, string>>>(section.webSearchKeys, "providers.harness.webSearchKeys", ["exa", "brave"]);
+    const keyEnvs = normalizeSection<Partial<Record<KeyedSearchBackend, string>>>(section.webSearchKeyEnvs, "providers.harness.webSearchKeyEnvs", ["exa", "brave"]);
+    if (withProfiles || defaults || models || keys || keyEnvs) result.harness = { ...defaults, ...withProfiles, ...models, ...(keys ? { webSearchKeys: keys } : {}), ...(keyEnvs ? { webSearchKeyEnvs: keyEnvs } : {}) };
   }
   return Object.keys(result).length > 0 ? result : undefined;
 }

@@ -115,7 +115,8 @@ import { openThreadStore, resolveStoreRoot, type ThreadStore } from "../core/thr
 import type { ProviderRuntimeEvent } from "../core/providers/spi.js";
 import { pruneFinishedWorktrees } from "../core/threads/prune.js";
 import type { CheckpointFileStat, StoredCheckpoint, StoredThread, TurnStatus } from "../core/threads/types.js";
-import type { CliConfig, ForgeConfig, ProvidersConfig, ThreadEnvelope } from "../core/types.js";
+import type { CliConfig, ForgeConfig, ProvidersConfig, ThreadEnvelope, WebConfig } from "../core/types.js";
+import { webPolicy } from "../core/providers/harness/web/settings.js";
 import { persistUsageLimits, usageLimitsSnapshot } from "../core/usage/limits.js";
 import type { ClientApi } from "./api.js";
 import {
@@ -177,6 +178,7 @@ export class DirectConnection implements ClientApi {
   private readonly readConfigFile: () => Promise<{ config: CliConfig; path: string; exists: boolean }>;
   /** The per-provider settings the last config read saw; see `driverFor`. */
   private lastProviders: ProvidersConfig | undefined;
+  private lastWeb: WebConfig | undefined;
   private readonly builtinMcpServers: ((threadId: string, options?: { readonly delegated: boolean }) => readonly McpServerSpec[]) | null;
   private readonly readLatestVersions: (claudeBinaryPath?: string) => Promise<Omit<LatestVersions, "enabled">>;
   private readonly runProviderUpdate: (provider: UpdatableProvider, binaryPath?: string) => Promise<ProviderUpdate>;
@@ -218,6 +220,7 @@ export class DirectConnection implements ClientApi {
     this.loadConfig = async () => {
       const { config } = await this.readConfigFile();
       this.lastProviders = config.providers;
+      this.lastWeb = config.web;
       return config;
     };
     this.harnessFetch = options.harnessFetch;
@@ -252,7 +255,15 @@ export class DirectConnection implements ClientApi {
       type: "in-process",
       instructions: delegated ? MOXEN_DELEGATED_MCP_INSTRUCTIONS : MOXEN_MCP_INSTRUCTIONS,
       tools: moxenToolsFor({ delegated }),
-      call: (tool, args) => callMoxenTool(this, threadId, tool, args, { delegated }),
+      call: (tool, args) =>
+        callMoxenTool(this, threadId, tool, args, {
+          delegated,
+          // Read per call, like the Harness's own tools, so a change applies to the next fetch.
+          web: async () => {
+            const config = await this.loadConfig();
+            return webPolicy(config.web, config.providers?.harness, false);
+          },
+        }),
       fallback,
       checklist,
       // Delegation is what these tools are for: never behind a tool search.
@@ -401,7 +412,7 @@ export class DirectConnection implements ClientApi {
     const driver = driverForInstance(this.driversOwner, instanceId, this.factories, this.lastProviders);
     // The harness reads its profiles on every turn, so it is handed the config this operation saw.
     // Profiles are edited while the server runs; the harness driver reads its config on every use.
-    if (driver instanceof HarnessDriver) driver.setConfig(this.lastProviders?.harness);
+    if (driver instanceof HarnessDriver) driver.setConfig(this.lastProviders?.harness, this.lastWeb);
     this.ownedDrivers.add(driver);
     return driver;
   }

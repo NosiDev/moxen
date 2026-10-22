@@ -52,9 +52,10 @@ export type SettingControl =
       /** The value in force is not one the catalog offers (a model another provider has, a level the model lacks): said beside it, still editable. */
       readonly warning?: string;
     }
-  | { readonly kind: "text"; readonly multiline: boolean }
+  /** `effective`: what applies while it is unset (an older key's value), when core knows. */
+  | { readonly kind: "text"; readonly multiline: boolean; readonly effective?: SettingEffective }
   /** A key or token: typed into a masked input and kept in the OS keychain. */
-  | { readonly kind: "secret" }
+  | { readonly kind: "secret"; readonly effective?: SettingEffective }
   /** A structured list (the harness profiles): opens its own editor. */
   | { readonly kind: "list" }
   /** The MCP servers one provider gets: a checklist of every server, opened in its own editor. */
@@ -340,7 +341,7 @@ export function settingControl(
     case "list":
       return { kind: "list" };
     case "secret":
-      return { kind: "secret" };
+      return effective ? { kind: "secret", effective } : { kind: "secret" };
     case "boolean":
       return descriptor.defaultValue === undefined ? { kind: "toggle", tristate: true, ...(effective ? { effective } : {}) } : { kind: "toggle" };
     case "enum":
@@ -371,7 +372,7 @@ export function settingControl(
         return { kind: "tools", tools, excluded: String(value ?? "").split(",").map((name) => name.trim()).filter((name) => name !== "") };
       }
       if (kind.source === "handoff-models") return { kind: "handoff", models: handoffModelEntries(providers, kind.providerKind, value) };
-      if (kind.source === undefined) return { kind: "text", multiline: kind.multiline === true };
+      if (kind.source === undefined) return { kind: "text", multiline: kind.multiline === true, ...(effective ? { effective } : {}) };
       // No catalog yet (still loading): the list would be empty, not wrong.
       options = catalogOptions(kind.source, settings, providers ?? [], kind.providerKind, effective);
       break;
@@ -436,13 +437,16 @@ export function settingValueLabel(descriptor: SettingDescriptor, value: SettingV
     if (control.kind === "toggle" && control.tristate === true && value === undefined) return defaultLabel(control.effective);
     return value === true ? "On" : "Off";
   }
-  if (descriptor.kind.type === "secret") return value === undefined || value === "" ? "No key saved" : "Saved in the keychain";
+  if (descriptor.kind.type === "secret") {
+    if (value !== undefined && value !== "") return "Saved in the keychain";
+    return control.kind === "secret" && control.effective !== undefined ? defaultLabel(control.effective) : "No key saved";
+  }
   if (control.kind === "pick") {
     const current = value === undefined || value === "" ? "" : String(value);
     const match = control.options.find((entry) => entry.value === current);
     if (match !== undefined) return match.value === "" && match.label === "Default" ? defaultLabel(control.effective) : match.label;
   }
-  if (value === undefined || value === "") return "Default";
+  if (value === undefined || value === "") return control.kind === "text" ? defaultLabel(control.effective) : "Default";
   if (descriptor.kind.type === "integer") return `${typeof value === "number" ? numberLabel(value, descriptor.kind.binary) : String(value)}${descriptor.kind.unit ?? ""}`;
   return String(value);
 }

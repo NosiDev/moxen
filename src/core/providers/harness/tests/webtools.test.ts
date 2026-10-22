@@ -13,7 +13,7 @@ import { HarnessDriver } from "../driver.js";
 import { sessionAllowKey } from "../permissions.js";
 import { webFetchTool, webSearchTool } from "../tools/web.js";
 import { ReadState, type ToolContext } from "../tools/types.js";
-import { resolveWebSettings } from "../web/settings.js";
+import { resolveWebSettings, webPolicy } from "../web/settings.js";
 import type { ChatRequest } from "../transport/chat.js";
 import type { ModelEvent } from "../types.js";
 
@@ -66,6 +66,25 @@ describe("web tool intents", () => {
     expect(configured).toMatchObject({ search: { backend: "brave", keyEnv: "BRAVE_KEY" }, browser: { mode: "off" }, allowPrivate: true });
     expect(JSON.stringify({ ...configured, env: undefined })).not.toContain('"x"');
     expect(resolveWebSettings({ webSearch: "bing" }, {}).search.backend).toBe("duckduckgo");
+  });
+
+  it("follows the shared web settings, which win over the Harness's older keys", () => {
+    expect(resolveWebSettings({ webBrowser: "auto", webPrivateNetwork: true }, {}, { browser: "off", privateNetwork: false })).toMatchObject({ browser: { mode: "off" }, allowPrivate: false });
+    expect(resolveWebSettings({}, {}, { browserPath: "/opt/chrome" }).browser).toEqual({ mode: "auto", path: "/opt/chrome" });
+    // The older Harness switch opened its own tools only; the shared one opens every provider's.
+    expect(webPolicy(undefined, { webBrowser: "off", webPrivateNetwork: true }, false)).toEqual({ browser: { mode: "off", path: undefined }, allowPrivate: false });
+    expect(webPolicy(undefined, { webPrivateNetwork: true }, true).allowPrivate).toBe(true);
+    expect(webPolicy({ privateNetwork: true }, undefined, false).allowPrivate).toBe(true);
+  });
+
+  it("keeps one key per search service, and reads the older single slot only for a file that has no other", () => {
+    const legacy = { webSearch: "exa", webSearchKey: "keychain:providers.harness.webSearchKey", webSearchKeyEnv: "SEARCH_KEY" };
+    expect(resolveWebSettings(legacy, {}).search).toMatchObject({ backend: "exa", keyRef: "keychain:providers.harness.webSearchKey", keyEnv: "SEARCH_KEY" });
+    const split = { ...legacy, webSearch: "brave", webSearchKeys: { exa: "keychain:providers.harness.webSearchKey" } };
+    expect(resolveWebSettings(split, {}).search).toEqual({ backend: "brave", searxngUrl: undefined });
+    expect(resolveWebSettings({ ...split, webSearch: "exa" }, {}).search).toMatchObject({ keyRef: "keychain:providers.harness.webSearchKey" });
+    expect(resolveWebSettings({ ...split, webSearchKeyEnvs: { brave: "BRAVE_KEY" } }, {}).search).toMatchObject({ backend: "brave", keyEnv: "BRAVE_KEY" });
+    expect(resolveWebSettings({ ...split, webSearchKeyEnvs: { brave: "BRAVE_KEY" } }, {}).search).not.toHaveProperty("keyRef");
   });
 
   it("states in the tool text that results are data and that sign-in is not possible", () => {
