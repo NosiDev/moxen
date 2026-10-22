@@ -32,7 +32,7 @@ const MODEL_FIELDS: readonly ListField[] = [
   {
     path: "vision",
     label: "Takes images",
-    description: "Whether to send this model images. Unset assumes not, unless a probe saw the server accept one.",
+    description: "Whether to send this model images, or a short note in their place. This alone decides it when set. Unset: what a probe saw, else the family (every Claude model takes them), else not.",
     group: "Model",
     kind: { type: "boolean" },
   },
@@ -74,6 +74,9 @@ const gated = (field: ListField): ListField => {
   return when === undefined ? field : { ...field, visibleWhen: when };
 };
 
+/** Said once, under the group's heading, rather than after every quirk. */
+const QUIRKS_GROUP = "Most servers need none of these: pick a Model family and leave the rest on Default. A quirk set here beats both the family and a probe; Default goes back to those. Each model's In force section lists what applies and why.";
+
 const QUIRK_BOOLEANS: ReadonlyArray<readonly [string, string, string]> = [
   ["systemFirstOnly", "System message only first", "On: later reminders are sent as user messages. Off: sent as system messages."],
   ["mergeAdjacentRoles", "Merge same-side messages", "On: consecutive messages from the same role are joined (for templates that need strict alternation)."],
@@ -87,10 +90,11 @@ const QUIRK_BOOLEANS: ReadonlyArray<readonly [string, string, string]> = [
 ];
 
 const QUIRK_FIELDS: readonly ListField[] = ([
-  ...QUIRK_BOOLEANS.map(([name, label, description]): ListField => ({
+  ...QUIRK_BOOLEANS.map(([name, label, description], at): ListField => ({
+    ...(at === 0 ? { groupDescription: QUIRKS_GROUP } : {}),
     path: `quirks.${name}`,
     label,
-    description: `${description} Most servers need none of the template quirks: pick a Model family and leave the rest on Default. Set here, it beats both the family and a probe; Default goes back to those.`,
+    description,
     group: "Template quirks",
     kind: { type: "boolean" },
   })),
@@ -124,7 +128,7 @@ const QUIRK_FIELDS: readonly ListField[] = ([
   {
     path: "quirks.reasoningReplay",
     label: "Send earlier reasoning back",
-    description: "Whether the model's earlier thinking is shown to it again on later turns, and how. Some models reason better when they see it; others get confused or the server refuses the extra field.",
+    description: "Whether the model's earlier thinking is shown to it again on later turns, and how. Some models reason better when they see it, and it keeps the server's prompt cache valid; others get confused or the server refuses the extra field. Not at all also drops a template flag that asks to render it (Qwen's preserve_thinking).",
     group: "Template quirks",
     kind: {
       type: "enum",
@@ -159,8 +163,9 @@ const QUIRK_FIELDS: readonly ListField[] = ([
   {
     path: "quirks.images",
     label: "Image parts",
-    description: "How an image is passed to the model. `Takes images` on the model normally decides this for you; set it here only to force one way.",
+    description: "Kept so older profiles still load: how images were passed before 'Takes images' on each model decided it. Read only for a model whose 'Takes images' is unset.",
     group: "Template quirks",
+    hidden: true,
     kind: {
       type: "enum",
       choices: [
@@ -208,8 +213,8 @@ export const HARNESS_PROFILE_FIELDS: readonly ListField[] = [
   },
   {
     path: "slots",
-    label: "Server slots",
-    description: "Requests the server runs at once (llama.cpp `-np`). With 1, Moxen's own subagents wait their turn instead of starving you.",
+    label: "Requests at once",
+    description: "Requests this server runs at the same time (llama.cpp `-np`). With 1, Moxen's own subagents wait their turn instead of starving you. Unset: 'Requests at once' on the Moxen Harness tab.",
     group: "Endpoint",
     kind: { type: "integer", presets: [1, 2, 3, 4, 6, 8, 12, 16], ends: { low: "Fewer", high: "More" } },
   },
@@ -227,8 +232,9 @@ export const HARNESS_PROFILE_FIELDS: readonly ListField[] = [
   {
     path: "preserveThinking",
     label: "Keep reasoning in history",
-    description: "Send earlier reasoning back to the model. Unset means yes. It keeps the server's prompt cache valid; turn it off if a template chokes on it.",
-    group: "Thinking",
+    description: "Kept so older profiles still load: off reads as 'Send earlier reasoning back' Not at all, while that is unset.",
+    group: "Template quirks",
+    hidden: true,
     kind: { type: "boolean" },
   },
   {
@@ -263,9 +269,9 @@ export const HARNESS_PROFILE_FIELDS: readonly ListField[] = [
   {
     path: "compaction.effort",
     label: "Summary effort",
-    description: "Reasoning effort for the summary request, on servers that take one. Unset: low.",
+    description: "Reasoning effort for the summary request, picked from the efforts this profile's models list (Models → Reasoning efforts). Unset: low, on servers that take an effort.",
     group: "Compaction",
-    kind: { type: "string", placeholder: "low" },
+    kind: { type: "effort" },
   },
   {
     path: "titles",
@@ -281,8 +287,8 @@ export const HARNESS_PROFILE_FIELDS: readonly ListField[] = [
   { path: "loopGuard.textRepeats", label: "Stop repeated text after", description: "A reply repeating one stretch of text this many times is cut off. Unset: 10.", group: "Behaviour", visibleWhen: { path: "loopGuard.text", in: ["", "true"] }, kind: { type: "integer", presets: [4, 6, 8, 10, 15, 20, 30], ends: { low: "Sooner", high: "Later" } } },
   {
     path: "systemPromptAppend",
-    label: "Extra instructions",
-    description: "Added to this profile's system prompt, after Moxen's own.",
+    label: "Profile instructions",
+    description: "Added to the system prompt of threads on this profile, after Moxen's own and after 'Extra instructions' on the Turns tab, which apply to every provider. The two stack.",
     group: "Prompt",
     kind: { type: "string", multiline: true },
   },

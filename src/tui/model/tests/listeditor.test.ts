@@ -22,7 +22,7 @@ describe("list editor rows", () => {
 
   it("offers a way back to unset on every field, three ways on a boolean, and typing for a number outside the presets", () => {
     const options = (path: string) => (field(path).control as unknown as { options: Array<{ value: string }> }).options.map((option) => option.value);
-    expect(options("preserveThinking")).toEqual(["", "true", "false"]);
+    expect(options("titles")).toEqual(["", "true", "false"]);
     expect(options("slots")[0]).toBe("");
     expect(options("slots").at(-1)).toBe(TEXT_OPTION);
     expect(field("baseUrl").control.kind).toBe("text");
@@ -37,6 +37,28 @@ describe("list editor rows", () => {
     const modelFields = (kind.fields.find((entry) => entry.path === "models")!.kind as { fields: typeof kind.fields }).fields;
     const modelRows = itemRows(modelFields, model);
     expect(modelRows.find((row) => row.kind === "field" && row.path === "family")).toMatchObject({ shown: "qwen3", origin: "the model's name" });
+  });
+});
+
+describe("one control per behaviour", () => {
+  it("offers neither older switch, says the quirk advice once under its heading, and names the profile's instructions", () => {
+    expect(field("preserveThinking")).toBeUndefined();
+    expect(field("quirks.images")).toBeUndefined();
+    const heading = rows.find((row) => row.kind === "heading" && row.label === "Template quirks");
+    expect(heading).toMatchObject({ description: expect.stringContaining("Most servers need none of these") });
+    expect(field("quirks.omitToolChoice").description).not.toContain("Most servers need none");
+    expect(field("systemPromptAppend").label).toBe("Profile instructions");
+    expect(field("slots").label).toBe("Requests at once");
+  });
+
+  it("shows what the older switches still decide, on the controls that replaced them", () => {
+    const older = normalizeConfig({ providers: { harness: { profiles: [{ id: "p", baseUrl: "http://h", preserveThinking: false, quirks: { images: "native" }, models: [{ id: "m" }] }] } } });
+    const item = describeSettings(older).find((entry) => entry.descriptor.key === "providers.harness.profiles")!.items![0]!;
+    const own = itemRows(kind.fields, item);
+    expect(own.find((row) => row.kind === "field" && row.path === "quirks.reasoningReplay")).toMatchObject({ origin: "preserveThinking in the config file" });
+    const modelFields = (kind.fields.find((entry) => entry.path === "models")!.kind as { fields: typeof kind.fields }).fields;
+    const model = item.fields.find((entry) => entry.path === "models")!.items![0]!;
+    expect(itemRows(modelFields, model).find((row) => row.kind === "field" && row.path === "vision")).toMatchObject({ shown: "On", origin: "quirks.images in the config file" });
   });
 });
 

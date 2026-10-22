@@ -213,36 +213,41 @@ export interface ResolveQuirksInput {
 }
 
 /**
- * Preset by family, then the probe's measurements, then the model's `vision`
- * fact, then the profile's own overrides. `vision` is something the user
- * states about the model, so it outranks the probe's `images`; the probe only
- * speaks for images when `vision` is unset.
+ * Preset by family, then the probe's measurements, then the profile's own
+ * overrides. One control per behaviour, the older one a fallback only:
+ *   - images: the model's `vision` decides when it is set; the profile's older
+ *     `quirks.images` only while it is not;
+ *   - reasoning in history: `quirks.reasoningReplay` decides when it is set; the
+ *     profile's older `preserveThinking: false` reads as `none` while it is not.
+ * Reasoning that is never sent back also drops the template flag asking to
+ * render it (Qwen's `preserve_thinking`), whichever way it came to be `none`.
  */
 export function resolveQuirks(input: ResolveQuirksInput): ModelQuirks {
   const family = isQuirkFamily(input.family) ? input.family : detectQuirkFamily(input.modelId);
   const preset = FAMILY_PRESETS[family];
   let quirks: ModelQuirks = { ...DEFAULT_QUIRKS, ...preset, ...input.probed };
+  if (input.preserveThinking === false) quirks = { ...quirks, reasoningReplay: "none" };
+  if (input.overrides) quirks = { ...quirks, ...input.overrides };
   if (input.vision !== undefined) quirks = { ...quirks, images: input.vision ? "native" : "none" };
-  if (input.preserveThinking === false) {
-    // Dropping the history's reasoning also drops the template flag that asks to render it.
+  if (quirks.reasoningReplay === "none" && "preserve_thinking" in quirks.chatTemplateKwargs) {
     const kwargs = { ...quirks.chatTemplateKwargs };
     delete kwargs.preserve_thinking;
-    quirks = { ...quirks, reasoningReplay: "none", chatTemplateKwargs: kwargs };
+    quirks = { ...quirks, chatTemplateKwargs: kwargs };
   }
-  return input.overrides ? { ...quirks, ...input.overrides } : quirks;
+  return quirks;
 }
 
 export type QuirkOrigin = "default" | "preset" | "probe" | "model" | "profile" | "override";
 
-/** Where each quirk's value comes from, for the profile editor: `override` > `profile` / `model` > `probe` > `preset` > `default`. */
+/** Where each quirk's value comes from, for the profile editor: `model` (images) > `override` > `profile` (the older `preserveThinking`) > `probe` > `preset` > `default`. */
 export function quirkOrigins(input: ResolveQuirksInput): Record<keyof ModelQuirks, QuirkOrigin> {
   const family = isQuirkFamily(input.family) ? input.family : detectQuirkFamily(input.modelId);
   const preset = FAMILY_PRESETS[family];
   const origins = {} as Record<keyof ModelQuirks, QuirkOrigin>;
   for (const key of Object.keys(DEFAULT_QUIRKS) as Array<keyof ModelQuirks>) {
-    if (input.overrides && key in input.overrides) origins[key] = "override";
-    else if (input.preserveThinking === false && (key === "reasoningReplay" || key === "chatTemplateKwargs")) origins[key] = "profile";
-    else if (key === "images" && input.vision !== undefined) origins[key] = "model";
+    if (key === "images" && input.vision !== undefined) origins[key] = "model";
+    else if (input.overrides && key in input.overrides) origins[key] = "override";
+    else if (input.preserveThinking === false && key === "reasoningReplay") origins[key] = "profile";
     else if (input.probed && key in input.probed) origins[key] = "probe";
     else if (key in preset) origins[key] = "preset";
     else origins[key] = "default";

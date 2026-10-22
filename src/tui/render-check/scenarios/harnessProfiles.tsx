@@ -181,6 +181,15 @@ export async function runHarnessProfiles(): Promise<void> {
   await setup.flush();
   const sampling = setup.captureCharFrame();
   if (!sampling.includes("Temperature") || sampling.includes("Base URL")) fail("a heading in the sidebar did not narrow the profile editor to that heading");
+  const quirksRow = sideRows.findIndex((row) => row.includes("└ Template quirks") && row.indexOf("└ Template quirks") < 28);
+  await act(async () => setup.mockMouse.click(sideRows[quirksRow]!.indexOf("Template quirks") + 1, quirksRow));
+  await setup.flush();
+  const quirks = setup.captureCharFrame();
+  // The advice is said once, under the heading, and not after every quirk.
+  if ((quirks.match(/Most servers need none/g) ?? []).length !== 1) fail("the template quirks' advice is not said exactly once, under its heading");
+  if (quirks.includes("Keep reasoning in history") || quirks.includes("Image parts")) fail("the profile editor still offers an older control beside the one that replaced it");
+  await act(async () => setup.mockMouse.click(sideRows[samplingRow]!.indexOf("Sampling") + 1, samplingRow));
+  await setup.flush();
   await act(async () => setup.mockInput.pressTab());
   await setup.flush();
   if (setup.captureCharFrame().includes("Temperature")) fail("tab did not step to the next heading");

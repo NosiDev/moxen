@@ -67,12 +67,24 @@ describe("list settings", () => {
     const item = view.items![0]!;
     const field = (path: string) => item.fields.find((entry) => entry.path === path)!;
     expect(field("compaction.keepRecentTokens")).toMatchObject({ value: 9000, explicit: true });
-    expect(field("compaction.fraction").effective).toEqual({ value: 0.8, origin: "the Moxen Harness setting" });
+    // The share in force is said on the one row the page shows; the hidden older field has no row of its own.
+    expect(field("compaction.tokens").effective).toEqual({ value: undefined, origin: "80% of the window, the Moxen Harness setting" });
+    expect(field("compaction.fraction").effective).toBeUndefined();
     expect(field("compaction.effort").effective).toEqual({ value: "low", origin: "the default" });
     const model = field("models").items![0]!;
     expect(model.fields.find((entry) => entry.path === "family")?.effective).toEqual({ value: "qwen3", origin: "the model's name" });
     // Every other kind has no items.
     expect(describeSettings(config).filter((entry) => entry.items).map((entry) => entry.descriptor.key)).toEqual([PROFILES, "mcpServers"]);
+  });
+
+  it("lets the summary effort be only one its models list, and offers those", () => {
+    const efforts = JSON.stringify({ ...profile, models: [{ id: "a", efforts: ["low", "high"] }, { id: "b", efforts: ["high", "max"] }] });
+    const config = setConfigValue(DEFAULT_CONFIG, `${PROFILES}[local]`, efforts);
+    expect(() => setConfigValue(config, `${PROFILES}[local].compaction.effort`, "medum")).toThrow(/one of the efforts its models list: low, high, max/);
+    const set = setConfigValue(config, `${PROFILES}[local].compaction.effort`, "max");
+    const item = describeSettings(set).find((entry) => entry.descriptor.key === PROFILES)!.items![0]!;
+    expect(item.fields.find((entry) => entry.path === "compaction.effort")).toMatchObject({ value: "max", choices: [{ value: "low" }, { value: "high" }, { value: "max" }] });
+    expect(() => setConfigValue(withProfile(), `${PROFILES}[local].compaction.effort`, "low")).toThrow(/none of this entry's models lists reasoning efforts/);
   });
 
   it("copies a profile without its probe results, under a lower-cased new id, and refuses a taken one", () => {

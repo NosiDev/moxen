@@ -222,6 +222,19 @@ describe("probe results in a profile", () => {
     expect(mistral({ ...base, quirks: { images: "native" } }, {}, { vision: false }).images).toBe("none");
   });
 
+  it("reads the older profile switches as fallbacks: the requests old profiles made, and the new control wins once set", () => {
+    const qwen = (rest: Record<string, unknown> = {}, model: Record<string, unknown> = {}) =>
+      resolveHarnessTarget(normalizeHarnessConfig({ profiles: [{ id: "p", baseUrl: "http://h", models: [{ id: "qwen3.6-27b", ...model }], ...rest }] }), "harness/p", "qwen3.6-27b").quirks;
+    // preserveThinking off, as before: no reasoning sent back, and no template flag asking to render it.
+    expect(qwen({ preserveThinking: false })).toMatchObject({ reasoningReplay: "none", chatTemplateKwargs: {} });
+    expect(qwen()).toMatchObject({ reasoningReplay: "field", chatTemplateKwargs: { preserve_thinking: true } });
+    // The quirk, once set, decides alone.
+    expect(qwen({ preserveThinking: false, quirks: { reasoningReplay: "text" } })).toMatchObject({ reasoningReplay: "text", chatTemplateKwargs: { preserve_thinking: true } });
+    // quirks.images, as before, while the model does not say; the model's own fact decides once it does.
+    expect(qwen({ quirks: { images: "native" } }).images).toBe("native");
+    expect(qwen({ quirks: { images: "native" } }, { vision: false }).images).toBe("none");
+  });
+
   it("uses the server's window only while the model states none", () => {
     const target = (contextWindow?: number) =>
       resolveHarnessTarget(normalizeHarnessConfig({ profiles: [{ id: "p", baseUrl: "http://h", models: [{ id: "m", ...(contextWindow ? { contextWindow } : {}), probed: { ...base, contextWindow: 65536 } }] }] }), "harness/p", "m").model.contextWindow;

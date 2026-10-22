@@ -1,6 +1,6 @@
 import { numberLabel } from "./numberlabel.js";
 import { sliderLayout } from "./slider.js";
-import type { SettingEnds, ListField, ListFieldView, ListItemView, SettingValue } from "../../core/configschema.js";
+import type { SettingChoice, SettingEnds, ListField, ListFieldView, ListItemView, SettingValue } from "../../core/configschema.js";
 
 /**
  * Rows of the list editor (the harness profile editor), derived from the
@@ -27,7 +27,7 @@ export type FieldControl =
   | { readonly kind: "pairs"; readonly secret: boolean };
 
 export type EditorRow =
-  | { readonly kind: "heading"; readonly label: string }
+  | { readonly kind: "heading"; readonly label: string; readonly description?: string }
   | {
       readonly kind: "field";
       readonly path: string;
@@ -64,7 +64,8 @@ export function sliderChoices(options: readonly EditorOption[], width: number): 
   return { stops, reset: options.find((option) => option.value === ""), custom: options.find((option) => option.value === TEXT_OPTION) };
 }
 
-export function fieldControl(field: ListField, value: SettingValue): FieldControl {
+/** `choices`: what this item lets the field hold, for a field whose choices depend on the item (`ListFieldView.choices`). */
+export function fieldControl(field: ListField, value: SettingValue, choices: readonly SettingChoice[] = []): FieldControl {
   const kind = field.kind;
   const current = value === undefined ? "" : String(value);
   const withCurrent = (options: EditorOption[]): readonly EditorOption[] =>
@@ -97,6 +98,8 @@ export function fieldControl(field: ListField, value: SettingValue): FieldContro
     case "words":
     case "list":
       return { kind: "text", multiline: false };
+    case "effort":
+      return { kind: "pick", options: withCurrent([{ value: "", label: "Default", description: "Not set here: what the description above says applies." }, ...choices.map((choice) => ({ value: choice.value, label: choice.label, ...(choice.description ? { description: choice.description } : {}) }))]) };
   }
 }
 
@@ -136,7 +139,8 @@ export function itemRows(fields: readonly ListField[], item: ListItemView): read
     const view = item.fields.find((entry) => entry.path === field.path);
     if (field.group !== group) {
       group = field.group;
-      rows.push({ kind: "heading", label: group });
+      const description = fields.find((entry) => entry.group === group && entry.groupDescription !== undefined)?.groupDescription;
+      rows.push({ kind: "heading", label: group, ...(description !== undefined ? { description } : {}) });
     }
     if (field.kind.type === "list") {
       for (const child of view?.items ?? []) {
@@ -151,7 +155,7 @@ export function itemRows(fields: readonly ListField[], item: ListItemView): read
       path: field.path,
       label: field.label,
       description: field.description,
-      control: fieldControl(field, view?.value),
+      control: fieldControl(field, view?.value, view?.choices),
       value: view?.value,
       shown,
       explicit: view?.explicit === true,

@@ -144,6 +144,8 @@ export interface ListField {
   readonly group: string;
   /** Kept settable for old files, but an editor does not offer it. */
   readonly hidden?: boolean;
+  /** Said once under the group's heading; carried by any one field of the group. */
+  readonly groupDescription?: string;
   readonly kind: ListFieldKind;
   /**
    * An editor shows this field only while the field at `path` (relative to the
@@ -165,7 +167,9 @@ export type ListFieldKind =
   /** `KEY=value` pairs kept as an object. `secret`: values are never shown, and typing `KEY=<hidden>` keeps the stored one. */
   | { readonly type: "pairs"; readonly secret?: boolean }
   /** A list inside the item (a profile's models), addressed `path[<id>]`. */
-  | { readonly type: "list"; readonly noun: string; readonly fields: readonly ListField[] };
+  | { readonly type: "list"; readonly noun: string; readonly fields: readonly ListField[] }
+  /** A reasoning effort, picked from the ones the item's models list (`models[].efforts`); the item view offers them as `choices`. */
+  | { readonly type: "effort" };
 
 /**
  * A structured list kept in the config as an array of objects that each carry
@@ -207,6 +211,8 @@ export interface ListFieldView {
   readonly effective?: ListEffective;
   /** The entries of a nested list. */
   readonly items?: readonly ListItemView[];
+  /** What this item lets the field hold, for a field whose choices depend on the item (an effort). */
+  readonly choices?: readonly SettingChoice[];
 }
 
 export interface ListEffective {
@@ -1381,7 +1387,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.harness.slots",
     label: "Requests at once",
-    description: "How many requests a model server takes at the same time, for profiles that do not say (a profile's own 'Server slots' wins). Subagents, summaries and titles queue behind it. A single-GPU llama.cpp server is usually 1; /btw is refused while a turn runs on a server with one slot.",
+    description: "How many requests a model server takes at the same time, for profiles that do not say (a profile's own 'Requests at once' wins). Subagents, summaries and titles queue behind it. A single-GPU llama.cpp server is usually 1; /btw is refused while a turn runs on a server with one slot.",
     section: "provider:harness",
     group: "Concurrency",
     kind: { type: "integer", min: 1, max: 64, presets: [1, 2, 3, 4, 6, 8, 12, 16], ends: { low: "Fewer", high: "More" } },

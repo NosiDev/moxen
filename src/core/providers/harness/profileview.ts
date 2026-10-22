@@ -4,6 +4,7 @@
  * Built in core so the TUI and `moxen harness profile show` say the same
  * thing and neither restates a precedence rule.
  */
+import { itemEfforts } from "../../configlist.js";
 import type { ListEffective, ListFieldView, ListItemView, ListResolvedRow } from "../../configschema.js";
 import type { CliConfig, HarnessModelConfig, HarnessProfileConfig, HarnessProviderConfig } from "../../types.js";
 import { compactLineFor, compactionModeFor, driverProviders } from "../../threads/longthreads.js";
@@ -27,7 +28,7 @@ const ORIGIN: Record<QuirkOrigin, string> = {
   preset: "family preset",
   probe: "probe",
   model: "model setting",
-  profile: "profile setting",
+  profile: "preserveThinking in the config file",
   override: "your override",
 };
 
@@ -57,8 +58,11 @@ function modelResolved(profile: HarnessProfileConfig, model: HarnessModelConfig)
   return rows;
 }
 
-function modelEffective(model: HarnessModelConfig): Record<string, ListEffective> {
+function modelEffective(profile: HarnessProfileConfig, model: HarnessModelConfig): Record<string, ListEffective> {
   const effective: Record<string, ListEffective> = {};
+  // The older profile-wide switch speaks for a model that does not say.
+  const images = profile.quirks?.images;
+  if (model.vision === undefined && (images === "native" || images === "none")) effective.vision = { value: images === "native", origin: "quirks.images in the config file" };
   if (model.contextWindow === undefined && model.probed?.contextWindow !== undefined) {
     effective.contextWindow = { value: model.probed.contextWindow, origin: "the server, from a probe" };
   }
@@ -74,7 +78,8 @@ function fieldViews(fields: readonly (typeof HARNESS_PROFILE_FIELDS)[number][], 
     if (items !== undefined) return { path: field.path, value: undefined, explicit: items.length > 0, items };
     const value = leaf(raw, field.path);
     const inForce = effective[field.path];
-    return { path: field.path, value, explicit: value !== undefined, ...(inForce ? { effective: inForce } : {}) };
+    const choices = field.kind.type === "effort" ? itemEfforts(raw as Record<string, unknown>).map((effort) => ({ value: effort, label: effort })) : undefined;
+    return { path: field.path, value, explicit: value !== undefined, ...(inForce ? { effective: inForce } : {}), ...(choices ? { choices } : {}) };
   });
 }
 
@@ -85,10 +90,13 @@ function compactionEffective(config: CliConfig, profile: HarnessProfileConfig): 
   const settings = resolveCompactionSettings(driverProviders(config)?.harness, profile);
   const out: Record<string, ListEffective> = {};
   const place = (key: string | null | undefined): string => (key === null || key === undefined ? "the default" : key.startsWith("longThreads.") ? "the Turns tab" : "the Moxen Harness setting");
-  const lineOrigin = own?.tokens !== undefined || own?.fraction !== undefined ? "this profile" : place(compactLineFor(config, "harness")?.key);
   out["compaction.auto"] = { value: settings.auto, origin: own?.auto !== undefined ? "this profile" : place(compactionModeFor(config, "harness").key) };
-  if (settings.fraction !== null) out["compaction.fraction"] = { value: settings.fraction, origin: lineOrigin };
-  if (settings.tokens !== null) out["compaction.tokens"] = { value: settings.tokens, origin: lineOrigin };
+  // The older share in the profile still applies while its size is unset: said here, on the one row the page shows.
+  if (own?.tokens === undefined && own?.fraction !== undefined) out["compaction.tokens"] = { value: undefined, origin: `${Math.round(own.fraction * 100)}% of the window, from compaction.fraction in the config file` };
+  else if (settings.tokens !== null) out["compaction.tokens"] = { value: settings.tokens, origin: own?.tokens !== undefined ? "this profile" : place(compactLineFor(config, "harness")?.key) };
+  else if (settings.fraction !== null) out["compaction.tokens"] = { value: undefined, origin: `${Math.round(settings.fraction * 100)}% of the window, ${place(compactLineFor(config, "harness")?.key)}` };
+  // The older switch, read while 'Send earlier reasoning back' is unset.
+  if (profile.preserveThinking === false && profile.quirks?.reasoningReplay === undefined) out["quirks.reasoningReplay"] = { value: "none", origin: "preserveThinking in the config file" };
   out["compaction.keepRecentTokens"] = { value: settings.keepRecentTokens, origin: own?.keepRecentTokens !== undefined ? "this profile" : harness?.keepRecentTokens !== undefined ? "the Moxen Harness setting" : "the default" };
   out["compaction.effort"] = { value: settings.effort, origin: own?.effort !== undefined ? "this profile" : "the default" };
   return out;
@@ -107,7 +115,7 @@ function modelView(profile: HarnessProfileConfig, model: HarnessModelConfig): Li
     title: model.id,
     summary: parts.join(" · "),
     status: window === undefined ? "No context window: automatic compaction is off until one is set or probed." : null,
-    fields: fieldViews(modelFields, model, modelEffective(model), {}),
+    fields: fieldViews(modelFields, model, modelEffective(profile, model), {}),
     resolved: modelResolved(profile, model),
   };
 }

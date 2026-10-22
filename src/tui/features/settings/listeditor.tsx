@@ -757,8 +757,9 @@ function EditorLine({ id, row, active, first, width, onPress }: { id: string; ro
   switch (row.kind) {
     case "heading":
       return (
-        <box id={id} style={{ flexDirection: "row", height: 1, flexShrink: 0, marginTop: 1 }} backgroundColor={SURFACE.raised}>
+        <box id={id} style={{ flexDirection: "column", flexShrink: 0, marginTop: 1 }} backgroundColor={SURFACE.raised}>
           <text fg={COLOR.dim} bg={SURFACE.raised} attributes={TextAttributes.BOLD} selectable={false}>{truncate(row.label, width)}</text>
+          {row.description === undefined ? null : <text fg={COLOR.faint} bg={SURFACE.raised} wrapMode="word" selectable={false}>{row.description}</text>}
         </box>
       );
     case "resolved":

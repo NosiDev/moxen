@@ -161,7 +161,7 @@ export function readListValue(config: CliConfig, target: ListTarget): unknown {
 // -- parsing a field's text -----------------------------------------------------
 
 /** One field's text as the value the config stores. Empty clears (undefined). Ranges are the owner's to check. */
-export function parseListFieldValue(field: ListField, raw: string, key: string, existing?: unknown): string | number | boolean | string[] | Record<string, string> | undefined {
+export function parseListFieldValue(field: ListField, raw: string, key: string, existing?: unknown, item?: Record<string, unknown>): string | number | boolean | string[] | Record<string, string> | undefined {
   const text = raw.trim();
   if (text === "") return undefined;
   const kind = field.kind;
@@ -219,7 +219,29 @@ export function parseListFieldValue(field: ListField, raw: string, key: string, 
     }
     case "list":
       throw new CliError("INVALID_CONFIG", `${key} is a list; address one entry as ${field.path}[<id>].`);
+    case "effort": {
+      const offered = itemEfforts(item);
+      if (offered.includes(text)) return text;
+      throw new CliError(
+        "INVALID_CONFIG",
+        offered.length === 0
+          ? `${key}: none of this entry's models lists reasoning efforts. Add them to a model's efforts first.`
+          : `${key} must be one of the efforts its models list: ${offered.join(", ")}.`,
+      );
+    }
   }
+}
+
+/** The efforts an item's models list (`models[].efforts`), in order, once each. */
+export function itemEfforts(item: Record<string, unknown> | undefined): string[] {
+  const models = Array.isArray(item?.models) ? (item.models as unknown[]) : [];
+  const out: string[] = [];
+  for (const model of models) {
+    const efforts = recordOf(model)?.efforts;
+    if (!Array.isArray(efforts)) continue;
+    for (const effort of efforts) if (typeof effort === "string" && !out.includes(effort)) out.push(effort);
+  }
+  return out;
 }
 
 /** The placeholder a secret map shows in place of a value (see `mcpview.ts`). */
@@ -370,7 +392,7 @@ function writeListValueArray(config: CliConfig, target: ListTarget, raw: string,
     }
     return next as unknown as CliConfig;
   }
-  setPath(holder, fieldPath, parseListFieldValue(last.field, raw, key, walk(holder, fieldPath)));
+  setPath(holder, fieldPath, parseListFieldValue(last.field, raw, key, walk(holder, fieldPath), holder));
   return next as unknown as CliConfig;
 }
 
