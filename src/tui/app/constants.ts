@@ -6,6 +6,8 @@ export const SIDEBAR_WIDTH = 44;
     attachments, composer). */
 export const CHAT_GUTTER = 1;
 export const SETTLED_PAGE = 10;
+/** The Schedule message picker: title, the three-row digit fields, the moment it names, and the key hint, with the modal's padding. */
+export const SCHEDULE_PANEL_HEIGHT = 10;
 /** How long a status-bar error stays up before it clears itself. */
 export const ERROR_DISPLAY_MS = 6_000;
 /** How long the "copied to clipboard" confirmation stays up. */

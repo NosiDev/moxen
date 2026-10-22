@@ -6,9 +6,9 @@
 
 > Dynamic workflows orchestrate many subagents from a script Claude writes and you can rerun. Use them for codebase audits, large migrations, and cross-checked research.
 
-<Note>
-  Dynamic workflows are available on all paid plans, with Anthropic API access, and on Amazon Bedrock, Google Cloud's Agent Platform, and Microsoft Foundry. On Pro, turn them on from the Dynamic workflows row in `/config`.
-</Note>
+> [!NOTE]
+>
+> Dynamic workflows are available on all paid plans, with Anthropic API access, and on Amazon Bedrock, Google Cloud's Agent Platform, and Microsoft Foundry. On Pro, turn them on from the Dynamic workflows row in `/config`.
 
 A dynamic workflow is a JavaScript script that orchestrates many [subagents](/docs/en/sub-agents) at once. Claude writes the script for the task you describe, and a runtime executes it in the background while your session stays responsive.
 
@@ -35,37 +35,35 @@ Moving the plan into code also lets a workflow apply a repeatable quality patter
 
 The quickest way to see a workflow in action is to run `/deep-research`, the [built-in workflow](#bundled-workflows) Claude Code includes for investigating a question across many sources. You'll see agents work through a set of phases in the background while your session stays free, and get one report at the end instead of a turn-by-turn transcript.
 
-<Steps>
-  <Step title="Run the workflow">
-    Run `/deep-research` with a question you want investigated. It fans out web searches across several angles, fetches and cross-checks the sources it finds, and synthesizes a cited report.
+**1. Run the workflow**
 
-    ```text wrap theme={null}
-    /deep-research What changed in the Node.js permission model between v20 and v22?
-    ```
-  </Step>
+Run `/deep-research` with a question you want investigated. It fans out web searches across several angles, fetches and cross-checks the sources it finds, and synthesizes a cited report.
 
-  <Step title="Allow workflows">
-    Claude Code asks whether to allow the workflow. Select **Yes** to continue. The exact prompt depends on your permission mode. See [Approve the plan before it runs](#approve-the-plan-before-it-runs) for the per-mode options.
-  </Step>
+```text wrap theme={null}
+/deep-research What changed in the Node.js permission model between v20 and v22?
+```
 
-  <Step title="Watch progress">
-    The run starts in the background. Run `/workflows` to open its progress view:
+**2. Allow workflows**
 
-    ```text wrap theme={null}
-    /workflows
-    ```
+Claude Code asks whether to allow the workflow. Select **Yes** to continue. The exact prompt depends on your permission mode. See [Approve the plan before it runs](#approve-the-plan-before-it-runs) for the per-mode options.
 
-    If `/workflows` shows a list of runs instead, select the run you just started and press Enter. The view shows each phase with its agent count. Drill into any phase to see its agents and what each one found. See [Watch the run](#watch-the-run) for the full set of controls.
+**3. Watch progress**
 
-    You can also watch from the task panel below the input box: a one-line progress summary appears there while the run is going. Press the down arrow to focus it, then Enter to expand.
-  </Step>
+The run starts in the background. Run `/workflows` to open its progress view:
 
-  <Step title="Read the report">
-    When the run finishes, the report appears in your session. It cites the sources each claim came from, with claims that didn't survive cross-checking already filtered out.
+```text wrap theme={null}
+/workflows
+```
 
-    When the verifier agents can't check a claim, such as after a rate limit or API error, the report lists that claim as unverified instead of counting it as refuted.
-  </Step>
-</Steps>
+If `/workflows` shows a list of runs instead, select the run you just started and press Enter. The view shows each phase with its agent count. Drill into any phase to see its agents and what each one found. See [Watch the run](#watch-the-run) for the full set of controls.
+
+You can also watch from the task panel below the input box: a one-line progress summary appears there while the run is going. Press the down arrow to focus it, then Enter to expand.
+
+**4. Read the report**
+
+When the run finishes, the report appears in your session. It cites the sources each claim came from, with claims that didn't survive cross-checking already filtered out.
+
+When the verifier agents can't check a claim, such as after a rate limit or API error, the report lists that claim as unverified instead of counting it as refuted.
 
 To run a workflow for your own task, [have Claude write one](#have-claude-write-a-workflow), and once a run does what you wanted you can [save it](#save-the-workflow-for-reuse) as a command of your own.
 
@@ -91,7 +89,7 @@ The progress view shows each phase with its agent counts. The footer lists the k
 | :- | :- |
 | `↑` / `↓` | Select a phase or agent |
 | `Enter` or `→` | Drill into the selected phase, then into an agent's detail. In the detail, `Enter` expands or collapses it |
-| `Esc` or `←` | Back out one level. In v2.1.203 through v2.1.205, `←` didn't step back out of a phase or agent; use `Esc` on those versions |
+| `Esc` or `←` | Back out one level |
 | `j` / `k` | Scroll within the agent detail when it overflows |
 | `f` | Filter the agent list in the selected phase by status. Press again to cycle |
 | `p` | Pause or resume the run |
@@ -137,10 +135,6 @@ The keyword is an opt-in only in a prompt you type yourself: at the interactive 
 * a scheduled task prompt
 * a webhook payload or pull request comment relayed into the conversation
 
-<Note>
-  Before v2.1.210, the keyword started a workflow from any of these routes too, including a webhook payload or pull request comment relayed into the conversation.
-</Note>
-
 ### Let Claude decide with ultracode
 
 Ultracode is a Claude Code setting that turns on automatic workflow orchestration for the session, at whichever [effort level](/docs/en/model-config#adjust-effort-level) the session runs at. With it on, Claude plans a workflow for each substantive task instead of waiting for you to ask. Turn it on at the Claude Code prompt:
@@ -149,7 +143,7 @@ Ultracode is a Claude Code setting that turns on automatic workflow orchestratio
 /effort ultracode
 ```
 
-To start a session with ultracode already on, launch with `claude --effort ultracode`, which also sets the effort level to `xhigh`. Requires Claude Code v2.1.203 or later.
+To start a session with ultracode already on, launch with `claude --effort ultracode`, which also sets the effort level to `xhigh`.
 
 To turn it on from the `/effort` slider, press `Tab` to flip the **Ultracode** toggle, then `Enter` to apply it. [Adjust effort level](/docs/en/model-config#adjust-effort-level) lists the routes that turn ultracode on.
 
@@ -185,10 +179,10 @@ Whether you see this prompt depends on your [permission mode](/docs/en/permissio
 
 In `claude -p` and the Agent SDK, Claude Code never shows this prompt. It runs the Workflow tool call through the same [permission evaluation](/docs/en/agent-sdk/permissions#how-permissions-are-evaluated) as the rest of the session, so deny rules, ask rules, and `dontAsk` mode apply to the launch as they apply to every tool call. To let the workflow start in these runs, use one of these:
 
-* **Permission rule**: `Workflow` in your allow rules approves every workflow, and `Workflow(<name>)` approves one saved workflow by name.
-* **Auto permission mode**: the [classifier](/docs/en/permission-modes#eliminate-prompts-with-auto-mode) reviews the call and can approve it.
-* **Bypass permissions mode**: Claude Code approves the call.
-* **A hook**: a [`PreToolUse`](/docs/en/hooks#pretooluse) hook that allows the call approves it.
+* **Permission rule**: add `Workflow` to your allow rules to approve every workflow, or `Workflow(<name>)` to approve one saved workflow by name.
+* **Auto permission mode**: run in [auto mode](/docs/en/permission-modes#eliminate-prompts-with-auto-mode), where the classifier reviews the call and can approve it.
+* **Bypass permissions mode**: run in bypass permissions mode.
+* **A hook**: return `"allow"` for the call from a [`PreToolUse`](/docs/en/hooks#pretooluse) hook. In [plan mode](/docs/en/permission-modes#analyze-before-you-edit-with-plan-mode), the workflow doesn't start on the hook's approval alone, so use a permission rule or your host's approval there instead.
 * **Your host**: a [`--permission-prompt-tool`](/docs/en/cli-reference#cli-flags) or, with the Agent SDK, a [`canUseTool`](/docs/en/agent-sdk/permissions) callback approves it.
 
 In the Desktop app, an approval card shows the workflow name, the phase list, and a token-usage caution, with **Once**, **Always**, and **Deny** actions. The progress view appears in the Background tasks side pane.
@@ -312,7 +306,7 @@ return audits.filter(Boolean)
 
 The body is plain JavaScript with top-level `await`. `agent()` spawns one subagent, `pipeline()` runs one per item in a list, and `parallel()` runs a set of agent tasks at the same time and waits for all of them.
 
-An `agent()` call resolves to `null` if you stop it mid-run or it hits an unrecoverable API error. `pipeline()` keeps each `null` in the results array, which is why the example ends with `.filter(Boolean)` to drop those entries.
+An `agent()` call resolves to `null` if you stop it mid-run or it hits an unrecoverable API error. `pipeline()` keeps each `null` in the results array, which is why the example ends with `.filter(Boolean)` to drop those entries, including the slot of [an agent that stalled on every attempt](#when-an-agent-stalls-and-restarts).
 
 In [auto mode](/docs/en/permission-modes#eliminate-prompts-with-auto-mode), the prompt your script passes to `agent()` doesn't count as a request from you when the classifier reviews that subagent's actions, because Claude Code marks it as text the script computed.
 
@@ -377,13 +371,21 @@ When you stop a run, it stays in the task panel while any of its agents' process
 
 Resume a paused run from `/workflows` by selecting it and pressing `p`. For a run you stopped, ask Claude to relaunch the workflow with the same script. If agents from the stopped run haven't exited yet, Claude Code refuses the relaunch until they have, so a second copy of those agents can't run alongside them.
 
-Claude Code replays the run in the order agents started, and each agent either returns its saved result or runs again:
+#### Which agents run again
+
+Claude Code replays the run in the order agents start, and each agent either returns its saved result or runs again:
 
 * **Completed**: returns its saved result. The first agent whose prompt differs from the previous run, because you edited the script or an earlier agent returned something different, runs again, and so does every agent after it, even ones that completed.
+
+  Before v2.1.305, completed agents could also run again when you relaunched an unedited script whose `pipeline()` items or `parallel()` tasks ran more than one agent each. To stop those reruns for new runs, update Claude Code.
 * **Still running when you stopped**: starts over. Stopping the whole run doesn't count any agent as failed.
-* **Failed**: runs again, and so does every agent that started after it, even ones that completed. Stopping one agent alone, by selecting it in [`/workflows`](#watch-the-run) and pressing `x`, counts as failing.
+* **Failed**: runs again, and so does every agent the script starts after it, even ones that completed. Stopping one agent alone, by selecting it in [`/workflows`](#watch-the-run) and pressing `x`, counts as failing.
 
 That last case means a failure in the middle of a fan-out reruns work that already finished. If a script starts A, B, C, and D in that order and B fails, relaunching returns A from cache and runs B, C, and D again.
+
+If you edit a script that started A, B, C, and D so that it starts A, C, B, and D, the second agent to start is now C, where the previous run started B. Relaunching returns A from cache and runs C, B, and D again.
+
+#### Resume after you leave the session
 
 You can resume a run within the same Claude Code session. What happens to a running workflow when you leave the session depends on how you leave:
 
@@ -407,6 +409,30 @@ The run pauses only when all of these hold; when one doesn't, the affected agent
 * The limit resets within 24 hours. A weekly limit can reset further out.
 * The run hasn't already waited twice. When it hits the limit a third time, the agent fails.
 
+### When an agent stalls and restarts
+
+An agent whose output stops arriving for long enough starts over from the same prompt. In [`/workflows`](#watch-the-run), its name gains a `(retry 1)` suffix and its detail shows `attempt 2 (stalled)`. The restart is automatic, so you don't need to do anything.
+
+The new attempt starts without the stalled attempt's transcript. Files the stalled attempt already changed stay changed, and the tokens it spent stay in the run's total. The stall window is how long Claude Code waits for output from an agent before it ends the attempt. Time the agent spends waiting on its own tool calls or on a [usage-limit reset](#when-a-run-hits-your-usage-limit) doesn't count toward the stall window.
+
+An agent restarts at most five times, counting any restart you ask for with `r`. If the sixth attempt stalls as well, the `agent()` call fails, and the start of the error says why:
+
+* `agent stalled on all 6 attempts`: every attempt went the whole window without output. If the agent's work keeps it silent that long, lengthen the window
+* `agent lost its reply on all 6 attempts`: every attempt's response stream went silent and Claude Code gave up waiting on it. Lengthening the stall window doesn't help, since a [streaming idle watchdog](/docs/en/network-config#streaming-idle-watchdogs) ended the response first and `CLAUDE_STREAM_IDLE_TIMEOUT_MS` sets that watchdog's timeout
+* `agent abandoned after 6 attempts`: the attempts ended in different ways, which the error lists in order
+
+To give an agent more time to produce output before the window ends:
+
+* **One agent**: pass `stallMs` in milliseconds on its `agent()` call, such as `agent(prompt, { stallMs: 1800000 })` for 30 minutes
+* **Every agent**: set [`CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS`](/docs/en/env-vars#variables), which also applies to subagents outside workflows
+
+Whether the run continues after the failure depends on how your script called the agent:
+
+* **Inside [`parallel()` or `pipeline()`](#what-the-saved-script-looks-like)**: the run carries on with `null` in place of the agent's result
+* **Awaited directly**: the run ends with the error
+
+To try again, ask Claude to relaunch the workflow. [Resume after a pause](#resume-after-a-pause) covers what runs again.
+
 ### Cost
 
 A workflow spawns many agents, so a single run can use meaningfully more tokens than working through the same task in conversation. Runs count toward your plan's usage and rate limits.
@@ -427,11 +453,11 @@ To control the model cost:
 * Check `/model` before a large run if you usually switch to a smaller model for routine work
 * Ask Claude to use a smaller model for stages that don't need the strongest one when you describe the task
 
-When your organization's [`availableModels` allowlist](/docs/en/model-config#restrict-model-selection) blocks a model the script requests for an agent, that agent runs on a substituted model instead, following the same [substitution rules as subagents](/docs/en/sub-agents#choose-a-model). The run's progress view in [`/workflows`](#watch-the-run) shows a warning naming both the requested and substituted models.
+When your organization's [`availableModels` allowlist](/docs/en/model-config#restrict-model-selection) blocks a model the script requests for an agent, that agent runs on a substituted model instead, following the same [substitution rules as subagents](/docs/en/sub-agents#choose-a-model).
 
 ### Set a size guideline
 
-A size guideline tells Claude how many agents to aim for when it writes a dynamic workflow. Claude Code sends the guideline to Claude as advice, not a cap, so a prompt that calls for a different scale still overrides it. Requires Claude Code v2.1.202 or later.
+A size guideline tells Claude how many agents to aim for when it writes a dynamic workflow. Claude Code sends the guideline to Claude as advice, not a cap, so a prompt that calls for a different scale still overrides it.
 
 Each value maps to an agent count:
 

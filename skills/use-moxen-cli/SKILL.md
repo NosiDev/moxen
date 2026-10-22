@@ -12,6 +12,7 @@ Use `moxen` for all commands. Do not read provider credentials. Do not build bea
 | Job | Skill |
 | --- | --- |
 | Hand the current conversation to a fresh thread | `moxen-handoff` |
+| Run a retrospective on a session and suggest environment improvements | `moxen-retro` |
 | Check that Moxen is running and reachable | `moxen-doctor` |
 | View or change CLI settings | `moxen-config` |
 | Resolve, ensure, or list projects | `moxen-projects` |

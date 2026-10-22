@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { answerForForm, OpencodeEventTranslator, toolContentText, translateTimeline, type OpencodeSubscribedEvent } from "../translate.js";
+import { answerForForm, OpencodeEventTranslator, opencodeToolName, registerOpencodeMcpServer, toolContentText, translateTimeline, type OpencodeSubscribedEvent } from "../translate.js";
 import {
   EXECUTION_FAILED_EVENTS,
   PERMISSION_EVENTS,
@@ -366,5 +366,18 @@ describe("v2 history translation", () => {
         { id: "d", type: "shell", time: {} },
       ]),
     ).toEqual([]);
+  });
+});
+
+describe("opencodeToolName", () => {
+  it("spells a registered server's tool the way the other providers do, and leaves everything else", () => {
+    registerOpencodeMcpServer("brave-search");
+    registerOpencodeMcpServer("brave");
+    expect(opencodeToolName("brave-search_web_search")).toBe("mcp__brave-search__web_search");
+    // The longest name wins: `brave` is also a server.
+    expect(opencodeToolName("brave_news")).toBe("mcp__brave__news");
+    expect(opencodeToolName("bash")).toBe("bash");
+    expect(opencodeToolName("mcp__moxen__delegate")).toBe("mcp__moxen__delegate");
+    expect(opencodeToolName("brave-search_")).toBe("brave-search_");
   });
 });

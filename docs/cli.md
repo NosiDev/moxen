@@ -167,7 +167,7 @@ moxen config set thinkingEffort xhigh
 
 `projectPolicy: "existing"` makes a missing project a hard error. `workspaceMode: "folder"` uses the exact current folder instead of walking up to the Git root. `threadEnvMode: "auto"` follows project → `moxen.json` → global local/worktree preference. Explicit CLI config values remain overrides.
 
-`--checkout worktree` provisions a local worktree for the new thread: a `moxen/<id>` branch off the current branch (or its origin — new worktrees always start from origin), placed under the store's `worktrees` directory, with the thread rooted there. A repository without a current branch returns `WORKTREE_REQUIRES_BRANCH` instead of silently falling back to the current checkout.
+`--checkout worktree` provisions a local worktree for the new thread: a `moxen/<id>` branch (named from the thread title: `moxen/<title-slug>`; the thread id only when there is no title) off the current branch (or its origin — new worktrees always start from origin), placed under the store's `worktrees` directory, with the thread rooted there. A repository without a current branch returns `WORKTREE_REQUIRES_BRANCH` instead of silently falling back to the current checkout.
 
 ### MCP servers
 
@@ -188,6 +188,45 @@ A project's `moxen.json` can declare `mcpServers` too: an entry replaces the glo
 same name, and `null` removes it for that project. Servers are read when a session starts, so an
 edit applies to the next session. Names may use letters, digits, `-` and `_`. `config show` redacts `env` and `headers`
 values.
+
+`env` and `headers` values are secrets: set through `moxen config set` or the settings page, each goes to the
+OS keychain and the file keeps a `keychain:<name>` reference, which is read when a session starts (a value
+written into the file by hand is used as it is). Adding a well-known server in the settings page (Brave Search,
+Exa Search, GitHub…) asks for its key and fills in the command; `mcpRunner` (`npx` by default, or `bunx`,
+`pnpm`, `yarn`) is what starts the npm ones. Exa uses its hosted server, so it installs nothing and takes the
+key as the `x-api-key` header.
+
+Which provider gets which server is set on the provider's own page (Settings → Claude Code,
+OpenCode or Moxen Harness → MCP servers), or with `providers.<claude|opencode|harness>.mcpExclude`:
+the names of servers that provider does not get, comma-separated. Every server is on by default, so a
+server added later reaches every provider until switched off. A server switched off on its own entry
+(`disabled`) or limited by an older `providers` list on it stays out either way.
+
+### Web tools
+
+Claude Code and OpenCode ship their own search and fetch, and you may have attached Brave or Exa. Per
+provider (`providers.<claude|opencode>.…`):
+
+- `webSearchOrder` and `webFetchOrder`: the order the model should try them in, comma-separated ids (search:
+  `brave`, `exa`, `native`; fetch: `moxen`, `exa`, `native`; `native` is the provider's own). The prompt says
+  "prefer in this order … go on to the next only if one fails or finds nothing useful", over the tools the session
+  really has. It is advice: it turns nothing off, and the model may still choose another. Unset: no preference.
+  The settings page greys each one out until there is something to rank: a Brave Search or Exa server from
+  Moxen's own list (switched on for that provider) for search, Moxen's tools or Exa for fetch. Only those are
+  covered, since they are the tools whose options Moxen knows; any other search server is left to the model.
+- `disabledNativeTools`: the provider's own tools to switch off, comma-separated (`WebSearch,WebFetch` for Claude
+  Code; `websearch,webfetch` for OpenCode). Claude Code drops them from the model's list when the session starts.
+  OpenCode reads them when its server starts and takes them out of the model's list. A change waits until nothing runs on that server (no turn, background
+  command or subagent, nothing waiting on you), then restarts it; the next message meets the new one.
+
+Either way, a session is told how to use each web tool it really has (for example `mode: "extended"` for
+Claude's WebSearch on anything recent, `freshness` for Brave, that Exa's fetch can answer from a cache). Nothing
+is said about a tool that is switched off or not attached.
+
+`web_fetch` is Moxen's own page reader (the one the Moxen Harness uses, minus its web search): plain request
+first, a browser when the site turns it away or builds the page with scripts. It is on the `moxen` MCP server, so
+`moxenTools` switches it off with the rest. A delegated task keeps it (and the checklist) but gets none of the
+tools that delegate. It never reaches cloud metadata or the local network.
 
 ## Commands
 

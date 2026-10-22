@@ -10,9 +10,9 @@ Isolating Claude Code limits what a session can read, write, and reach on the ne
 
 Claude Code can run in several kinds of isolated environments, ranging from a lightweight per-command sandbox to a fully separate virtual machine. This page compares them by what they isolate and what they require, helps you choose one for your threat model, and shows how to enforce that choice across an organization.
 
-<Info>
-  For the broader security model, see [Security](/docs/en/security). For Agent SDK deployments, see [Secure deployment](/docs/en/agent-sdk/secure-deployment).
-</Info>
+> [!NOTE]
+>
+> For the broader security model, see [Security](/docs/en/security). For Agent SDK deployments, see [Secure deployment](/docs/en/agent-sdk/secure-deployment).
 
 ## Compare sandboxing approaches
 
@@ -20,7 +20,7 @@ The first two approaches in the table below run on the host operating system wit
 
 | Approach | What is isolated | Requires Docker | Setup effort |
 | :- | :- | :- | :- |
-| [Sandboxed Bash tool](#sandboxed-bash-tool) | Bash, PowerShell, and Monitor commands and their child processes | No | Minimal on macOS; low on Linux and WSL2 |
+| [Sandboxed Bash tool](#sandboxed-bash-tool) | Bash, PowerShell, and Monitor tool commands and their child processes | No | Minimal on macOS; low on Linux and WSL2 |
 | [Sandbox runtime](#sandbox-runtime) | The whole Claude Code process, including file tools, MCP servers, and hooks | No | Low |
 | [Dev container](#dev-containers) | Full development environment | Yes | Medium |
 | [Custom container](#custom-container) | Full development environment | Yes | Medium to high |
@@ -29,11 +29,11 @@ The first two approaches in the table below run on the host operating system wit
 
 The [sandboxed Bash tool](/docs/en/sandboxing) is built into Claude Code and restricts Bash commands. Built-in file tools, MCP servers, and hooks still run directly on your host. Every other approach in the table puts the whole Claude Code process inside the isolation boundary, so file tools, MCP servers, and hooks are restricted too.
 
-<Warning>
-  Sandbox isolation reduces the impact of a breach, but it does not eliminate risk. Any approach that allows network egress can still leak data the agent can read, and any approach that mounts your project directory writable can still modify that code. Review the [security limitations](/docs/en/sandboxing#security-limitations) before relying on a sandbox as a hard control.
-
-  Isolation also does not change what is sent to the model. Your prompts and the files Claude reads are transmitted to the Anthropic API or your configured provider with or without a sandbox. See [Data usage](/docs/en/data-usage) for what Claude Code sends and how to reduce it.
-</Warning>
+> [!WARNING]
+>
+> Sandbox isolation reduces the impact of a breach, but it does not eliminate risk. Any approach that allows network egress can still leak data the agent can read, and any approach that mounts your project directory writable can still modify that code. Review the [security limitations](/docs/en/sandboxing#security-limitations) before relying on a sandbox as a hard control.
+>
+> Isolation also does not change what is sent to the model. Your prompts and the files Claude reads are transmitted to the Anthropic API or your configured provider with or without a sandbox. See [Data usage](/docs/en/data-usage) for what Claude Code sends and how to reduce it.
 
 ## Choose an approach
 
@@ -64,18 +64,18 @@ The [sandboxed Bash tool](#sandboxed-bash-tool) on its own constrains only shell
 
 ## Sandboxed Bash tool
 
-<Note>
-  This option does not support native Windows. On Windows hosts, use WSL2 or one of the container or VM approaches below.
-</Note>
+> [!NOTE]
+>
+> This option does not support native Windows. On Windows hosts, use WSL2 or one of the container or VM approaches below.
 
-The sandboxed Bash tool is built into Claude Code. It uses operating system primitives to restrict the filesystem and network access of every Bash, PowerShell, or Monitor command Claude runs.
+The sandboxed Bash tool is built into Claude Code. It uses operating system primitives to restrict the filesystem and network access of Bash, PowerShell, and Monitor tool commands Claude runs.
 
 Run the `/sandbox` command to open the sandbox panel and choose a mode. The [Sandboxing](/docs/en/sandboxing) guide covers the approval modes, the default boundary, and how to widen or narrow it.
 
 The per-command sandbox does not cover everything that runs in a session:
 
 * Other [built-in tools](/docs/en/tools-reference) such as Read, Edit, and WebFetch run inside the Claude Code process and do not spawn arbitrary code. [Permission rules](/docs/en/permissions) for path or domain gate them instead.
-* [MCP](/docs/en/mcp) servers and [command hooks](/docs/en/hooks#command-hook-fields) are separate processes that run unconstrained on the host.
+* [MCP](/docs/en/mcp) servers, [command hooks](/docs/en/hooks#command-hook-fields), and [plugin monitors](/docs/en/plugins/components#monitors) are separate processes that run unconstrained on the host. For other processes that run this way, see [What runs outside the sandbox](/docs/en/sandboxing#what-runs-outside-the-sandbox).
 
 To put built-in tools, MCP servers, and hooks all behind one OS boundary, run the whole Claude Code process inside the [sandbox runtime](#sandbox-runtime), the [dev container](#dev-containers), or a [custom container](#custom-container).
 
@@ -110,13 +110,19 @@ On Linux and WSL2, the runtime applies write grants only to paths that already e
 mkdir -p ~/.claude && { [ -f ~/.claude.json ] || echo '{}' > ~/.claude.json; }
 ```
 
-Once the settings file is in place, launch Claude Code with `npx` and pass `claude` as the command to wrap:
+Install the runtime globally, under a prefix outside every path you allow writes to:
 
 ```bash theme={null}
-npx @anthropic-ai/sandbox-runtime claude
+npm install -g @anthropic-ai/sandbox-runtime
 ```
 
-Claude Code starts inside the sandbox with the filesystem and network boundaries you configured. The same command works for sandboxing standalone MCP servers or other helper processes.
+Once the settings file is in place, launch Claude Code through the runtime from your project directory:
+
+```bash theme={null}
+srt claude
+```
+
+Claude Code starts inside the sandbox with the filesystem and network boundaries you configured. The same `srt` command works for sandboxing standalone MCP servers or other helper processes.
 
 ### What the runtime blocks on its own
 

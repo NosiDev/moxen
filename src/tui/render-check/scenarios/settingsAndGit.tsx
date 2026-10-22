@@ -46,7 +46,7 @@ async function runSettings(): Promise<void> {
   const written: Array<{ key: string; value: string }> = [];
   const updated: string[] = [];
   const snapshot = {
-    path: "/home/dev/.config/moxen/config.json",
+    path: "/home/dev/.moxen/config.json",
     exists: true,
     settings: describeSettings(DEFAULTS_FOR_RENDER_CHECK),
   };
@@ -63,6 +63,7 @@ async function runSettings(): Promise<void> {
         onTest={() => {}}
       onTestMcp={() => {}}
         onProbe={() => {}}
+        onDiscover={async () => ({ ok: false, host: null, message: "unused" })}
         onExport={() => {}}
         onImport={() => {}}
         notice={null}
@@ -100,11 +101,12 @@ async function runSettings(): Promise<void> {
     if (!frame.includes(expected)) fail(`settings page is missing "${expected}"`);
   }
   if (frame.includes("Idle session lifetime")) fail("settings page shows another section's settings under General");
-  // The first setting sits on its tab's row, not one below it (the tab and the card are side by side).
+  // The sidebar opens on its first category's heading, so the first setting sits on that row and its tab one below.
+  if (!frame.includes("MOXEN") || !frame.includes("PROVIDERS") || !frame.includes("INTEGRATIONS")) fail("settings sidebar is missing its category headings");
   const generalRows = frame.split("\n");
   const tabRow = generalRows.findIndex((row) => /^\s*▌?\s*General\s/.test(row) && row.includes("│"));
   const firstRow = generalRows.findIndex((row) => row.includes("Unknown folders"));
-  if (tabRow < 0 || firstRow !== tabRow) fail(`the first setting is on row ${firstRow}, its tab on row ${tabRow}: they should line up`);
+  if (tabRow < 0 || firstRow !== tabRow - 1) fail(`the first setting is on row ${firstRow}, its tab on row ${tabRow}: the tab should sit one row below, under the category heading`);
 
   // Tab moves to the next section: Turns.
   await act(async () => setup.mockInput.pressTab());
@@ -123,7 +125,7 @@ async function runSettings(): Promise<void> {
   const ttl = setup.captureCharFrame();
   console.log("--- settings page, duration choices ---");
   console.log(ttl);
-  if (!ttl.includes("5 minutes") || !ttl.includes("● 2 minutes")) fail("a duration setting did not open its presets with the current one marked");
+  if (!ttl.includes("5m") || !ttl.includes("2m") || !ttl.includes("◆")) fail("a duration setting did not open its presets with the current one marked");
   // The choices view has a way back that can be clicked, not only esc.
   const ttlRows = ttl.split("\n");
   const backRow = ttlRows.findIndex((row) => row.includes("← back"));
@@ -154,7 +156,7 @@ async function runSettings(): Promise<void> {
   const typedFrame = setup.captureCharFrame();
   console.log("--- settings page, text input ---");
   console.log(typedFrame);
-  for (const expected of ["Prefer small commits", "shift+enter new line", "ctrl+u clears", "Empty: unset", "characters"]) {
+  for (const expected of ["Prefer small commits", "shift+enter new line", "ctrl+u clear", "Left empty: unset", "chars"]) {
     if (!typedFrame.includes(expected)) fail(`the text input does not show "${expected}"`);
   }
   await act(async () => setup.mockInput.pressKey("u", { ctrl: true }));
@@ -196,23 +198,23 @@ async function runSettings(): Promise<void> {
   await setup.flush();
   if (updated.join() !== "claude") fail(`pressing u on the Claude Code tab updated ${JSON.stringify(updated)}`);
 
-  // The setup rows (executable, config directory) sit under the defaults,
-  // below the fold in a page this short: move down to them.
-  for (let step = 0; step < 5; step += 1) await act(async () => setup.mockInput.pressArrow("down"));
-  await act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
-  await setup.flush();
-  const claudeSetup = setup.captureCharFrame();
-  if (!claudeSetup.includes("Claude executable")) fail("the Claude Code tab does not show its settings");
-  if (!claudeSetup.includes("next start")) fail("settings page does not mark restart-only settings");
-
-  // The last row is further down still.
-  for (let step = 0; step < 8; step += 1) await act(async () => setup.mockInput.pressArrow("down"));
-  await act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
-  await setup.flush();
-  const claudeEnd = setup.captureCharFrame();
+  // The page runs New threads, Tools, Long threads, Behaviour, Setup: walk the whole of it.
+  const claudeFrames: string[] = [];
+  for (let step = 0; step < 20; step += 1) {
+    await act(async () => setup.mockInput.pressArrow("down"));
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+    await setup.flush();
+    claudeFrames.push(setup.captureCharFrame());
+  }
+  const seenOn = (text: string) => claudeFrames.findIndex((frame) => frame.includes(text));
   console.log("--- settings page, Claude Code tab, last row ---");
-  console.log(claudeEnd);
-  if (!claudeEnd.includes("Auto-compact window") || !claudeEnd.includes("100,000")) fail("the Claude Code tab does not offer the auto-compact window");
+  console.log(claudeFrames.at(-1));
+  for (const expected of ["Claude executable", "next start", "Compact long threads", "Hand off long threads", "Long threads", "Setup"]) {
+    if (seenOn(expected) < 0) fail(`the Claude Code tab never shows "${expected}"`);
+  }
+  if (!claudeFrames.some((frame) => frame.includes("Compact long threads") && frame.includes("Compact at") && frame.includes("80%"))) fail("the Claude Code tab does not offer who compacts, and at what share");
+  // Under the same headings, in the same order, as the other providers: Long threads before Setup.
+  if (!(seenOn("Long threads") <= seenOn("Setup"))) fail("the Claude Code tab files Setup before Long threads");
 
   // OpenCode has its own pane now, with the same card.
   await act(async () => setup.mockInput.pressTab());
@@ -225,10 +227,14 @@ async function runSettings(): Promise<void> {
   // Behind the registry's newest: it says so, and the button names the version it goes to.
   if (!opencode.includes("2.0.24 is available")) fail("the OpenCode tab does not say a newer version is available");
   if (!opencode.includes("[ Update to 2.0.24 ]")) fail("the OpenCode update button does not name the version it updates to");
-  for (let step = 0; step < 5; step += 1) await act(async () => setup.mockInput.pressArrow("down"));
-  await act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
-  await setup.flush();
-  if (!setup.captureCharFrame().includes("OpenCode executable")) fail("the OpenCode tab does not show its executable");
+  let sawExecutable = false;
+  for (let step = 0; step < 24 && !sawExecutable; step += 1) {
+    await act(async () => setup.mockInput.pressArrow("down"));
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+    await setup.flush();
+    sawExecutable = setup.captureCharFrame().includes("OpenCode executable");
+  }
+  if (!sawExecutable) fail("the OpenCode tab does not show its executable");
   await act(async () => setup.mockInput.pressTab({ shift: true }));
   await setup.flush();
   await act(async () => setup.mockInput.pressTab({ shift: true }));

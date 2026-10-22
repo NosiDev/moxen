@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 
 import type { McpServerSpec } from "../../core/mcp.js";
 import { openClient } from "../client.js";
-import { MOXEN_CHECKLIST_ARG, serveMcp } from "./stdio.js";
+import { MOXEN_CHECKLIST_ARG, MOXEN_DELEGATED_ARG, serveMcp } from "./stdio.js";
 
 /** The name agents see its tools under (`mcp__moxen__delegate`). */
 export const MOXEN_MCP_SERVER_NAME = "moxen";
@@ -51,7 +51,7 @@ export async function runMcpMain(argv: readonly string[] = process.argv.slice(2)
   const api = await openClient();
   try {
     const checklist = argv.includes(MOXEN_CHECKLIST_ARG);
-    await serveMcp({ api, parentThreadId, checklist, input: process.stdin, output: process.stdout });
+    await serveMcp({ api, parentThreadId, checklist, delegated: argv.includes(MOXEN_DELEGATED_ARG), input: process.stdin, output: process.stdout });
   } finally {
     await api.close().catch(() => undefined);
   }

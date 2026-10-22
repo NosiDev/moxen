@@ -88,6 +88,8 @@ export interface ClaudeQuery extends AsyncIterable<SDKMessage> {
   getContextUsage?(options?: { detail?: "summary" | "full" }): Promise<unknown>;
   /** Every command and skill the CLI resolved for this session's cwd. */
   supportedCommands?(): Promise<ReadonlyArray<{ name: string; description: string; argumentHint: string; builtin?: boolean }>>;
+  /** Every model Claude Code offers, with each one's effort levels. */
+  supportedModels?(): Promise<ReadonlyArray<unknown>>;
   /** End the CLI process. */
   close?(): void;
   /** Stop a background task; a `task_notification` with status `stopped` follows. */
@@ -137,6 +139,7 @@ export class SdkTransport implements ClaudeTransport {
       // Claude context reading came back null.
       getContextUsage: (contextOptions) => sdk.getContextUsage(contextOptions),
       supportedCommands: () => sdk.supportedCommands(),
+      supportedModels: () => sdk.supportedModels(),
       close: () => sdk.close(),
       stopTask: (taskId) => sdk.stopTask(taskId),
       ...(usageExperimental ? { usageExperimental } : {}),

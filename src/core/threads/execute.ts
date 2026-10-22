@@ -100,6 +100,12 @@ export interface TurnDriver extends ProviderSessionTitles {
    * nothing changed. Absent where a session's servers cannot change after it starts.
    */
   updateMcpServers?(threadId: string, servers: readonly McpServerSpec[]): Promise<void>;
+  /**
+   * The provider tools to leave off, as the setting says now, for a session already running. OpenCode's are part of
+   * its server's config, so it restarts the server once nothing runs on it. Absent where a live session cannot
+   * change them (Claude Code reads them when the session starts).
+   */
+  updateNativeTools?(threadId: string, names: readonly string[], moxenPrompt?: boolean): Promise<void>;
   /** Skills and slash commands the provider resolves for `workingDirectory`. */
   skillInventory?(workingDirectory: string): Promise<SkillInventory>;
   /**
@@ -505,6 +511,8 @@ export async function ensureDriverSession(
     readonly workingDirectory?: string;
     readonly mcpServers?: readonly McpServerSpec[];
     readonly disabledMcpTools?: readonly string[];
+    readonly disabledNativeTools?: readonly string[];
+    readonly moxenPrompt?: boolean;
     readonly checklist?: boolean;
     readonly instructions?: string | null;
     /** How moxen's own skills reach the session (`ProviderSessionStartInput.moxenSkills`). */
@@ -532,6 +540,8 @@ export async function ensureDriverSession(
       ...(cursor ? { resumeCursor: cursor } : {}),
       ...(options.mcpServers && options.mcpServers.length > 0 ? { mcpServers: options.mcpServers } : {}),
       ...(options.disabledMcpTools && options.disabledMcpTools.length > 0 ? { disabledMcpTools: options.disabledMcpTools } : {}),
+      ...(options.disabledNativeTools && options.disabledNativeTools.length > 0 ? { disabledNativeTools: options.disabledNativeTools } : {}),
+      ...(options.moxenPrompt === true ? { moxenPrompt: true } : {}),
       ...(options.checklist === false ? { checklist: false } : {}),
       ...(instructions ? { instructions } : {}),
       ...(isolation ? { isolation } : {}),

@@ -32,7 +32,8 @@ import {
 } from "../catalog/selection.js";
 import { APP_NAME } from "../config.js";
 import { CliError } from "../errors.js";
-import { outOfProcess, resolveMcpServers, routeMcpServers, type McpServerEntry, type McpServerSpec, type OutOfProcessMcpServerSpec } from "../mcp.js";
+import { disabledNativeToolNames } from "../nativetools.js";
+import { outOfProcess, parseNameList, resolveMcpServers, routeMcpServers, type McpServerEntry, type McpServerSpec, type OutOfProcessMcpServerSpec } from "../mcp.js";
 import { runProcess } from "../infra/process.js";
 import {
   ensureStoredProject,
@@ -125,7 +126,7 @@ export interface OperationContext {
    * over them by name, so `"moxen": null` there removes them. Delegated
    * threads get none: a subagent does not spawn subagents.
    */
-  readonly builtinMcpServers?: (threadId: string) => readonly McpServerSpec[];
+  readonly builtinMcpServers?: (threadId: string, options?: { readonly delegated: boolean }) => readonly McpServerSpec[];
 }
 
 
@@ -137,10 +138,12 @@ interface InstructionsUpdate {
 }
 
 /** The part of a session setup `ensureDriverSession` takes. */
-function sessionStart(setup: { mcpServers: McpServerSpec[]; disabledMcpTools: string[]; checklist: boolean; instructions: string; store: ThreadStore; moxenSkills: "project" | "served" | "none" }) {
+function sessionStart(setup: { mcpServers: McpServerSpec[]; disabledMcpTools: string[]; disabledNativeTools: string[]; moxenPrompt: boolean; checklist: boolean; instructions: string; store: ThreadStore; moxenSkills: "project" | "served" | "none" }) {
   return {
     mcpServers: setup.mcpServers,
     disabledMcpTools: setup.disabledMcpTools,
+    disabledNativeTools: setup.disabledNativeTools,
+    moxenPrompt: setup.moxenPrompt,
     checklist: setup.checklist,
     instructions: setup.instructions,
     store: setup.store,
@@ -168,14 +171,14 @@ async function sessionSetup(
   ctx: OperationContext,
   thread: StoredThread,
   instanceId: string = thread.modelSelection.instanceId,
-): Promise<{ mcpServers: McpServerSpec[]; disabledMcpTools: string[]; checklist: boolean; instructions: string; store: ThreadStore; instructionsUpdate: InstructionsUpdate | null; moxenSkills: "project" | "served" | "none" }> {
+): Promise<{ mcpServers: McpServerSpec[]; disabledMcpTools: string[]; disabledNativeTools: string[]; moxenPrompt: boolean; checklist: boolean; instructions: string; store: ThreadStore; instructionsUpdate: InstructionsUpdate | null; moxenSkills: "project" | "served" | "none" }> {
   const project = await projectById(ctx.storeRoot, thread.projectId);
   const workspaceRoot = project?.workspaceRoot ?? (thread.env.path.trim() || null);
   const delegation = await delegationOf(ctx.store, thread.id);
   const kind = driverKindOfInstance(instanceId);
   const providerConfig = kind === null ? undefined : ctx.config.providers?.[kind];
-  // A delegated thread gets none of Moxen's tools (it does not delegate), and a provider the user turned them off for gets none either.
-  const builtin = delegation || providerConfig?.moxenTools === false ? [] : (ctx.builtinMcpServers?.(thread.id) ?? []);
+  // A delegated thread gets Moxen's tools less the ones that delegate (it does not delegate again); a provider the user turned them off for gets none.
+  const builtin = providerConfig?.moxenTools === false ? [] : (ctx.builtinMcpServers?.(thread.id, { delegated: delegation !== null }) ?? []);
   const base: Record<string, McpServerEntry> = {};
   for (const built of builtin) {
     // Layered by name like any configured server, in the form a config entry has.
@@ -195,7 +198,10 @@ async function sessionSetup(
     return built !== undefined && sameEndpoint(outOfProcess(built), spec) ? built : spec;
   });
   // Servers switched off, or not offered to this provider, drop out; tools switched off are hidden by the driver.
-  const { servers: mcpServers, disabledTools: disabledMcpTools } = kind === null ? { servers: merged, disabledTools: [] } : routeMcpServers(merged, kind);
+  const { servers: mcpServers, disabledTools: disabledMcpTools } = kind === null ? { servers: merged, disabledTools: [] } : routeMcpServers(merged, kind, providerConfig?.mcpExclude);
+  // Only Claude Code and OpenCode ship tools to switch off or tips to give; the Harness has its own.
+  const nativeKind = kind === "claude" || kind === "opencode" ? kind : null;
+  const nativeConfig = nativeKind === null ? undefined : ctx.config.providers?.[nativeKind];
   const user = [ctx.config.instructions, fromProject].filter((entry): entry is string => Boolean(entry));
   const current = buildRuntimeInstructions({
     instanceId: thread.modelSelection.instanceId,
@@ -203,6 +209,8 @@ async function sessionSetup(
     delegation,
     userInstructions: user,
     checklist: providerConfig?.todos !== false,
+    delegationTools: builtin.some((server) => server.name === "moxen"),
+    ...(nativeKind === null ? {} : { web: { provider: nativeKind, disabledNativeTools: nativeConfig?.disabledNativeTools, searchOrder: parseNameList(nativeConfig?.webSearchOrder), fetchOrder: parseNameList(nativeConfig?.webFetchOrder), servers: mcpServers } }),
   });
   // What this provider's conversation was given. With no history behind it (no session handle yet) there
   // is nothing cached to protect, so the current text starts it.
@@ -221,6 +229,9 @@ async function sessionSetup(
   return {
     mcpServers,
     disabledMcpTools,
+    disabledNativeTools: disabledNativeToolNames(nativeConfig?.disabledNativeTools),
+    // OpenCode's own base prompt is replaced by Moxen's unless the user switched that off.
+    moxenPrompt: nativeKind === "opencode" && ctx.config.providers?.opencode?.moxenPrompt !== false,
     checklist: providerConfig?.todos !== false,
     instructions: plan.systemPrompt,
     // So the session is watched between turns (background turns and tasks).
@@ -310,7 +321,11 @@ async function runRecoveredTurn(ctx: OperationContext, threadId: string, turn: S
     modelSelection: selection,
     workingDirectory: thread.env.path,
     ...usageLimitHook(ctx, threadId),
-  });
+  })
+    // A delegated task resumed after a usage limit (or recovered after a crash)
+    // still owes its parent the report when it finally ends.
+    .then(() => notifyParentOfResumedTask(ctx, threadId))
+    .catch(() => undefined);
 }
 
 // -- scheduled turns --------------------------------------------------------------
@@ -495,6 +510,7 @@ export async function startTurn(ctx: OperationContext, input: StartTurnInput): P
   // MCP servers added, changed or removed in config since the session started: a live session takes them now,
   // not at its next start. A server that will not connect is the provider's to report, never a reason to fail the send.
   await driver.updateMcpServers?.(sent.thread.id, setup.mcpServers).catch(() => undefined);
+  await driver.updateNativeTools?.(sent.thread.id, setup.disabledNativeTools, setup.moxenPrompt).catch(() => undefined);
   // Rule files edited while the session lived: a patch ahead of the prompt (Claude; see `rulefiles.ts`).
   const rules: PendingRuleUpdate | null = await pendingRuleUpdate(driver, sent.thread.id, driverKey(turnModel.instanceId), sent.thread.env.path).catch(() => null);
   const delivered = [setup.instructionsUpdate?.delivered, rules ? async () => rules.commit() : undefined].filter((step): step is () => Promise<void> => step !== undefined);
@@ -912,8 +928,19 @@ async function gitOk(cwd: string, args: ReadonlyArray<string>): Promise<boolean>
   }
 }
 
+/** A branch-name slug for a short task name: lowercase words joined by `-`, at most 40 characters. */
+export function branchSlug(name: string): string {
+  const slug = name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug.length <= 40 ? slug : slug.slice(0, 40).replace(/-[^-]*$/, "") || slug.slice(0, 40).replace(/-+$/, "");
+}
+
 /**
- * Provision `moxen/<thread-short>` off the base branch (or its origin
+ * Provision `moxen/<name>` (`moxen/<thread-short>` without a usable name) off the base branch (or its origin
  * when `startFromOrigin`) under the store worktrees dir. Throws
  * WORKTREE_PROVISION_FAILED with best-effort cleanup; callers create the
  * thread only after this resolves, so failures leave nothing behind.
@@ -924,8 +951,11 @@ export async function provisionWorktree(input: {
   startFromOrigin: boolean;
   threadId: string;
   storeRoot: string;
+  /** A short task name that becomes the branch name. */
+  name?: string;
 }): Promise<WorktreeProvision> {
-  const short = input.threadId.replace(/[^A-Za-z0-9]/g, "").slice(0, 8) || "thread";
+  const short =
+    (input.name ? branchSlug(input.name) : "") || input.threadId.replace(/[^A-Za-z0-9]/g, "").slice(0, 8) || "thread";
   // Inside the store root so store cleanup owns the checkout too.
   const dir = path.join(input.storeRoot, "worktrees", input.threadId);
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -953,6 +983,27 @@ export async function provisionWorktree(input: {
   throw new CliError("WORKTREE_PROVISION_FAILED", `Could not provision a worktree for ${input.baseBranch}.`, {
     details: { baseBranch: input.baseBranch },
   });
+}
+
+/**
+ * Free a finished thread's worktree checkout. Build output (`target/`,
+ * `node_modules/`, …) is gitignored but lives in every worktree, so they pile
+ * up; the branch and its commits stay. No `--force`: git refuses when the
+ * checkout has uncommitted or untracked work, and then it is left in place.
+ * Returns whether the directory was removed.
+ */
+export async function removeThreadWorktree(storeRoot: string, thread: StoredThread): Promise<boolean> {
+  if (thread.env.mode !== "worktree" || !thread.env.path.trim()) return false;
+  const dir = path.resolve(thread.env.path);
+  // Only checkouts Moxen provisioned; never a worktree the user pointed a thread at.
+  if (path.dirname(dir) !== path.join(path.resolve(storeRoot), "worktrees")) return false;
+  try {
+    const common = (await runProcess("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: dir })).stdout.trim();
+    await runProcess("git", ["worktree", "remove", dir], { cwd: path.dirname(common) });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Per-project settings file, read from the workspace root. */
@@ -1104,6 +1155,8 @@ export async function handover(ctx: OperationContext, request: HandoverRequest):
           startFromOrigin: true,
           threadId,
           storeRoot: ctx.storeRoot,
+          // "New thread" is only the title's fallback: no name to give the branch.
+          ...(prompt.trim() ? { name: title } : {}),
         })
       : null;
   const removeWorktree = async (): Promise<void> => {
@@ -1233,6 +1286,21 @@ export function queueTaskNotification(ctx: OperationContext, parentThreadId: str
   pendingNotifications.set(parentThreadId, { timer, taskIds });
 }
 
+/**
+ * A resumed turn of a delegated task ended: tell the parent, if it asked to be
+ * told and the task is not simply waiting for another resume.
+ */
+async function notifyParentOfResumedTask(ctx: OperationContext, childThreadId: string): Promise<void> {
+  const delegation = (await ctx.store.readDelegations()).find((row) => row.childThreadId === childThreadId && row.notify === true);
+  if (delegation) queueTaskNotification(ctx, delegation.parentThreadId, childThreadId);
+}
+
+/** Whether a task has nothing left to run: no turn running, and none waiting (a usage-limit resume is a queued, scheduled turn). */
+async function taskHasSettledForGood(ctx: OperationContext, childThreadId: string): Promise<boolean> {
+  const turns = await ctx.store.readTurns(childThreadId).catch(() => [] as StoredTurn[]);
+  return !turns.some((turn) => turn.status === "running" || turn.status === "queued");
+}
+
 /** One task's settled facts: status, time, model, branch, headline, and what it changed. */
 export async function taskNotificationOf(ctx: OperationContext, childThreadId: string): Promise<TaskNotification | null> {
   const child = await threadWithLedger(ctx.store, childThreadId).catch(() => null);
@@ -1289,7 +1357,11 @@ export function isStoppedBySettle(child: StoredThread | null, status: TaskNotifi
  * running one. It wakes a settled parent — the work is the parent's own.
  */
 async function deliverTaskNotifications(ctx: OperationContext, parentThreadId: string, childThreadIds: readonly string[]): Promise<void> {
-  const tasks = (await Promise.all(childThreadIds.map((id) => taskNotificationOf(ctx, id)))).filter(
+  // A task paused by a usage limit has not finished: its parent hears when the resumed run ends instead.
+  const final = (await Promise.all(childThreadIds.map(async (id) => ((await taskHasSettledForGood(ctx, id)) ? id : null)))).filter(
+    (id): id is string => id !== null,
+  );
+  const tasks = (await Promise.all(final.map((id) => taskNotificationOf(ctx, id)))).filter(
     (task): task is TaskNotification => task !== null,
   );
   if (tasks.length === 0) return;
@@ -1486,6 +1558,7 @@ export async function delegate(ctx: OperationContext, request: DelegateRequest):
         startFromOrigin: false,
         threadId: childThreadId,
         storeRoot: ctx.storeRoot,
+        ...(request.title?.trim() ? { name: request.title } : {}),
       })
     : null;
   let created: StoredThread;
@@ -1522,6 +1595,7 @@ export async function delegate(ctx: OperationContext, request: DelegateRequest):
       prompt: task,
       status: "running",
       ...(worktree ? { baseBranch: worktree.baseBranch } : {}),
+      ...(request.wait === false && request.notify !== false ? { notify: true } : {}),
       createdAt: now,
       updatedAt: now,
     })

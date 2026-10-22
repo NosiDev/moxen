@@ -20,6 +20,7 @@ import path from "node:path";
 
 import { APP_NAME } from "./config.js";
 import { CliError } from "./errors.js";
+import { isSecretRef, readSecret, refName } from "./secrets.js";
 
 /** Which providers a server is offered to, and what of it is switched off. All optional: the default is every provider, every tool. */
 export interface McpRouting {
@@ -241,6 +242,11 @@ function toSpec(name: string, entry: McpServerEntry): McpServerSpec {
   return { name, type: "stdio", command: entry.command, args: [...(entry.args ?? [])], env: { ...entry.env }, ...routing };
 }
 
+/** Names as kept in a setting: comma-separated, blanks and repeats dropped. */
+export function parseNameList(text: string | undefined): string[] {
+  return [...new Set((text ?? "").split(",").map((name) => name.trim()).filter((name) => name !== ""))];
+}
+
 /**
  * The servers one provider gets, with routing applied: servers that are off or
  * not offered to this provider drop out, and the tools switched off come back
@@ -249,11 +255,14 @@ function toSpec(name: string, entry: McpServerEntry): McpServerSpec {
 export function routeMcpServers(
   servers: readonly McpServerSpec[],
   provider: McpProviderKind,
+  /** The provider's own `mcpExclude`: names of servers it does not get. */
+  exclude?: string,
 ): { readonly servers: McpServerSpec[]; readonly disabledTools: string[] } {
   const kept: McpServerSpec[] = [];
   const disabledTools: string[] = [];
+  const excluded = new Set(parseNameList(exclude));
   for (const server of servers) {
-    if (server.disabled === true) continue;
+    if (server.disabled === true || excluded.has(server.name)) continue;
     if (server.providers !== undefined && server.providers.length > 0 && !server.providers.includes(provider)) continue;
     kept.push(server);
     for (const tool of server.disabledTools ?? []) disabledTools.push(`mcp__${server.name}__${tool}`);
@@ -288,9 +297,29 @@ export async function resolveMcpServers(
 ): Promise<McpServerSpec[]> {
   const merged: Record<string, McpServerEntry | null> = { ...global };
   if (workspaceRoot) Object.assign(merged, await projectMcpServers(workspaceRoot));
-  return Object.entries(merged)
+  const specs = Object.entries(merged)
     .flatMap(([name, entry]) => (entry ? [toSpec(name, entry)] : []))
     .sort((a, b) => a.name.localeCompare(b.name));
+  return Promise.all(specs.map(withSecrets));
+}
+
+/** A value kept in the keychain (`keychain:<name>`) is read now; one that cannot be read is left out, so the server fails to sign in rather than being handed the reference. */
+async function secretValues(record: Readonly<Record<string, string>>): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (!isSecretRef(value)) out[key] = value;
+    else {
+      const secret = await readSecret(refName(value));
+      if (secret !== null) out[key] = secret;
+    }
+  }
+  return out;
+}
+
+async function withSecrets(spec: McpServerSpec): Promise<McpServerSpec> {
+  if (spec.type === "http") return { ...spec, headers: await secretValues(spec.headers) };
+  if (spec.type === "stdio") return { ...spec, env: await secretValues(spec.env) };
+  return spec;
 }
 
 /** For display: `env` and `headers` values replaced, keys kept. */

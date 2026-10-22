@@ -63,6 +63,8 @@ const KERNEL_PREFIXES = [
   "src/core/catalog/permissions",
   "src/core/catalog/selection",
   "src/core/catalog/update",
+  // Static starting points for the guided add flows (server types, MCP servers): data, not an operation.
+  "src/core/providers/harness/presets",
   "src/core/threads/views",
   "src/core/attachments",
   "src/core/syntax",

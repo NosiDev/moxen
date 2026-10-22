@@ -377,6 +377,20 @@ Use an external URL in the links.
 $ opencode pair --url https://dev.example.com
 ```
 
+Pair from anywhere through an OpenTunnel remote address. This exposes the
+server to the internet, so the first time it enables remote access it explains
+this and asks you to accept. See [Remote access](/cli/web#remote-access).
+
+```bash
+$ opencode pair --remote
+```
+
+Accept without a prompt, for example in a script without a terminal.
+
+```bash
+$ opencode pair --remote --yes
+```
+
 View all subcommands and flags.
 
 ```bash
@@ -553,7 +567,8 @@ $ opencode upgrade --help
 
 ## uninstall
 
-Removes OpenCode and all related files.
+Stops background services, removes the global cache, and uninstalls OpenCode. Session data, configuration, and
+state are not removed.
 
 ```bash
 $ opencode uninstall

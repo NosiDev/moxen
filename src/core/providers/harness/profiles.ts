@@ -213,8 +213,9 @@ export function resolveCompactionSettings(config: HarnessProviderConfig | undefi
   const own = profile.compaction;
   return {
     auto: own?.auto ?? config?.autoCompact ?? DEFAULT_COMPACTION.auto,
+    // A profile's own share beats the config-wide tokens, and its own tokens beat everything; otherwise tokens beat the config-wide share.
     fraction: own?.fraction ?? (config?.autoCompactPercent !== undefined ? Math.min(0.95, Math.max(0.3, config.autoCompactPercent / 100)) : null),
-    tokens: own?.tokens ?? null,
+    tokens: own?.tokens ?? (own?.fraction === undefined ? (config?.autoCompactTokens ?? null) : null),
     keepRecentTokens: own?.keepRecentTokens ?? config?.keepRecentTokens ?? DEFAULT_COMPACTION.keepRecentTokens,
     effort: own?.effort ?? DEFAULT_COMPACTION.effort,
   };

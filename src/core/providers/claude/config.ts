@@ -21,6 +21,10 @@ export interface ClaudeSettings {
   readonly homePath: string;
   readonly launchArgs: readonly string[];
   readonly autoCompactWindow: number | null;
+  /** Who compacts: Claude Code itself, or Moxen (which turns Claude Code's off). */
+  readonly autoCompact: "claude" | "ask" | "auto";
+  /** Turn on Ultracode for every session: extended workflow orchestration, on at any effort level. */
+  readonly ultracode: boolean;
   /**
    * How extended thinking comes back (`--thinking-display`). Claude Code
    * also takes `highlights`, which is deliberately not offered: the API
@@ -41,6 +45,8 @@ export const DEFAULT_CLAUDE_SETTINGS: ClaudeSettings = {
   homePath: "",
   launchArgs: [],
   autoCompactWindow: null,
+  autoCompact: "ask",
+  ultracode: false,
   thinkingDisplay: "summarized",
   promptSuggestions: true,
   partialMessages: true,
@@ -53,6 +59,8 @@ export function normalizeClaudeSettings(raw: Partial<ClaudeSettings> = {}): Clau
     homePath: raw.homePath?.trim() ?? "",
     launchArgs: raw.launchArgs ?? [],
     autoCompactWindow: raw.autoCompactWindow ?? null,
+    autoCompact: raw.autoCompact === "claude" || raw.autoCompact === "auto" ? raw.autoCompact : "ask",
+    ultracode: raw.ultracode ?? false,
     thinkingDisplay: raw.thinkingDisplay === "omitted" ? "omitted" : "summarized",
     promptSuggestions: raw.promptSuggestions ?? true,
     partialMessages: raw.partialMessages ?? true,

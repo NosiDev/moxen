@@ -102,7 +102,9 @@ Learn more: [CLAUDE.md files](/docs/en/memory#claude-md-files)
 
 ### Cloud session
 
-A Claude Code session that keeps running after you close your laptop, because it runs on cloud infrastructure instead of your machine: Anthropic-managed by default, or a [self-hosted environment](/docs/en/self-hosted-environments) your organization operates. You start one from claude.ai/code, the Claude mobile app, the Desktop app with **Cloud** selected, `claude --cloud`, or a [routine](/docs/en/routines). A session in your terminal, IDE, or the Desktop app with **Local** selected is a local session; to reach a local session from another device, use [Remote Control](#remote-control).
+A Claude Code session that keeps running after you close your laptop, because it runs on cloud infrastructure instead of your machine. That infrastructure is Anthropic-managed by default, or a [self-hosted environment](/docs/en/self-hosted-environments) your organization operates. You start one from claude.ai/code, the Claude mobile app, the Desktop app with **Cloud** selected, `claude --cloud`, or a [cloud scheduled task](/docs/en/routines).
+
+A session in your terminal, IDE, or the Desktop app with **Local** selected is a local session; to reach a local session from another device, use [Remote Control](#remote-control).
 
 Learn more: [Use Claude Code in the cloud](/docs/en/claude-code-on-the-web)
 
@@ -214,7 +216,7 @@ Learn more: [Run Claude Code programmatically](/docs/en/headless)
 
 ### Output style
 
-A configuration that changes the instructions Claude Code gives Claude, to set response behavior, tone, or format. Unlike [CLAUDE.md](#claude-md), which adds project context alongside Claude Code's default instructions, a custom output style can replace the default software engineering instructions.
+A configuration that changes the instructions Claude Code gives Claude, to set response behavior, tone, or format. Unlike [CLAUDE.md](#claude-md), which adds project context alongside Claude Code's default instructions, a custom output style adds its own instructions and can leave out the default software engineering instructions.
 
 Learn more: [Output styles](/docs/en/output-styles)
 
@@ -343,7 +345,7 @@ Learn more: [Context Claude Code adds outside the system prompt](/docs/en/agent-
 
 A command, `/teleport`, that pulls a cloud Claude Code session into your local terminal. Claude fetches the branch, loads the conversation history, and resumes from the cloud session's last state. The reverse direction is `--cloud`, which sends a local task to run in the cloud.
 
-Learn more: [From cloud to terminal](/docs/en/claude-code-on-the-web#from-cloud-to-terminal)
+Learn more: [Continue a cloud session in your terminal](/docs/en/claude-code-on-the-web#from-cloud-to-terminal)
 
 ### Tool
 
@@ -375,7 +377,7 @@ Learn more: [Give Claude a way to verify its work](/docs/en/best-practices#give-
 
 ### Worktree isolation
 
-An isolation mode that runs Claude in a separate git worktree under `.claude/worktrees/`, enabled with the `-w` flag or `isolation: worktree` in subagent config. Changes stay on a separate branch in a separate directory, so parallel agents don't overwrite each other's files.
+An isolation mode that runs Claude in a separate git worktree under `.claude/worktrees/`, enabled with the `-w` flag or `isolation: worktree` in subagent config. Changes stay on a separate branch in a separate directory, so parallel agents each edit their own copy of the files.
 
 Learn more: [Run parallel sessions with git worktrees](/docs/en/worktrees)
 

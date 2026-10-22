@@ -36,6 +36,27 @@ the default outright.
   capacity (Claude Code's `/low-priority`). Moxen cannot drive that lane:
   the SDK never forwards the offer, only the slash command reaches us as
   an ordinary command.
+- The `/` picker leaves out the Claude Code commands that need its own
+  interactive app, an account, or the session Moxen owns (`/clear`,
+  `/model`, `/effort`, `/rename`, `/config`, `/mcp`, `/goal`, …): they do
+  nothing useful sent as a prompt. Its bundled skills (`/code-review`,
+  `/simplify`, `/verify`, …) and a user's, project's, plugin's or MCP
+  server's own commands are all offered. The list is a deny-list in
+  `core/providers/claude/commands.ts`.
+
+## OpenCode's system prompt
+
+OpenCode picks a short base prompt for the model's family (its repository's `system-prompt/*.txt`). Moxen replaces it
+for OpenCode's `build` and `plan` agents with its own, through the documented agent `system` setting
+(`providers.opencode.moxenPrompt`, on by default): the working principles of the Moxen Harness's prompt (look
+before you change, check your work, the rules for someone else's checkout, how to report), with the tools named the
+way OpenCode names them, and without a line for a tool you switched off under `disabledNativeTools`. Your `AGENTS.md`
+files, skills, MCP guidance, OpenCode's date and environment block and Moxen's runtime instructions are still added by
+OpenCode and Moxen as before, and an agent you gave your own `system` keeps it. The prompt is part of the server's
+config, so a change to it waits until nothing runs on that server, then restarts it.
+
+Moxen does not use OpenCode's free models any way but through OpenCode itself: those are served to OpenCode's own client,
+and Moxen does not imitate it.
 
 ## Moxen Harness
 
@@ -73,7 +94,23 @@ a key is rejected. To save a key instead, set it on the Settings page or with
 Profiles can be edited three ways, all of which end up in the same file and
 all validated by the same code: the config file, the Settings page (Moxen
 Harness, Profiles: add, edit, copy, remove, test, probe), and the CLI. Entries
-are addressed by id, never by position:
+are addressed by id, never by position.
+
+Adding a profile on the Settings page is guided: pick a server type (Ollama,
+LM Studio, llama.cpp, vLLM, a hosted OpenAI- or Anthropic-compatible one, or
+other), confirm the address (it starts from the usual `localhost` port but is
+often another machine), and for a hosted server name the environment variable
+that holds its key. Moxen then asks the server for its models (`GET /v1/models`)
+and offers them as a searchable multi-select, with the window the server
+reports; if the server has no list, you type a model name. The new profile
+opens with a connection test already run. MCP servers are added the same way,
+from a short list of well-known ones or a custom command, and connect once so
+their tools are listed. A harness profile's flow never asks for a key (only the
+variable's name is stored; save the key on the profile afterwards). A
+well-known MCP server that takes one (GitHub, Brave Search, Exa Search) asks
+for it instead of a command: Moxen fills the command in, and the key goes to the
+OS keychain.
+
 
 ```sh
 moxen harness profile add colab --base-url https://tunnel.example.com \

@@ -62,6 +62,7 @@ export function SideTabBar({
   focused,
   left,
   width,
+  agentsLabel,
 }: {
   tab: SideTab;
   badges: Partial<Record<SideTab, string | null>>;
@@ -80,6 +81,8 @@ export function SideTabBar({
    */
   left?: number;
   width?: number;
+  /** What the agents tab is called where it is not about agents: a delegated thread's own Info. */
+  agentsLabel?: string;
 }) {
   const { hovered, handlers } = useHover();
   const overlay = left !== undefined && width !== undefined;
@@ -99,11 +102,13 @@ export function SideTabBar({
   // mostly recognisable from its first letters. Only when the short
   // labels still overflow do the badges go.
   const fits = (labels: Record<SideTab, string>, withBadges: boolean): boolean => measure(labels, withBadges) <= available;
-  const [labels, showBadges] = fits(TAB_LABEL, true)
-    ? ([TAB_LABEL, true] as const)
-    : fits(TAB_SHORT_LABEL, true)
-      ? ([TAB_SHORT_LABEL, true] as const)
-      : ([TAB_SHORT_LABEL, false] as const);
+  const full = agentsLabel === undefined ? TAB_LABEL : { ...TAB_LABEL, agents: agentsLabel };
+  const short = agentsLabel === undefined ? TAB_SHORT_LABEL : { ...TAB_SHORT_LABEL, agents: agentsLabel };
+  const [labels, showBadges] = fits(full, true)
+    ? ([full, true] as const)
+    : fits(short, true)
+      ? ([short, true] as const)
+      : ([short, false] as const);
   const tabsWidth = measure(labels, showBadges);
   const gapWidth = overlay ? Math.max(0, (width ?? 0) - tabsWidth - closeWidth) : 0;
   return (
@@ -367,6 +372,70 @@ export function AgentsTab({
             </Row>
           );
         })
+      )}
+    </box>
+  );
+}
+
+// -- Info (a delegated thread's agents tab) ---------------------------------
+
+export interface DelegatedInfo {
+  /** What the parent asked of this thread: its first message. */
+  task: string | null;
+  parent: { threadId: string; title: string } | null;
+  status: string;
+  /** How the latest turn ended, or null while it runs / before it starts. */
+  outcome: string | null;
+  startedAt: string | null;
+  model: string | null;
+  branch: string | null;
+  worktreePath: string | null;
+}
+
+/**
+ * A label and its value in two columns. The label's column is fixed so a long
+ * value (a worktree path) wraps inside its own column instead of running under
+ * the label; a path with no spaces breaks wherever it has to.
+ */
+function Fact({ label, value, color = COLOR.text }: { label: string; value: string; color?: string }) {
+  return (
+    <box style={{ flexDirection: "row", flexShrink: 0, paddingLeft: 1 }}>
+      <box style={{ width: 10, flexShrink: 0 }}>
+        <text fg={COLOR.faint}>{label}</text>
+      </box>
+      <box style={{ flexGrow: 1, flexShrink: 1, minWidth: 0 }}>
+        <text fg={color} wrapMode="char">{value}</text>
+      </box>
+    </box>
+  );
+}
+
+/** About the open delegated thread: who asked, for what, and where its work lives. */
+export function InfoTab({ info, now, onOpen }: { info: DelegatedInfo; now: number; onOpen: (threadId: string) => void }) {
+  const running = info.status === "running";
+  const state = running
+    ? info.startedAt === null ? "running" : `running ${formatDuration(Math.max(1000, now - Date.parse(info.startedAt)))}`
+    : info.outcome === null ? info.status : (OUTCOME_LABEL[info.outcome] ?? info.outcome);
+  const stateColor = running ? COLOR.warn : info.outcome === "error" ? COLOR.danger : info.outcome === "completed" ? COLOR.added : COLOR.dim;
+  return (
+    <box style={{ flexDirection: "column", flexShrink: 0 }}>
+      <Heading text="Delegated task" meta={state} />
+      <Fact label="Status" value={state} color={stateColor} />
+      {info.model === null ? null : <Fact label="Model" value={info.model} />}
+      {info.parent === null ? null : (
+        <Row onClick={() => onOpen(info.parent!.threadId)}>
+          <Fact label="Parent" value={`${info.parent.title}  ↗`} color={COLOR.accent} />
+        </Row>
+      )}
+      {info.branch === null ? null : <Fact label="Branch" value={info.branch} />}
+      {info.worktreePath === null ? null : <Fact label="Worktree" value={info.worktreePath} color={COLOR.dim} />}
+      <Heading text="Task" />
+      {info.task === null ? (
+        <Empty glyph="○" text="No message yet." />
+      ) : (
+        <box style={{ flexDirection: "row", flexShrink: 0, paddingLeft: 1 }}>
+          <text fg={COLOR.dim} wrapMode="word">{truncate(info.task, 1200)}</text>
+        </box>
       )}
     </box>
   );

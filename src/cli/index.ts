@@ -10,6 +10,7 @@ import {
   CONFIG_KEYS,
   expandHome,
   loadConfig,
+  migrateLegacyConfig,
   saveConfig,
   setConfigValueSecure,
   type ConfigKey,
@@ -1540,5 +1541,6 @@ efforts
     }),
   );
 
+migrateLegacyConfig();
 await program.parseAsync(process.argv);
 process.exit(process.exitCode ?? 0);

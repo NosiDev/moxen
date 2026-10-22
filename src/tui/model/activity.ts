@@ -1,6 +1,7 @@
 import { createPatch } from "diff";
 
 import type { ActivityEnvelope } from "../../core/types.js";
+import { webToolKind } from "../../core/threads/views.js";
 import { prettifyModelSlug } from "./display.js";
 import { detectFiletype } from "./patch.js";
 
@@ -234,6 +235,11 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+/** The first string of a list (a fetch tool that takes `urls`), or null. */
+function firstString(value: unknown): string | null {
+  return Array.isArray(value) ? (value.find((entry): entry is string => typeof entry === "string") ?? null) : null;
 }
 
 function asString(value: unknown): string | null {
@@ -723,6 +729,22 @@ export function prettyMcpTool(tool: string): string {
   return text.length === 0 ? tool : `${text[0]!.toUpperCase()}${text.slice(1)}`;
 }
 
+/**
+ * Who answered a web search or fetch: the MCP server that offered the tool
+ * (`Exa`, `Brave Search`), or, for a provider's own tool, the provider, read from
+ * how each one spells it (Claude's `WebSearch`, OpenCode's `websearch`, the
+ * harness's `web_search`). Null when the name says nothing.
+ */
+export function webToolSource(tool: string): string | null {
+  const mcp = parseMcpToolName(tool);
+  if (mcp !== null) return prettyMcpServer(mcp.server);
+  const bare = tool.trim().split(".").pop() ?? "";
+  if (/^Web(?:Search|Fetch)$/u.test(bare)) return "Claude Code";
+  if (/^(?:mcp-)?web(?:search|fetch)$/u.test(bare)) return "OpenCode";
+  if (/^web_(?:search|fetch)$/u.test(bare)) return "Moxen Harness";
+  return null;
+}
+
 /** `mcp__claude_ai_Linear__list_issues` → `Linear · List issues`; any other name as it is. */
 export function prettyToolName(name: string): string {
   const mcp = parseMcpToolName(name);
@@ -863,7 +885,7 @@ export function describeActivity(activity: ActivityEnvelope): ActivityView {
     return {
       kind: "web",
       tool: tool ?? "web",
-      query: asString(input.query) ?? asString(input.url) ?? title,
+      query: asString(input.query) ?? asString(input.url) ?? firstString(input.urls) ?? title,
       running,
     };
   }
@@ -971,12 +993,11 @@ export function describeActivity(activity: ActivityEnvelope): ActivityView {
     // Claude's `WebFetch`/`WebSearch` normally arrive under the dedicated
     // `web_search` itemType above, but fall back here if a build ever routes
     // them through the generic tool-call path instead.
-    const flatName = name.replace(/[^a-z]/g, "");
-    if (short === "webfetch" || short === "websearch" || flatName.endsWith("webfetch") || flatName.endsWith("websearch")) {
+    if (webToolKind(display) !== null) {
       return {
         kind: "web",
         tool: display,
-        query: asString(input.url) ?? asString(input.query) ?? title,
+        query: asString(input.url) ?? asString(input.query) ?? firstString(input.urls) ?? title,
         running,
       };
     }

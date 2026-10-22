@@ -1,5 +1,5 @@
 import type { ProviderSummary } from "../../core/catalog/summary.js";
-import type { EffortDescriptor } from "../../core/catalog/summary.js";
+import type { EffortDescriptor, ModelSummary } from "../../core/catalog/summary.js";
 import type { ModelSelection, ThreadEnvelope } from "../../core/types.js";
 
 /**
@@ -75,6 +75,43 @@ export function turnModelSelection(
  */
 export function isEffortDescriptor(id: string): boolean {
   return /effort|reasoning|thinking/i.test(id);
+}
+
+/**
+ * One line on what a reasoning level means, for the line under a slider. The
+ * providers name their levels but do not describe them, so these say it in
+ * general terms; a level they do not name has no line of its own.
+ */
+const EFFORT_HINTS: Readonly<Record<string, string>> = {
+  minimal: "Barely any reasoning, fastest",
+  low: "Fast answers, little reasoning",
+  medium: "Balanced speed and depth",
+  high: "Deeper reasoning for harder tasks",
+  xhigh: "Extended reasoning, slower, more tokens",
+  max: "Deepest reasoning, slowest, most tokens",
+};
+
+/** The line under a reasoning level: what it means, and that it is the model's default when it is. */
+/** The level that applies when none is chosen: the model's own default, else medium, else high, else the first listed. */
+export function defaultEffortId(choices: readonly { readonly id: string; readonly isDefault?: boolean | null | undefined }[]): string | undefined {
+  return (choices.find((choice) => choice.isDefault === true) ?? choices.find((choice) => choice.id === "medium") ?? choices.find((choice) => choice.id === "high") ?? choices[0])?.id;
+}
+
+export function describeEffort(id: string, isDefault: boolean): string | undefined {
+  const hint = EFFORT_HINTS[id.toLowerCase()];
+  if (hint === undefined) return isDefault ? "The default effort for this model" : undefined;
+  return isDefault ? `${hint} · default for this model` : hint;
+}
+
+/**
+ * What a model's row in a picker says beside its name: a "default" tag when it
+ * is the provider's default, and the range of reasoning levels it takes
+ * ("low–max"; one level alone, nothing for a model with none).
+ */
+export function modelRowDetail(model: Pick<ModelSummary, "isDefault" | "efforts">, isDefault: boolean = model.isDefault === true): { badge?: string; meta?: string } {
+  const levels = model.efforts.filter((descriptor) => isEffortDescriptor(descriptor.id)).flatMap((descriptor) => descriptor.choices.map((choice) => choice.label));
+  const meta = levels.length === 0 ? undefined : levels.length === 1 ? levels[0] : `${levels[0]}–${levels[levels.length - 1]}`;
+  return { ...(isDefault ? { badge: "default" } : {}), ...(meta === undefined ? {} : { meta }) };
 }
 
 /**

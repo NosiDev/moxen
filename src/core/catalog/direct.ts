@@ -4,7 +4,7 @@
  * Same `ProviderSummary[]` envelopes as the WS path (`catalog.ts`
  * extraction is wire-payload-specific, so this module builds the summaries
  * directly), values from our own sources (docs/providers.md):
- * - claude: binary presence + the bundled model catalog.
+ * - claude: binary presence + the model list (live or bundled).
  * - opencode: one entry per models.dev provider
  *   (`instanceId: "opencode/<providerId>"`, slugs already
  *   `providerID/modelID`, so send-time routing needs no translation),
@@ -12,13 +12,14 @@
  *
  * Honest gaps (cutover/hardening items, not silent): usage windows are
  * session-live in every native driver so `usageLimits` is null here;
- * skills need a live server/session scan; Claude exposes no model catalog
- * API so its models resolve at send time.
+ * skills need a live server/session scan. Claude's models come from the
+ * installed CLI's `supportedModels()` (cached; bundled list as fallback).
  */
 import fs from "node:fs";
 import path from "node:path";
 
-import { claudeCatalogModels } from "../providers/claude/catalog.js";
+import { claudeCatalogModels, setLiveClaudeModels } from "../providers/claude/catalog.js";
+import { resolveLiveModels } from "../providers/claude/livemodels.js";
 import { binaryOnPath } from "../infra/process.js";
 import { resolveStoreRoot } from "../threads/store.js";
 import { isModelHidden, loadModelPrefs } from "./prefs.js";
@@ -47,6 +48,12 @@ export interface DirectCatalogOptions {
    * the bare `opencode` on PATH until one exists.
    */
   readonly opencodeBinaryPath?: string;
+  /**
+   * Asks the installed Claude Code for its models (`supportedModels()`).
+   * Without it only a cached answer is read, so a catalog build never
+   * spawns a CLI on its own.
+   */
+  readonly fetchClaudeModels?: () => Promise<unknown[] | null>;
   /** `providers.harness` from the config file: one entry per saved profile. */
   readonly harness?: HarnessProviderConfig | undefined;
 }
@@ -223,9 +230,13 @@ export async function buildDirectProviders(options: DirectCatalogOptions = {}): 
     loadModelPrefs(storeRoot),
   ]);
 
-  // Claude has no list API; the bundled model file is the catalog. The
+  // The installed Claude Code's own list when known (cached, or fetched when
+  // `fetchClaudeModels` is given); the bundled file otherwise. The
   // instance id stays `claudeAgent` so existing threads and the
   // manifest's provider key resolve without translation.
+  setLiveClaudeModels(
+    claudeInstalled ? await resolveLiveModels({ storeRoot, fetch: options.fetchClaudeModels }) : null,
+  );
   const claude: ProviderSummary = {
     instanceId: "claudeAgent",
     driver: "claude",

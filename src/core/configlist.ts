@@ -223,7 +223,7 @@ export function parseListFieldValue(field: ListField, raw: string, key: string, 
 }
 
 /** The placeholder a secret map shows in place of a value (see `mcpview.ts`). */
-const HIDDEN_VALUE = "<hidden>";
+export const HIDDEN_VALUE = "<hidden>";
 
 /** Words split like a shell would: spaces separate, quotes keep a word together, a backslash escapes. */
 function splitShell(text: string, key: string): string[] {

@@ -1,3 +1,5 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -5,10 +7,13 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 
 import { testHarness } from "../../../core/testing/harness.js";
+import type { ClientApi } from "../../api.js";
 import { DirectConnection } from "../../connection.js";
+import { TASK_NOTIFICATION_BATCH_MS } from "../../../core/threads/operations.js";
 import { openThreadStore } from "../../../core/threads/store.js";
+import { sendTurn } from "../../../core/threads/threads.js";
 import { serveMcp } from "../stdio.js";
-import { callMoxenTool } from "../tools.js";
+import { callMoxenTool, moxenToolsFor } from "../tools.js";
 
 async function setup(harnessOptions: Parameters<typeof testHarness>[0] = {}) {
   const starts: Array<Record<string, unknown>> = [];
@@ -71,6 +76,7 @@ describe("moxen MCP server", () => {
         "delegate",
         "task_status",
         "models",
+        "web_fetch",
         "task_cancel",
       ]);
       expect((await mcp.request("ping")).result).toEqual({});
@@ -85,22 +91,22 @@ describe("moxen MCP server", () => {
     const { connection, parentThreadId, starts } = await setup();
     const mcp = mcpSession(connection, parentThreadId);
     try {
-      const called = await mcp.request("tools/call", { name: "delegate", arguments: { task: "Write the changelog" } });
+      const called = await mcp.request("tools/call", { name: "delegate", arguments: { task: "Write the changelog", title: "Write changelog" } });
       const result = called.result as { content: Array<{ text: string }>; isError: boolean };
       expect(result.isError).toBe(false);
       const delegated = JSON.parse(result.content[0]!.text) as { taskId: string; isolation: string; branch: string };
       expect(delegated.isolation).toBe("worktree");
-      expect(delegated.branch).toMatch(/^moxen\//);
+      expect(delegated.branch).toBe("moxen/write-changelog");
 
       const status = await mcp.request("tools/call", { name: "task_status", arguments: { taskId: delegated.taskId, waitMs: 5000 } });
       const report = JSON.parse((status.result as { content: Array<{ text: string }> }).content[0]!.text);
       expect(report).toMatchObject({ status: "completed", finished: true, report: "Completed: Write the changelog", branch: delegated.branch });
 
-      // The parent's session carries the tools; the subagent's does not.
-      const names = (input: Record<string, unknown> | undefined) =>
-        ((input?.mcpServers as Array<{ name: string }> | undefined) ?? []).map((server) => server.name);
-      expect(names(starts.find((input) => input.threadId === parentThreadId))).toContain("moxen");
-      expect(names(starts.find((input) => input.threadId === delegated.taskId))).not.toContain("moxen");
+      // Both sessions carry Moxen's tools, but the subagent's has none that delegate (it does not delegate again).
+      const moxen = (input: Record<string, unknown> | undefined) =>
+        ((input?.mcpServers as Array<{ name: string; tools?: Array<{ name: string }> }> | undefined) ?? []).find((server) => server.name === "moxen");
+      expect(moxen(starts.find((input) => input.threadId === parentThreadId))?.tools?.map((tool) => tool.name)).toEqual(["delegate", "task_status", "models", "web_fetch", "task_cancel"]);
+      expect(moxen(starts.find((input) => input.threadId === delegated.taskId))?.tools?.map((tool) => tool.name)).toEqual(["web_fetch"]);
     } finally {
       await mcp.close();
       await connection.close();
@@ -133,16 +139,47 @@ describe("moxen MCP server", () => {
     }
   }, 15_000);
 
+  it("waits for a task paused by a usage limit, and tells the parent when its resumed run ends", async () => {
+    const { harness, connection, parentThreadId } = await setup();
+    try {
+      const delegated = JSON.parse(
+        (await callMoxenTool(connection, parentThreadId, "delegate", { task: "Write the changelog", title: "changelog", isolation: "shared" })).text,
+      ) as { taskId: string };
+      const store = await openThreadStore(harness.root);
+      // The limit hit: the task's turn ended and a continue is held for the reset.
+      const held = await sendTurn(store, delegated.taskId, {
+        prompt: "continue",
+        scheduledFor: new Date(Date.now() + 3_600_000).toISOString(),
+        scheduleReason: "usage-reset",
+      });
+      const notifications = async () =>
+        ((await store.readMessages(parentThreadId)) as unknown as Array<Record<string, unknown>>).filter((message) => message.origin === "task-notification");
+      // Past the batch window the parent still has heard nothing: the task has not finished.
+      await new Promise((resolve) => setTimeout(resolve, TASK_NOTIFICATION_BATCH_MS + 1_000));
+      expect(await notifications()).toHaveLength(0);
+
+      // The reset passes; the resumed run ends and now the parent is told.
+      await store.updateTurn(delegated.taskId, held.turn.id, { scheduledFor: new Date(Date.now() - 1_000).toISOString() });
+      connection.startScheduling();
+      const deadline = Date.now() + 10_000;
+      while (Date.now() < deadline && (await notifications()).length === 0) await new Promise((resolve) => setTimeout(resolve, 200));
+      const [notification] = await notifications();
+      expect(notification?.text).toContain(`taskId ${delegated.taskId}) finished`);
+    } finally {
+      await connection.close();
+    }
+  }, 25_000);
+
   it("forks: the task resumes a copy of the parent's conversation, in the parent's checkout", async () => {
     const { connection, parentThreadId, starts } = await setup();
     try {
       const delegated = JSON.parse(
-        (await callMoxenTool(connection, parentThreadId, "delegate", { task: "What did we decide about caching?", fork: true })).text,
+        (await callMoxenTool(connection, parentThreadId, "delegate", { task: "What did we decide about caching?", title: "caching", fork: true })).text,
       ) as { taskId: string; isolation: string };
       expect(delegated.isolation).toBe("shared");
       const childStart = starts.find((input) => input.threadId === delegated.taskId);
       expect(childStart?.resumeCursor).toBe(`fork-of-harness-session-${parentThreadId}`);
-      const inWorktree = await callMoxenTool(connection, parentThreadId, "delegate", { task: "x", fork: true, isolation: "worktree" });
+      const inWorktree = await callMoxenTool(connection, parentThreadId, "delegate", { task: "x", title: "x", fork: true, isolation: "worktree" });
       expect(inWorktree).toMatchObject({ isError: true, text: expect.stringContaining("FORK_NEEDS_SHARED") });
     } finally {
       await connection.close();
@@ -153,7 +190,7 @@ describe("moxen MCP server", () => {
     const { connection, parentThreadId } = await setup();
     try {
       expect(await callMoxenTool(connection, parentThreadId, "delegate", {})).toMatchObject({ isError: true, text: expect.stringContaining("task is required") });
-      expect(await callMoxenTool(connection, parentThreadId, "delegate", { task: "x", isolation: "sideways" })).toMatchObject({ isError: true });
+      expect(await callMoxenTool(connection, parentThreadId, "delegate", { task: "x", title: "x", isolation: "sideways" })).toMatchObject({ isError: true });
       expect(await callMoxenTool(connection, parentThreadId, "task_status", { taskId: "nope", waitMs: 0 })).toMatchObject({
         isError: true,
         text: expect.stringContaining("TASK_NOT_FOUND"),
@@ -168,7 +205,7 @@ describe("moxen MCP server", () => {
     const { connection, parentThreadId } = await setup({ leaveTurnsRunning: true });
     try {
       const delegated = JSON.parse(
-        (await callMoxenTool(connection, parentThreadId, "delegate", { task: "Long job", isolation: "shared" })).text,
+        (await callMoxenTool(connection, parentThreadId, "delegate", { task: "Long job", title: "long job", isolation: "shared" })).text,
       ) as { taskId: string };
       const sleeps: number[] = [];
       const status = await callMoxenTool(connection, parentThreadId, "task_status", { taskId: delegated.taskId, waitMs: 0 }, {
@@ -240,6 +277,40 @@ describe("moxen MCP server", () => {
       expect(start.mcpServers.find((server) => server.name === "moxen")).toMatchObject({ type: "stdio", command: "my-moxen" });
     } finally {
       await connection.close();
+    }
+  });
+});
+
+describe("moxen web_fetch", () => {
+  const api = {} as ClientApi;
+
+  it("is the one tool a delegated task keeps from the list, and refuses the delegation tools it is never shown", async () => {
+    const result = await callMoxenTool(api, "t1", "delegate", { task: "x" }, { delegated: true });
+    expect(result).toMatchObject({ isError: true });
+    expect(result.text).toContain("not available in a delegated task");
+    expect(moxenToolsFor({ delegated: true, checklist: true }).map((tool) => tool.name)).toEqual(["web_fetch", "todos"]);
+  });
+
+  it("reads a page on this machine as text, marked as data from outside", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end("<html><title>Docs</title><body><p>Hello there</p></body></html>");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const result = await callMoxenTool(api, "t1", "web_fetch", { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/` });
+      expect(result.isError).toBe(false);
+      expect(result.text).toContain("Hello there");
+      expect(result.text).toContain("<untrusted_context");
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("does not reach cloud metadata or the local network, however the address is written", async () => {
+    for (const url of ["http://169.254.169.254/latest/meta-data/", "http://192.168.1.1/", "http://10.0.0.5:8080/"]) {
+      const result = await callMoxenTool(api, "t1", "web_fetch", { url });
+      expect(result.isError).toBe(true);
     }
   });
 });

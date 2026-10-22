@@ -30,7 +30,6 @@
 - [Permissions](https://opencode.ai/v2/docs/permissions/)
 - [Policies](https://opencode.ai/v2/docs/policies/)
 - [Instructions](https://opencode.ai/v2/docs/instructions/)
-- [Sharing](https://opencode.ai/v2/docs/sharing/)
 - [Warming](https://opencode.ai/v2/docs/warming/)
 
 ## CLI
@@ -100,3 +99,12 @@
 - [Inference](https://opencode.ai/v2/docs/console/api/inference/)
 - [Providers](https://opencode.ai/v2/docs/console/api/providers/)
 - [Budgets](https://opencode.ai/v2/docs/console/api/budgets/)
+
+### Harnesses
+
+- [Overview](https://opencode.ai/v2/docs/console/harnesses/)
+- [Claude Code](https://opencode.ai/v2/docs/console/harnesses/claude-code/)
+- [Codex](https://opencode.ai/v2/docs/console/harnesses/codex/)
+- [Hermes](https://opencode.ai/v2/docs/console/harnesses/hermes/)
+- [Pi](https://opencode.ai/v2/docs/console/harnesses/pi/)
+- [Raycast](https://opencode.ai/v2/docs/console/harnesses/raycast/)

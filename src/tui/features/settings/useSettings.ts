@@ -1,3 +1,4 @@
+import { handoffModelsFromText, type ClaudeCompact, type HandoffOverrides, type ProviderHandoff } from "../../model/autohandoff.js";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,7 +6,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 
 import type { ClientApi, CommandResult, SettingsSnapshot } from "../../../server/api.js";
-import type { UiConfig } from "../../../core/types.js";
+import type { DiscoverResult } from "../../../core/types.js";
+import type { HarnessApiFormat, UiConfig } from "../../../core/types.js";
 
 /**
  * The settings page's state: one read on open, one write per edit, and
@@ -23,7 +25,8 @@ export interface SettingsState {
   /** The key currently being written, for a pending mark on that row. */
   readonly saving: string | null;
   readonly error: string | null;
-  readonly set: (key: string, value: string) => void;
+  /** Resolves true once the server accepted the value, false if it refused it. */
+  readonly set: (key: string, value: string) => Promise<boolean>;
   /** Copy a list entry under a new id. */
   readonly duplicate: (key: string, id: string, newId: string) => void;
   /** The test or probe of a harness profile: running, or the last answer. */
@@ -32,6 +35,8 @@ export interface SettingsState {
   /** Start one MCP server and list its tools. */
   readonly testMcp: (name: string) => void;
   readonly probe: (profileId: string, model?: string) => void;
+  /** Which models a server lists, before a profile for it exists. Never rejects. */
+  readonly discover: (baseUrl: string, apiFormat: HarnessApiFormat, apiKeyEnv?: string) => Promise<DiscoverResult>;
   /** Write a harness profile to a file (no key, no probe results), or add one from such a file. */
   readonly exportProfile: (profileId: string, file: string) => void;
   readonly importProfile: (file: string) => void;
@@ -41,11 +46,15 @@ export interface SettingsState {
 }
 
 /** One test or probe against a harness endpoint, from start to answer. */
-export type HarnessRun =
+export type HarnessRun = { readonly scope: RunScope } & (
   | { readonly kind: "test" | "probe"; readonly profileId: string; readonly running: true }
-  | { readonly kind: "test"; readonly profileId: string; readonly running: false; readonly result: { readonly ok: boolean; readonly message: string } }
+  | { readonly kind: "test"; readonly profileId: string; readonly running: false; readonly result: { readonly ok: boolean; readonly message: string; /** An MCP server's tool names. */ readonly tools?: readonly string[] } }
   | { readonly kind: "probe"; readonly profileId: string; readonly running: false; readonly result: CommandResult<"harness.profile.probe"> }
-  | { readonly kind: "test" | "probe"; readonly profileId: string; readonly running: false; readonly error: string };
+  | { readonly kind: "test" | "probe"; readonly profileId: string; readonly running: false; readonly error: string }
+);
+
+/** Which list a run belongs to: a harness profile and an MCP server can share a name, and neither's result is the other's. */
+export type RunScope = "harness" | "mcp";
 
 export function useSettings(client: ClientApi, open: boolean): SettingsState {
   const [snapshot, setSnapshot] = useState<SettingsSnapshot | null>(null);
@@ -82,26 +91,36 @@ export function useSettings(client: ClientApi, open: boolean): SettingsState {
   }, [open, load]);
 
   const set = useCallback(
-    (key: string, value: string) => {
+    (key: string, value: string): Promise<boolean> => {
       const mine = (generation.current += 1);
       setSaving(key);
-      void client
+      return client
         .dispatch({ type: "settings.set", key, value })
         .then((result) => {
-          if (generation.current !== mine) return;
-          setSnapshot({ path: result.path, exists: result.exists, settings: result.settings });
-          setError(null);
+          if (generation.current === mine) {
+            setSnapshot({ path: result.path, exists: result.exists, settings: result.settings });
+            setError(null);
+          }
+          return true;
         })
         .catch((cause: unknown) => {
-          if (generation.current !== mine) return;
           // The value stays as it was: the server refused it, so the row
           // keeps showing what is actually in force.
-          setError(cause instanceof Error ? cause.message : String(cause));
+          if (generation.current === mine) setError(cause instanceof Error ? cause.message : String(cause));
+          return false;
         })
         .finally(() => {
           if (generation.current === mine) setSaving(null);
         });
     },
+    [client],
+  );
+
+  const discover = useCallback(
+    (baseUrl: string, apiFormat: HarnessApiFormat, apiKeyEnv?: string): Promise<DiscoverResult> =>
+      client.dispatch({ type: "harness.models.discover", baseUrl, apiFormat, ...(apiKeyEnv ? { apiKeyEnv } : {}) }).catch(
+        (cause: unknown): DiscoverResult => ({ ok: false, host: null, message: cause instanceof Error ? cause.message : String(cause) }),
+      ),
     [client],
   );
 
@@ -135,20 +154,20 @@ export function useSettings(client: ClientApi, open: boolean): SettingsState {
       if (busy.current) return;
       busy.current = true;
       const mine = (runs.current += 1);
-      setRun({ kind, profileId, running: true });
+      setRun({ scope: "harness", kind, profileId, running: true });
       const finish = (next: HarnessRun) => {
         busy.current = false;
         if (runs.current === mine) setRun(next);
       };
-      const failed = (cause: unknown) => finish({ kind, profileId, running: false, error: cause instanceof Error ? cause.message : String(cause) });
+      const failed = (cause: unknown) => finish({ scope: "harness", kind, profileId, running: false, error: cause instanceof Error ? cause.message : String(cause) });
       if (kind === "test") {
-        void client.dispatch({ type: "harness.profile.test", profileId, ...(model ? { model } : {}) }).then((result) => finish({ kind, profileId, running: false, result }), failed);
+        void client.dispatch({ type: "harness.profile.test", profileId, ...(model ? { model } : {}) }).then((result) => finish({ scope: "harness", kind, profileId, running: false, result }), failed);
         return;
       }
       void client
         .dispatch({ type: "harness.profile.probe", profileId, ...(model ? { model } : {}) })
         .then((result) => {
-          finish({ kind: "probe", profileId, running: false, result });
+          finish({ scope: "harness", kind: "probe", profileId, running: false, result });
           // The probe wrote to the config: show it.
           load();
         }, failed);
@@ -161,14 +180,14 @@ export function useSettings(client: ClientApi, open: boolean): SettingsState {
       if (busy.current) return;
       busy.current = true;
       const mine = (runs.current += 1);
-      setRun({ kind: "test", profileId: name, running: true });
+      setRun({ scope: "mcp", kind: "test", profileId: name, running: true });
       const finish = (next: HarnessRun) => {
         busy.current = false;
         if (runs.current === mine) setRun(next);
       };
       void client.dispatch({ type: "mcp.server.test", name }).then(
-        (result) => finish({ kind: "test", profileId: name, running: false, result }),
-        (cause: unknown) => finish({ kind: "test", profileId: name, running: false, error: cause instanceof Error ? cause.message : String(cause) }),
+        (result) => finish({ scope: "mcp", kind: "test", profileId: name, running: false, result }),
+        (cause: unknown) => finish({ scope: "mcp", kind: "test", profileId: name, running: false, error: cause instanceof Error ? cause.message : String(cause) }),
       );
     },
     [client],
@@ -209,7 +228,7 @@ export function useSettings(client: ClientApi, open: boolean): SettingsState {
     [client],
   );
 
-  return { snapshot, loading, saving, error, set, duplicate, run, test, testMcp, probe, exportProfile, importProfile, notice, reload: load };
+  return { snapshot, loading, saving, error, set, duplicate, run, test, testMcp, probe, discover, exportProfile, importProfile, notice, reload: load };
 }
 
 /** A path as typed: `~/` is the home directory, a relative one is from where Moxen was started. */
@@ -229,18 +248,50 @@ export function uiFromSnapshot(snapshot: SettingsSnapshot | null): UiConfig | nu
   const value = (key: string): unknown => snapshot.settings.find((view) => view.descriptor.key === key)?.value;
   const backdrop = value("ui.backdrop");
   const modelScenes = value("ui.modelScenes");
+  const hideBinaryDiffs = value("ui.hideBinaryDiffs");
   const side = value("ui.defaultSidePanel");
   const context = value("ui.contextRefreshSeconds");
   const usage = value("ui.usageRefreshSeconds");
   const handoff = value("ui.autoHandoff");
   const handoffPercent = value("ui.autoHandoffPercent");
+  const handoffTokens = value("ui.autoHandoffTokens");
   return {
     ...(backdrop === "animated" || backdrop === "static" || backdrop === "off" ? { backdrop } : {}),
     ...(typeof modelScenes === "boolean" ? { modelScenes } : {}),
+    ...(typeof hideBinaryDiffs === "boolean" ? { hideBinaryDiffs } : {}),
     ...(side === "context" || side === "git" || side === "agents" || side === "background" ? { defaultSidePanel: side } : {}),
     ...(typeof context === "number" ? { contextRefreshSeconds: context } : {}),
     ...(typeof usage === "number" ? { usageRefreshSeconds: usage } : {}),
     ...(handoff === "off" || handoff === "ask" || handoff === "auto" ? { autoHandoff: handoff } : {}),
     ...(typeof handoffPercent === "number" ? { autoHandoffPercent: handoffPercent } : {}),
+    ...(typeof handoffTokens === "number" ? { autoHandoffTokens: handoffTokens } : {}),
   };
+}
+
+/** Claude Code's compaction settings from a snapshot (see `resolveCompact`); null before one exists. */
+export function compactFromSnapshot(snapshot: SettingsSnapshot | null): ClaudeCompact | null {
+  if (snapshot === null) return null;
+  const mode = snapshot.settings.find((view) => view.descriptor.key === "providers.claude.autoCompact")?.value;
+  const percent = snapshot.settings.find((view) => view.descriptor.key === "providers.claude.autoCompactPercent")?.value;
+  return { ...(mode === "claude" || mode === "ask" || mode === "auto" ? { mode } : {}), ...(typeof percent === "number" ? { percent } : {}) };
+}
+
+/** The providers' own hand-off settings from a snapshot (see `resolveHandoff`); null before one exists. */
+export function handoffOverridesFromSnapshot(snapshot: SettingsSnapshot | null): HandoffOverrides | null {
+  if (snapshot === null) return null;
+  const out: HandoffOverrides = {};
+  for (const kind of ["claude", "opencode", "harness"] as const) {
+    const mode = snapshot.settings.find((view) => view.descriptor.key === `providers.${kind}.autoHandoff`)?.value;
+    const tokens = snapshot.settings.find((view) => view.descriptor.key === `providers.${kind}.autoHandoffTokens`)?.value;
+    const percent = snapshot.settings.find((view) => view.descriptor.key === `providers.${kind}.autoHandoffPercent`)?.value;
+    const models = snapshot.settings.find((view) => view.descriptor.key === `providers.${kind}.autoHandoffModels`)?.value;
+    const entry: ProviderHandoff = {
+      ...(mode === "off" || mode === "ask" || mode === "auto" ? { mode } : {}),
+      ...(typeof tokens === "number" ? { tokens } : {}),
+      ...(typeof percent === "number" ? { percent } : {}),
+      ...(typeof models === "string" && models !== "" ? { models: handoffModelsFromText(models) } : {}),
+    };
+    if (Object.keys(entry).length > 0) out[kind] = entry;
+  }
+  return out;
 }

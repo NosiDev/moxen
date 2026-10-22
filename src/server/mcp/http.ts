@@ -56,8 +56,8 @@ export async function startMcpHttpServer(api: ClientApi, version?: string): Prom
       respondJson(response, 400, { jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } });
       return;
     }
-    const checklist = new URL(request.url ?? "/", "http://127.0.0.1").searchParams.get("checklist") === "1";
-    const session = { api, parentThreadId: threadId, checklist, ...(version ? { version } : {}) };
+    const query = new URL(request.url ?? "/", "http://127.0.0.1").searchParams;
+    const session = { api, parentThreadId: threadId, checklist: query.get("checklist") === "1", delegated: query.get("delegated") === "1", ...(version ? { version } : {}) };
     if (Array.isArray(parsed)) {
       const answers = (await Promise.all(parsed.map((item) => answerMcp(session, item)))).filter((answer) => answer !== null);
       if (answers.length === 0) response.writeHead(202).end();

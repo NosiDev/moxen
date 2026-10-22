@@ -22,8 +22,14 @@ describe("auto handoff", () => {
     expect(autoHandoffState({ ...base, maxTokens: null })).toBeNull();
   });
 
+  it("hands off at a token count, whether or not the window is known", () => {
+    expect(autoHandoffState({ ...base, tokens: 70_000 })).toBeNull();
+    expect(autoHandoffState({ ...base, tokens: 50_000 })?.blockers).toEqual([]);
+    expect(autoHandoffState({ ...base, tokens: 50_000, maxTokens: null })).toEqual({ usedPercent: null, usedTokens: 60_000, blockers: [] });
+  });
+
   it("is ready past the line when nothing is running", () => {
-    expect(autoHandoffState(base)).toEqual({ usedPercent: 60, blockers: [] });
+    expect(autoHandoffState(base)).toEqual({ usedPercent: 60, usedTokens: 60_000, blockers: [] });
   });
 
   it("names what holds it back", () => {

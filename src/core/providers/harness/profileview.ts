@@ -84,7 +84,7 @@ function compactionEffective(config: HarnessProviderConfig | undefined, profile:
   const from = (ownValue: unknown, globalValue: unknown): string => (ownValue !== undefined ? "this profile" : globalValue !== undefined ? "the Moxen Harness setting" : "the default");
   out["compaction.auto"] = { value: settings.auto, origin: from(own?.auto, config?.autoCompact) };
   if (settings.fraction !== null) out["compaction.fraction"] = { value: settings.fraction, origin: from(own?.fraction, config?.autoCompactPercent) };
-  if (settings.tokens !== null) out["compaction.tokens"] = { value: settings.tokens, origin: "this profile" };
+  if (settings.tokens !== null) out["compaction.tokens"] = { value: settings.tokens, origin: own?.tokens !== undefined ? "this profile" : "the Moxen Harness setting" };
   out["compaction.keepRecentTokens"] = { value: settings.keepRecentTokens, origin: from(own?.keepRecentTokens, config?.keepRecentTokens) };
   out["compaction.effort"] = { value: settings.effort, origin: from(own?.effort, undefined) };
   return out;

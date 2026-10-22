@@ -9,6 +9,8 @@
  * surface we call (OpenCode v2, `@opencode/client`) in reach.
  * See docs/providers.md.
  */
+import { opencodeDisabledToolConfig } from "../../nativetools.js";
+import { buildOpencodeSystemPrompt } from "./prompt.js";
 import { randomBytes } from "node:crypto";
 
 export const OPENCODE_DEFAULT_BINARY = "opencode";
@@ -27,6 +29,9 @@ export interface OpencodeSettings {
   readonly minVersion: string;
   /** Tell a spawned server about moxen's bundled skills (its config's `skills` list). */
   readonly bundledSkills: boolean;
+  /** Written into a spawned server's `compaction` config; null leaves OpenCode's own. */
+  readonly autoCompact: boolean | null;
+  readonly compactBuffer: number | null;
 }
 
 export function normalizeOpencodeSettings(raw: Partial<OpencodeSettings> = {}): OpencodeSettings {
@@ -37,6 +42,8 @@ export function normalizeOpencodeSettings(raw: Partial<OpencodeSettings> = {}): 
     serverPassword: raw.serverPassword ?? "",
     minVersion: raw.minVersion?.trim() ? raw.minVersion.trim() : OPENCODE_MIN_VERSION,
     bundledSkills: raw.bundledSkills ?? true,
+    autoCompact: raw.autoCompact ?? null,
+    compactBuffer: raw.compactBuffer ?? null,
   };
 }
 
@@ -72,11 +79,23 @@ export function resolveSpawnedServerPassword(
  * list, after any the user already named and once each: OpenCode reads that
  * list as extra skill sources next to `.agents/skills` and `.claude/skills`,
  * and combines the lists of every config it finds.
+ * `disabledNativeTools` (the provider's setting) switches OpenCode's own tools
+ * off: `websearch: false`, and a `deny` rule per other tool, appended to the
+ * user's own `permissions` (the last matching rule wins, so ours hold).
+ * `moxenPrompt` sets the `system` of the `build` and `plan` agents to Moxen's prompt, which replaces the base
+ * prompt OpenCode picks for the model family; an agent the user already gave a `system` keeps theirs.
  * Unparseable content is replaced, not merged — a corrupt config would
  * break the server boot either way, and replacing keeps the failure
  * legible at our layer instead of deep in the server.
  */
-export function buildServerConfigContent(existing: string | undefined, skillsDirs: readonly string[] = []): string {
+export function buildServerConfigContent(
+  existing: string | undefined,
+  skillsDirs: readonly string[] = [],
+  compaction: { readonly auto?: boolean | null; readonly buffer?: number | null } = {},
+  disabledNativeTools?: string,
+  /** Replace OpenCode's base prompt for its `build` and `plan` agents with Moxen's (`prompt.ts`). */
+  moxenPrompt = false,
+): string {
   let parsed: Record<string, unknown> = {};
   if (existing && existing.trim().length > 0) {
     try {
@@ -90,7 +109,35 @@ export function buildServerConfigContent(existing: string | undefined, skillsDir
   }
   const named = Array.isArray(parsed.skills) ? (parsed.skills as unknown[]).filter((entry): entry is string => typeof entry === "string") : [];
   const skills = [...named, ...skillsDirs.filter((dir) => !named.includes(dir))];
-  return JSON.stringify({ ...parsed, ...(skills.length > 0 ? { skills } : {}), share: "disabled", update: "disable" });
+  // Only what Moxen's settings name overrides the user's own `compaction`; the rest of it stays.
+  const own = parsed.compaction !== null && typeof parsed.compaction === "object" && !Array.isArray(parsed.compaction) ? (parsed.compaction as Record<string, unknown>) : {};
+  const set = { ...(compaction.auto != null ? { auto: compaction.auto } : {}), ...(compaction.buffer != null ? { buffer: compaction.buffer } : {}) };
+  const merged = { ...own, ...set };
+  const off = opencodeDisabledToolConfig(disabledNativeTools);
+  const agents = moxenPrompt ? withMoxenSystem(parsed.agents, buildOpencodeSystemPrompt(disabledNativeTools)) : parsed.agents;
+  const ownRules = Array.isArray(parsed.permissions) ? (parsed.permissions as unknown[]) : [];
+  return JSON.stringify({
+    ...parsed,
+    ...(skills.length > 0 ? { skills } : {}),
+    ...(Object.keys(merged).length > 0 ? { compaction: merged } : {}),
+    ...(agents !== undefined ? { agents } : {}),
+    ...(off.websearch === false ? { websearch: false } : {}),
+    ...(off.permissions ? { permissions: [...ownRules, ...off.permissions] } : {}),
+    share: "disabled",
+    update: "disable",
+  });
+}
+
+/** The user's `agents`, with Moxen's prompt as the `system` of `build` and `plan` unless they set one. */
+function withMoxenSystem(raw: unknown, system: string): Record<string, unknown> {
+  const own = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const out: Record<string, unknown> = { ...own };
+  for (const name of ["build", "plan"]) {
+    const agent = own[name] !== null && typeof own[name] === "object" && !Array.isArray(own[name]) ? (own[name] as Record<string, unknown>) : {};
+    const set = typeof agent.system === "string" && agent.system.trim() !== "";
+    out[name] = set ? agent : { ...agent, system };
+  }
+  return out;
 }
 
 export { compareSemver, parseSemver } from "../semver.js";

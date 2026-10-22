@@ -53,7 +53,7 @@ describe("--no-wait through the CLI entry", () => {
     const endpoint = endpointFor("moxen-nowait");
     const connection = new DirectConnection({ storeRoot: harness.root, drivers: harness.drivers, config: async () => harness.config });
     const server = await serve({ endpoint, api: connection, onClose: () => connection.close() });
-    const env = { ...process.env, MOXEN_SERVER: "daemon", MOXEN_SERVER_ENDPOINT: endpoint };
+    const env = { ...process.env, MOXEN_NO_CONFIG_MIGRATION: "1", MOXEN_SERVER: "daemon", MOXEN_SERVER_ENDPOINT: endpoint };
     try {
       const created = await runCli(
         ["threads", "create", "--cwd", harness.work, "--checkout", "local", "--no-wait", "--prompt", "Never settles"],

@@ -42,7 +42,7 @@ describe("claude effort choices", () => {
 describe("claude driver effort", () => {
   it("starts the session at the selected effort", async () => {
     const transport = new FakeTransport([[initMessage()], [initMessage()], [initMessage()]]);
-    const driver = new ClaudeDriver({ transport });
+    const driver = new ClaudeDriver({ transport, settings: { autoCompact: "claude" } });
     await Effect.runPromise(driver.startSession({ ...START, modelSelection: selection("low") }));
     expect(transport.created[0]!.options.effort).toBe("low");
     expect(transport.created[0]!.options.settings).toBeUndefined();

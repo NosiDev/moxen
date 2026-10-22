@@ -53,7 +53,7 @@ MCP server sets, skills — rides ahead of the next prompt.
 ## Handing off a long thread
 
 Models make more tool-call mistakes as their window fills, so past
-`ui.autoHandoffPercent` (50 by default) of it a thread should move to a fresh one.
+a share of the model's window (`ui.autoHandoffPercent`, 50 by default; the Hand off at slider offers 25, 50 and 75) a thread should move to a fresh one. Because it is a share, a model with a bigger window hands off later. `ui.autoHandoffTokens` ("Hand off at a fixed size") states it in tokens instead and wins over the share at the same level.
 The TUI watches the open thread's context reading (`tui/model/autohandoff.ts`).
 With `ui.autoHandoff` set to `ask` (the default) a card appears over the composer
 with **Hand off** and **Not now**; with `auto` Moxen sends `thread.continue` itself
@@ -62,6 +62,34 @@ running that the new thread would lose track of: no turn, no subthread, no
 background task and no queued message. Until then the card names what it waits for
 and the button hands off by hand. It is Moxen that decides, not the model, and it
 fires at most once per thread. `off` turns the card and the automatic hand-off off.
+
+Each provider can override all of it for its own threads: `providers.claude`,
+`providers.opencode` and `providers.harness` take `autoHandoff`,
+`autoHandoffPercent` and `autoHandoffTokens`, on that provider's settings page
+under "Long threads". They also take `autoHandoffModels`, an object of model
+slug to tokens for particular models (`{"claude-opus-4-5": 500000}`; `config set
+providers.claude.autoHandoffModels "claude-opus-4-5=500k"` takes one
+`model=tokens` pair per line or comma, `k` and `m` meaning thousands and
+millions, and an empty value clears them all). On the settings page it is the
+"Hand off at, per model" row: it lists the provider's models, enter on one picks
+a size from 100K to 1M, and `d` removes that model's override. The line for a thread is the
+first that is set: its model's tokens, the provider's tokens, the provider's
+share, the global tokens, the global share, then half the window.
+
+## Compacting a long thread (Claude Code)
+
+By default Moxen, not Claude Code, compacts a Claude Code thread. It starts
+every session with Claude Code's own auto-compaction off
+(`autoCompactEnabled: false`) and watches the same context reading as the
+hand-off, past `providers.claude.autoCompactPercent` of the window (80 by
+default; the Compact at slider offers 50, 65, 80 and 90). `providers.claude.autoCompact`
+says what happens then: `ask` (the default) shows a card with **Compact** and
+**Not now**; `auto` sends `/compact` itself, the same as "Compact now", once no
+turn is running, at most once until the thread drops below the line again; `claude`
+leaves it all to Claude Code, whose own window (`autoCompactWindow`) then applies.
+A hand-off card can show at the same time: with the defaults it comes first, at 50%.
+OpenCode and the Moxen Harness have their own compaction settings and are not
+affected.
 
 ## Revert
 

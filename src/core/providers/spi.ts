@@ -60,6 +60,10 @@ export interface ProviderSessionStartInput {
   readonly mcpServers?: readonly McpServerSpec[];
   /** MCP tools to hide, as `mcp__<server>__<tool>` (a server's `disabledTools`). A driver that cannot hide single tools ignores it. */
   readonly disabledMcpTools?: readonly string[];
+  /** The provider's own tools the user switched off (`core/nativetools.ts`). A driver that cannot remove them ignores it. */
+  readonly disabledNativeTools?: readonly string[];
+  /** Moxen's own base system prompt in place of the provider's (OpenCode; others keep theirs). Absent or false: the provider's. */
+  readonly moxenPrompt?: boolean;
   /** False when the user switched the to-do list off for this provider: the driver offers the model none. Absent means on. */
   readonly checklist?: boolean;
   /**

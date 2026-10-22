@@ -72,7 +72,7 @@ import {
   type OpencodeSubscribedEvent,
   type OpencodeTransport,
 } from "./transport.js";
-import type { OpencodeMessage } from "./translate.js";
+import { registerOpencodeMcpServer, type OpencodeMessage } from "./translate.js";
 
 export interface OpenCodeDriverOptions {
   readonly settings?: Partial<OpencodeSettings>;
@@ -93,6 +93,8 @@ export interface OpenCodeDriverOptions {
   readonly toolStallTimeoutMs?: number;
   /** How long an interrupt waits for the server to confirm before settling the turn itself (default 3 s). */
   readonly interruptAckTimeoutMs?: number;
+  /** How long a server stays quiet before a pending tool-settings restart (default 1.5 s; see `reconcileServers`). */
+  readonly reconcileDelayMs?: number;
 }
 
 /** Default `stallTimeoutMs`: a turn with zero provider events for this long is failed, never left running. */
@@ -184,6 +186,8 @@ interface OpenCodeSession {
   context: ContextWindowUsage | null;
   /** Output arriving before this is the tail of a run we just interrupted, not a run the server started itself. */
   ignoreOutputUntil?: number;
+  /** Commands the model sent to the background that have not ended, by shell id. */
+  backgroundShells?: Map<string, { readonly command: string; readonly startedAt: string }>;
   /** Every message id whose parts this session has handled: late updates to a finished message are not a new run. */
   seenMessageIds?: Set<string>;
   startedAt: string;
@@ -247,6 +251,24 @@ function subagentHistoryItems(messages: ReadonlyArray<OpencodeMessage>): Subagen
     }
   }
   return items;
+}
+
+/** How long a server stays up after it goes quiet before a pending tool-settings restart (see `reconcileServers`). */
+const RECONCILE_DELAY_MS = 1_500;
+
+/** What the server's config holds that Moxen decides: the tools left off and whether its own prompt replaces OpenCode's. */
+interface ServerShape {
+  readonly tools: string;
+  readonly moxenPrompt: boolean;
+}
+
+const serverShape = (names: string | readonly string[] | undefined, moxenPrompt: boolean | undefined): ServerShape => ({ tools: canonicalToolList(names), moxenPrompt: moxenPrompt === true });
+const serverShapeKey = (shape: ServerShape | undefined): string => `${shape?.tools ?? ""}|${shape?.moxenPrompt === true}`;
+
+/** A list of tool names as one comparable string: lower-cased, sorted, no repeats. */
+function canonicalToolList(names: string | readonly string[] | undefined): string {
+  const list = typeof names === "string" ? names.split(",") : (names ?? []);
+  return [...new Set(list.map((name) => name.trim().toLowerCase()).filter((name) => name !== ""))].sort().join(",");
 }
 
 /** The instruction entry key runtime instructions live under. */
@@ -444,6 +466,49 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
     await this.registerMcpServers(await this.connectionFor(session), servers, session.checklist);
   };
 
+  /**
+   * The tools to leave off, for a session already running: what the setting says now. The server was started with
+   * the set of its day, so a difference waits for it to be quiet and then restarts it. Not for an external server,
+   * whose config is not ours.
+   */
+  readonly updateNativeTools = async (threadId: ThreadId, names: readonly string[], moxenPrompt = false): Promise<void> => {
+    const session = this.sessions.get(threadId);
+    if (!session || session.closed) return;
+    this.wantedServerConfig.set(session.workingDirectory, serverShape(names, moxenPrompt));
+    this.reconcileServers();
+  };
+
+  /** Nothing is running on this server: no turn, no background command or subagent, nothing waiting on the user. */
+  private serverIdle(key: string): boolean {
+    for (const session of this.sessions.values()) {
+      if (session.workingDirectory !== key || session.closed) continue;
+      if (this.openTurn(session) || session.parked.size > 0 || (session.backgroundShells?.size ?? 0) > 0) return false;
+    }
+    for (const child of this.children.values()) {
+      if (!child.stopped && child.parent.workingDirectory === key) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Restart each server whose tool settings differ from what it started with, once it is idle. Called when a setting
+   * is seen and whenever something that was running stops; a short wait first, so a queued message that is about to
+   * start does not meet a server being shut down.
+   */
+  private reconcileServers(): void {
+    if (this.reconcileTimer !== null) return;
+    const stale = [...this.liveConnections].filter(([key, connection]) => !connection.external && serverShapeKey(this.spawnedServerConfig.get(key)) !== serverShapeKey(this.wantedServerConfig.get(key)));
+    if (stale.length === 0) return;
+    this.reconcileTimer = setTimeout(() => {
+      this.reconcileTimer = null;
+      for (const [key, connection] of stale) {
+        if (this.liveConnections.get(key) !== connection || !this.serverIdle(key)) continue;
+        this.dropConnection(key, connection, "its tool settings changed");
+      }
+    }, this.reconcileDelayMs);
+    this.reconcileTimer.unref?.();
+  }
+
   private readonly settings: OpencodeSettings;
   private readonly baseEnv: NodeJS.ProcessEnv;
   private readonly bundledSkillsDir: string | null;
@@ -459,9 +524,19 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
   /** How long after an interrupt the server's trailing output is still the aborted run's. */
   private readonly interruptTailMs = 3_000;
   private readonly interruptAckTimeoutMs: number;
+  private readonly reconcileDelayMs: number;
   private readonly stallTimers = new Map<TurnId, ReturnType<typeof setTimeout>>();
   private readonly sessions = new Map<ThreadId, OpenCodeSession>();
   private readonly connections = new Map<string, Promise<OpencodeServerConnection>>();
+  /**
+   * The tools OpenCode's own server is told to leave off, and whether Moxen's prompt replaces its own, are part of
+   * its config, fixed when it starts. `wanted` is what the settings say now (per server, which is per directory);
+   * `spawned` is what each live server started with. A difference restarts the server once nothing is running on it
+   * (`reconcileServers`).
+   */
+  private readonly wantedServerConfig = new Map<string, ServerShape>();
+  private readonly spawnedServerConfig = new Map<string, ServerShape>();
+  private reconcileTimer: ReturnType<typeof setTimeout> | null = null;
   /** The connection behind each `connections` entry once it resolved, for identity checks. */
   private readonly liveConnections = new Map<string, OpencodeServerConnection>();
   /** `name:config` already registered per server connection (see `registerMcpServers`). */
@@ -477,6 +552,7 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
     this.stallTimeoutMs = options.stallTimeoutMs ?? OPENCODE_STALL_TIMEOUT_MS;
     this.toolStallTimeoutMs = options.toolStallTimeoutMs ?? this.stallTimeoutMs * 6;
     this.interruptAckTimeoutMs = options.interruptAckTimeoutMs ?? 3000;
+    this.reconcileDelayMs = options.reconcileDelayMs ?? RECONCILE_DELAY_MS;
   }
 
   get streamEvents(): Stream.Stream<ProviderRuntimeEvent> {
@@ -525,10 +601,14 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
       await this.ensurePump(key, connection);
       return connection;
     }
+    const shape = this.wantedServerConfig.get(key) ?? serverShape(undefined, false);
+    this.spawnedServerConfig.set(key, shape);
     const pending = this.transport.ensureServer({
       settings: this.settings,
       workingDirectory,
       env: this.baseEnv,
+      ...(shape.tools !== "" ? { disabledNativeTools: shape.tools } : {}),
+      ...(shape.moxenPrompt ? { moxenPrompt: true } : {}),
       // The server is one per directory and its config is fixed at spawn: whoever starts it decides.
       ...(this.bundledSkillsDir && moxenSkills === "served" ? { skillsDirs: [this.bundledSkillsDir] } : {}),
     });
@@ -579,6 +659,7 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
       if (done.has(key)) continue;
       try {
         await connection.addMcpServer(server.name, config);
+        registerOpencodeMcpServer(server.name);
         done.add(key);
       } catch {
         // Retried on the next session start.
@@ -597,6 +678,7 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
     if (this.liveConnections.get(key) !== connection) return;
     this.liveConnections.delete(key);
     this.connections.delete(key);
+    this.spawnedServerConfig.delete(key);
     const pump = this.pumps.get(key);
     this.pumps.delete(key);
     pump?.controller.abort();
@@ -776,6 +858,7 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
     this.attempt("OPENCODE_SPAWN_FAILED", `Could not start an OpenCode session for thread ${input.threadId}`, async () => {
       const existing = this.sessions.get(input.threadId);
       if (existing && !existing.closed) return this.describeSession(existing);
+      this.wantedServerConfig.set(input.workingDirectory, serverShape(input.disabledNativeTools, input.moxenPrompt));
       const connection = await this.connectionForSession(input.threadId, input.workingDirectory, input.moxenSkills);
       await this.registerMcpServers(connection, input.mcpServers ?? [], input.checklist !== false);
       // OpenCode keeps sessions on disk, so the previous one — from this
@@ -1370,6 +1453,10 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
       case "session.compacted":
         this.onCompacted(session, event);
         break;
+      case "session.shell.started":
+      case "session.shell.ended":
+        this.onBackgroundShell(session, event);
+        break;
       default:
         break;
     }
@@ -1665,6 +1752,7 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
   }
 
   private publishSubagent(child: OpenCodeChild, agentId: string, turnId: TurnId | null, status: "started" | "stopped", lastMessage: string | null): void {
+    if (child.background) this.publishBackgroundTask(child, agentId, turnId, status, lastMessage);
     this.publish({
       type: "subagent.updated",
       provider: this.provider,
@@ -1676,6 +1764,65 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
       lastMessage,
       ...(status === "started" ? { description: child.description } : {}),
     });
+  }
+
+  /** A background subagent is a background task: its edge, and the live set the side panel lists. */
+  private publishBackgroundTask(child: OpenCodeChild, agentId: string, turnId: TurnId | null, status: "started" | "stopped", summary: string | null): void {
+    this.publish({
+      type: "background.task",
+      provider: this.provider,
+      threadId: child.parent.threadId,
+      turnId,
+      taskId: agentId,
+      status,
+      description: child.description ?? child.agentType,
+      taskType: "local_agent",
+      toolUseId: null,
+      summary,
+    });
+    this.publishBackgroundTasks(child.parent);
+  }
+
+  /** A command the model sent to the background starting or ending. */
+  private onBackgroundShell(session: OpenCodeSession, event: OpencodeSubscribedEvent): void {
+    const shellId = asString(event.properties.shellID);
+    if (!shellId) return;
+    const shells = (session.backgroundShells ??= new Map());
+    const command = asString(event.properties.command) ?? "";
+    const started = event.type === "session.shell.started";
+    if (started) shells.set(shellId, { command, startedAt: new Date().toISOString() });
+    else if (!shells.delete(shellId)) return;
+    const exitStatus = asString(event.properties.status);
+    this.publish({
+      type: "background.task",
+      provider: this.provider,
+      threadId: session.threadId,
+      turnId: this.openTurn(session)?.id ?? null,
+      taskId: shellId,
+      status: started ? "started" : exitStatus === "failed" || exitStatus === "error" ? "failed" : exitStatus === "killed" ? "stopped" : "completed",
+      description: command.split("\n")[0]?.trim() ?? "",
+      taskType: "local_bash",
+      toolUseId: null,
+      summary: null,
+    });
+    this.publishBackgroundTasks(session);
+  }
+
+  /** The full live set the side panel lists: background subagents and background commands. */
+  private publishBackgroundTasks(session: OpenCodeSession): void {
+    this.reconcileServers();
+    const agents = [...this.children]
+      .filter(([, other]) => other.parent === session && other.background && !other.stopped)
+      .map(([taskId, other]) => ({ taskId, taskType: "local_agent", description: other.description ?? other.agentType, toolName: "Agent" }));
+    const shells = [...(session.backgroundShells ?? [])].map(([taskId, shell]) => ({
+      taskId,
+      taskType: "local_bash",
+      description: shell.command.split("\n")[0]?.trim() ?? "",
+      toolName: "Bash",
+      command: shell.command,
+      startedAt: shell.startedAt,
+    }));
+    this.publish({ type: "background.tasks.changed", provider: this.provider, threadId: session.threadId, tasks: [...agents, ...shells] });
   }
 
   /** A child session's conversation, for the subagent view. */
@@ -1897,6 +2044,7 @@ export class OpenCodeDriver implements ProviderAdapter<CliError> {
   }
 
   private settleOpenTurn(session: OpenCodeSession, status: OpenCodeTurnStatus, detail: string): void {
+    this.reconcileServers();
     const open = this.openTurn(session);
     if (open) {
       this.clearStallTimer(open.id);

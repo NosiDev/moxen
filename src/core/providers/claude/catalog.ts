@@ -1,9 +1,9 @@
 /**
  * Claude model catalog.
  *
- * The Agent SDK exposes no model-listing API, so without this the Claude
- * catalog entry would carry zero models - and the TUI model/effort
- * pickers would come up empty on every Claude thread. `claude-models.json`
+ * The installed Claude Code reports its own models (`livemodels.ts`); this
+ * is the fallback for when it cannot, so the Claude catalog entry and the
+ * TUI model/effort pickers never come up empty. `claude-models.json`
  * is our own hand-maintained list (slugs, display names, effort choices),
  * parsed defensively: unknown shapes degrade to fewer models, never a
  * throw. Slugs drift as Anthropic ships, so the file records its date and
@@ -96,8 +96,24 @@ export function parseClaudeModels(raw: unknown = catalogFile): ClaudeCatalogMode
   });
 }
 
-/** Bundled models; empty when the file stops parsing. */
+let liveModels: ClaudeCatalogModel[] | null = null;
+
+/**
+ * The models the installed Claude Code reported (see `livemodels.ts`), used
+ * in place of the bundled list until cleared with null.
+ */
+export function setLiveClaudeModels(models: ClaudeCatalogModel[] | null): void {
+  liveModels = models !== null && models.length > 0 ? models : null;
+}
+
+/** The live models when known, else the bundled ones; empty when the file stops parsing. */
 export function claudeCatalogModels(): ClaudeCatalogModel[] {
+  if (liveModels !== null) return liveModels;
+  return bundledClaudeModels();
+}
+
+/** Bundled models only; empty when the file stops parsing. */
+export function bundledClaudeModels(): ClaudeCatalogModel[] {
   try {
     return parseClaudeModels(catalogFile);
   } catch {

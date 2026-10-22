@@ -19,6 +19,8 @@ describe("claude config", () => {
       homePath: "",
       launchArgs: [],
       autoCompactWindow: null,
+      autoCompact: "ask",
+      ultracode: false,
     });
     expect(normalizeClaudeSettings({ binaryPath: "  " }).binaryPath).toBe("claude");
   });

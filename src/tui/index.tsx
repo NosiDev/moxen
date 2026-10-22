@@ -41,6 +41,7 @@ export async function runTui(config: CliConfig, configPath: string): Promise<voi
             cwd={process.cwd()}
             setTerminalTitle={(title) => renderer.setTerminalTitle(title)}
             {...(config.ui ? { ui: config.ui } : {})}
+            {...(config.providers ? { providers: config.providers } : {})}
           />
         </MinSizeGate>,
       );

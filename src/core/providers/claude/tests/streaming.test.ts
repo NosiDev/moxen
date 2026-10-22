@@ -53,24 +53,45 @@ async function started(): Promise<{ driver: ClaudeDriver; transport: FakeTranspo
   return { driver, transport, events };
 }
 
+describe("claude ultracode setting", () => {
+  it("turns ultracode on for the session at any effort level, and leaves it out when off", async () => {
+    const on = new FakeTransport([[initMessage()]]);
+    await Effect.runPromise(new ClaudeDriver({ transport: on, settings: { autoCompact: "claude", ultracode: true } }).startSession(START));
+    expect(on.created[0]!.options.settings).toEqual({ ultracode: true });
+    const off = new FakeTransport([[initMessage()]]);
+    await Effect.runPromise(new ClaudeDriver({ transport: off, settings: { autoCompact: "claude" } }).startSession(START));
+    expect(off.created[0]!.options.settings).toBeUndefined();
+  });
+});
+
 describe("claude auto-compact window", () => {
   it("is handed to the session as Claude Code's own setting when the user set one, and left out when not", async () => {
     const withWindow = new FakeTransport([[initMessage()]]);
-    await Effect.runPromise(new ClaudeDriver({ transport: withWindow, settings: { autoCompactWindow: 300_000 } }).startSession(START));
+    await Effect.runPromise(new ClaudeDriver({ transport: withWindow, settings: { autoCompact: "claude", autoCompactWindow: 300_000 } }).startSession(START));
     expect(withWindow.created[0]!.options.settings).toEqual({ autoCompactWindow: 300_000 });
 
     const without = new FakeTransport([[initMessage()]]);
-    await Effect.runPromise(new ClaudeDriver({ transport: without }).startSession(START));
+    await Effect.runPromise(new ClaudeDriver({ transport: without, settings: { autoCompact: "claude" } }).startSession(START));
     expect(without.created[0]!.options.settings).toBeUndefined();
   });
 
   it("sits beside the ultracode flag the effort choice sets, in the one settings option", async () => {
     const transport = new FakeTransport([[initMessage()]]);
-    const driver = new ClaudeDriver({ transport, settings: { autoCompactWindow: 500_000 } });
+    const driver = new ClaudeDriver({ transport, settings: { autoCompact: "claude", autoCompactWindow: 500_000 } });
     await Effect.runPromise(
       driver.startSession({ ...START, modelSelection: { instanceId: "claudeAgent", model: "claude-opus-5", options: [{ id: "effort", value: "ultracode" }] } }),
     );
     expect(transport.created[0]!.options.settings).toEqual({ ultracode: true, autoCompactWindow: 500_000 });
+  });
+});
+
+describe("claude auto-compact owner", () => {
+  it("turns Claude Code's own compaction off unless it is left to Claude Code, since Moxen compacts by default", async () => {
+    for (const settings of [undefined, { autoCompact: "ask" as const }, { autoCompact: "auto" as const }]) {
+      const transport = new FakeTransport([[initMessage()]]);
+      await Effect.runPromise(new ClaudeDriver({ transport, ...(settings ? { settings } : {}) }).startSession(START));
+      expect(transport.created[0]!.options.settings).toEqual({ autoCompactEnabled: false });
+    }
   });
 });
 

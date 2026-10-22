@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { compactionSummary, describeActivity, prettyToolName, fileRowCounts, formatMs, readRangeLabel, setPathRoots } from "../activity.js";
+import { compactionSummary, describeActivity, prettyToolName, fileRowCounts, formatMs, readRangeLabel, setPathRoots, webToolSource } from "../activity.js";
 import type { ActivityEnvelope } from "../../../core/types.js";
 
 function activity(kind: string, payload: Record<string, unknown>): ActivityEnvelope {
@@ -977,5 +977,17 @@ describe("compactionSummary", () => {
       describeActivity({ ...activity("notice", { notice, detail }), summary: "t" } as unknown as ActivityEnvelope);
     expect(row("compacted", "<analysis>a</analysis><summary>kept</summary>")).toMatchObject({ kind: "notice", detail: "kept" });
     expect(row("permission-denied", "<summary>why</summary>")).toMatchObject({ detail: "<summary>why</summary>" });
+  });
+});
+
+describe("webToolSource", () => {
+  it("names the MCP server, or the provider whose own tool it is", () => {
+    expect(webToolSource("mcp__exa__web_search_exa")).toBe("Exa");
+    expect(webToolSource("mcp__brave-search__brave_web_search")).toBe("Brave Search");
+    expect(webToolSource("WebSearch")).toBe("Claude Code");
+    expect(webToolSource("webfetch")).toBe("OpenCode");
+    expect(webToolSource("mcp-websearch")).toBe("OpenCode");
+    expect(webToolSource("default.web_search")).toBe("Moxen Harness");
+    expect(webToolSource("bash")).toBeNull();
   });
 });

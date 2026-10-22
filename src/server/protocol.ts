@@ -45,6 +45,7 @@ import type { ModelRequest } from "../core/catalog/selection.js";
 import type { SettingView } from "../core/configschema.js";
 import type { McpTestResult } from "../core/mcptest.js";
 import type { HarnessTestResult, ProbeReport } from "../core/providers/harness/probe.js";
+import type { DiscoverResult, HarnessApiFormat } from "../core/types.js";
 import type { GitBranch, GitCommit, GitCommitDetail, GitOverview, GitWorktreeStatus } from "../core/git/history.js";
 import type {
   ForgeCheckRun,
@@ -227,6 +228,11 @@ export type CommandBody =
    * findings to the model's `probed` block unless `dryRun`. Never retried.
    */
   | { readonly type: "harness.profile.probe"; readonly profileId: string; readonly model?: string; readonly dryRun?: boolean }
+  /**
+   * Which models a server lists (`GET /v1/models`), before any profile exists. Takes the NAME of the
+   * environment variable holding a key, never a key. Failures come back as a result, not an error.
+   */
+  | { readonly type: "harness.models.discover"; readonly baseUrl: string; readonly apiFormat: HarnessApiFormat; readonly apiKeyEnv?: string }
   /** Runs a provider CLI's own updater (`claude update`, `opencode upgrade`) on the machine the sessions run on. */
   | { readonly type: "provider.update"; readonly provider: UpdatableProvider }
   /**
@@ -312,6 +318,7 @@ export interface CommandResults {
   "harness.profile.test": HarnessTestResult;
   "mcp.server.test": McpTestResult;
   "harness.profile.probe": ProbeReport & { readonly saved: boolean };
+  "harness.models.discover": DiscoverResult;
   "provider.update": ProviderUpdate;
   "thread.continue": { readonly threadId: string; readonly title: string; readonly scheduledFor: string | null } & Accepted;
   "thread.side-question": { readonly text: string; readonly withContext: boolean; readonly provider: string };
@@ -975,6 +982,16 @@ export function decodeCommand(value: unknown): Command {
       };
     case "harness.profile.test":
       return { ...meta, type, profileId: requireField(record.profileId, type, "profileId"), ...(asString(record.model) !== null ? { model: asString(record.model)! } : {}) };
+    case "harness.models.discover": {
+      const format = asString(record.apiFormat);
+      return {
+        ...meta,
+        type,
+        baseUrl: requireField(record.baseUrl, type, "baseUrl"),
+        apiFormat: format === "responses" || format === "anthropic" ? format : "chat",
+        ...(asString(record.apiKeyEnv) !== null ? { apiKeyEnv: asString(record.apiKeyEnv)! } : {}),
+      };
+    }
     case "harness.profile.probe":
       return {
         ...meta,

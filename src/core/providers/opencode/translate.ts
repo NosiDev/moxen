@@ -39,6 +39,30 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+/**
+ * The MCP servers Moxen has registered with OpenCode. OpenCode names their
+ * tools `<server>_<tool>`; Moxen's other providers say `mcp__<server>__<tool>`,
+ * which the rest of the app reads (a readable "Brave Search · Web search" in the
+ * timeline, the permission cards, the task list). Process-wide because a server
+ * is named in the config, not by a connection, and history is read apart from
+ * the live stream.
+ */
+const mcpServerNames = new Set<string>();
+
+export function registerOpencodeMcpServer(name: string): void {
+  mcpServerNames.add(name);
+}
+
+/** `brave-search_web_search` → `mcp__brave-search__web_search` for a registered server (the longest name that fits); any other tool as it is. */
+export function opencodeToolName(tool: string): string {
+  if (tool.startsWith("mcp__")) return tool;
+  let best: string | undefined;
+  for (const name of mcpServerNames) {
+    if (tool.length > name.length + 1 && tool.startsWith(`${name}_`) && (best === undefined || name.length > best.length)) best = name;
+  }
+  return best === undefined ? tool : `mcp__${best}__${tool.slice(best.length + 1)}`;
+}
+
 /** Tool output as text: the text items of a v2 tool `content` array, joined. */
 export function toolContentText(content: unknown): string {
   if (!Array.isArray(content)) return "";
@@ -407,6 +431,18 @@ export class OpencodeEventTranslator {
         if (!sessionID || data.reason !== "manual") return [];
         return [{ type: "session.error", properties: { sessionID, error: errorOf(data.error) } }];
       }
+      case "session.shell.started":
+      case "session.shell.ended": {
+        const sessionID = asString(data.sessionID);
+        const shell = asRecord(data.shell);
+        const shellID = asString(shell?.id);
+        // Only a command the model sent to the background is a task to list; a foreground one is its turn's.
+        if (!sessionID || !shell || !shellID || asRecord(shell.metadata)?.background !== true) return [];
+        return [{
+          type,
+          properties: { sessionID, shellID, command: asString(shell.command) ?? "", status: asString(shell.status) ?? "" },
+        }];
+      }
       case "location.shutdown":
         // The server dropped the location our turns run in: no session to name.
         return [{ type: "session.error", properties: { error: { message: "The OpenCode server shut down.", name: "location.shutdown" } } }];
@@ -504,7 +540,7 @@ export class OpencodeEventTranslator {
           callID: this.toolKey(data),
           messageID: call.messageID ?? "",
           type: "tool",
-          tool: call.tool,
+          tool: opencodeToolName(call.tool),
           state: toolState(call),
         },
       },
@@ -553,7 +589,7 @@ function historyToolPart(content: Record<string, unknown>, messageID: string): R
     callID: id,
     messageID,
     type: "tool",
-    tool: asString(content.name) ?? "tool",
+    tool: opencodeToolName(asString(content.name) ?? "tool"),
     state: {
       status,
       input,

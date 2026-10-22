@@ -53,14 +53,15 @@ export const MCP_SERVER_FIELDS: readonly ListField[] = [
   {
     path: "providers",
     label: "Offered to",
-    description: "Which providers get this server: claude, opencode, harness, separated by commas. Unset: all of them.",
+    description: "Which providers get this server: claude, opencode, harness, separated by commas. Unset: all of them. Each provider's page also has an MCP servers setting that switches servers off for that provider; this older limit is kept for files that have it.",
     group: "Who gets it",
+    hidden: true,
     kind: { type: "words", separator: "comma" },
   },
   {
     path: "disabledTools",
     label: "Hidden tools",
-    description: "Tool names to hide from the model, separated by commas. Works for Claude Code and the Moxen Harness; OpenCode cannot hide single tools. Press t on the server to see its tools.",
+    description: "Tools to hide from the model. Works for Claude Code and the Moxen Harness; OpenCode cannot hide single tools. Enter lists the server's tools to tick; from the command line, `config set` takes names separated by commas.",
     group: "Who gets it",
     kind: { type: "words", separator: "comma" },
   },
@@ -72,6 +73,22 @@ export const MCP_SERVER_FIELDS: readonly ListField[] = [
     kind: { type: "boolean" },
   },
 ];
+
+const RUNNERS = [
+  choice("npx", "npx", "Comes with Node."),
+  choice("bunx", "bunx", "Bun's runner: quick to start. Needs bun on the PATH of whatever starts the server."),
+  choice("pnpm", "pnpm dlx", "pnpm's runner."),
+  choice("yarn", "yarn dlx", "Yarn's runner (Yarn 2 or newer)."),
+];
+
+export const MCP_RUNNER_SETTING: SettingDescriptor = {
+  key: "mcpRunner",
+  label: "Run packages with",
+  description: "What starts an npm package when you add a well-known server (Brave Search, Exa, GitHub…). It is written into the server's command: servers you already have, and ones you type yourself, are left as they are.",
+  section: "mcp",
+  kind: { type: "enum", choices: RUNNERS },
+  defaultValue: "npx",
+};
 
 export const MCP_SERVERS_SETTING: SettingDescriptor = {
   key: "mcpServers",

@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { CHECKLIST_GUIDANCE, NO_REDELEGATION_GUIDANCE, OPENCODE_SUBAGENT_GUIDANCE, PROGRESS_GUIDANCE, INSTRUCTIONS_UPDATE_GUIDANCE, planInstructions, withInstructionsUpdate, RESEARCH_GUIDANCE, buildRuntimeInstructions, harnessName, projectInstructions } from "../instructions.js";
+import { TASK_NOTIFICATION_GUIDANCE, CHECKLIST_GUIDANCE, NO_REDELEGATION_GUIDANCE, OPENCODE_SUBAGENT_GUIDANCE, PROGRESS_GUIDANCE, INSTRUCTIONS_UPDATE_GUIDANCE, planInstructions, withInstructionsUpdate, RESEARCH_GUIDANCE, SHELL_GUIDANCE, buildRuntimeInstructions, harnessName, projectInstructions } from "../instructions.js";
 
 const LOCAL = { mode: "local" as const, path: "/repo", branch: "main" };
 const WORKTREE = { mode: "worktree" as const, path: "/store/worktrees/t1", branch: "moxen/t1" };
@@ -21,14 +21,27 @@ describe("runtime instructions", () => {
         "\n\n" +
         PROGRESS_GUIDANCE +
         "\n\n" +
+        SHELL_GUIDANCE +
+        "\n\n" +
         INSTRUCTIONS_UPDATE_GUIDANCE +
         "\n\n" +
         UNTRUSTED_NOTE,
     );
     expect(RESEARCH_GUIDANCE).toContain("read the official documentation");
+    // The mistakes it exists for: an unquoted glob in zsh, GNU flags on BSD sed, a heredoc in fish.
+    expect(SHELL_GUIDANCE).toContain("--include='*.ts'");
+    expect(SHELL_GUIDANCE).toContain("sed -i ''");
+    expect(SHELL_GUIDANCE).toContain("fish is not POSIX");
     expect(buildRuntimeInstructions({ instanceId: "opencode/anthropic", env: LOCAL, userInstructions: ["  ", ""] })).toContain(
       "through the OpenCode harness.",
     );
+  });
+
+  it("explains the task notification only to a session that has the delegation tools and is not itself delegated", () => {
+    expect(buildRuntimeInstructions({ instanceId: CLAUDE, env: LOCAL, delegationTools: true })).toContain(TASK_NOTIFICATION_GUIDANCE);
+    expect(buildRuntimeInstructions({ instanceId: CLAUDE, env: LOCAL })).not.toContain("<task-notification>");
+    const delegation = { parentTitle: "Parent", baseBranch: null };
+    expect(buildRuntimeInstructions({ instanceId: CLAUDE, env: LOCAL, delegationTools: true, delegation })).not.toContain("<task-notification>");
   });
 
   it("tells an OpenCode session to run its subagents in the background, and no other harness", () => {

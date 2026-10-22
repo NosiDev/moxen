@@ -28,7 +28,7 @@ describe("Claude side questions", () => {
       forkSession: true,
       persistSession: false,
       tools: [],
-      maxTurns: 1,
+      maxTurns: 3,
       model: "claude-opus-5",
     });
     // Told it has no tools, so it answers rather than writing fake tool calls.

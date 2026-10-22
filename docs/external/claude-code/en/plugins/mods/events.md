@@ -131,9 +131,14 @@ on('tool.call', { tool: ['Edit', 'Write'] }, async ($, e, next) => {
 
 After Claude edits or writes an `.mdx` file, a dim line in the transcript names the file. Nothing is logged for another kind of file, or for a call that was refused or failed. Claude's view of the call doesn't change, because the hook returns the result it received.
 
-To change a call, pass changed arguments to `next`. To retry a call, call `next(e)` again: a hook that sees `isError` on the first result can run the tool a second time and return that result. To answer a call yourself, return an object with a `result` field, such as `{ result: 'Skipped by my-mod' }`, without calling `next`. When you do that, no permission prompt appears and the tool doesn't run, so the result you return is all Claude learns about what happened.
+Your hook can also change a call, retry it, answer it itself, or withhold its result:
 
-Hooks in your organization's [managed settings](/docs/en/server-managed-settings) run before any mod's `tool.call` hook, and a block from one of them is final.
+* **Change the call**: pass changed arguments to `next`.
+* **Retry the call**: call `next(e)` again. A hook that sees `isError` on the first result can run the tool a second time and return that result.
+* **Answer the call yourself**: return an object with a `result` field, without calling `next`, and for a built-in tool, give `result` the shape that tool's own result has in [the types for your build](/docs/en/plugins/mods/create#get-the-types-for-your-build). No permission prompt appears and the tool doesn't run, so the result you return is all Claude learns about what happened.
+* **Withhold the result from Claude**: return `{ deny: reason }` after `await next(e)`. Claude reads your reason in place of what `next` returned. When the tool ran, the deny keeps its result from Claude and undoes nothing the tool did. When the tool ran and succeeded, the reason follows a note such as `Bash ran, and a plugin withheld its result:`.
+
+Hooks in your organization's [managed settings](/docs/en/server-managed-settings) run before any mod's `tool.call` hook. When a managed hook blocks the call, no mod's `tool.call` hook runs for that call.
 
 #### Hold a tool call until the user decides
 
@@ -176,15 +181,20 @@ Keep the wait inside a mods API call such as `$.ui.ask`, because that time doesn
 
 #### Approve or refuse a tool call before the user is asked
 
-To decide whether a tool call may run, handle [`tool.check`](/docs/en/plugins/mods/reference#tools), the event where Claude Code makes that decision. It fires after the permission rules and the settings hooks have decided, and `next(e)` resolves to their decision: `allow`, `ask`, or `deny`. Your hook returns that decision or a different one. `e.input` holds the tool's arguments, such as `command` for Bash.
+To decide whether a tool call may run, handle [`tool.check`](/docs/en/plugins/mods/reference#tools), the event where Claude Code makes that decision.
 
 For a fixed command or path, use a [permission rule](/docs/en/permissions#permission-rule-syntax) such as `Bash(npm test)`, which takes no code. Handle `tool.check` when the decision depends on what's true at that moment, such as the current Git branch or a value another hook recorded.
+
+* **What to return**: to decide the call yourself, return an object of your own, such as `{ decision: 'allow' }` or `{ decision: 'deny', reason }`. To leave the decision alone, return what `await next(e)` gives you.
+* **What `await next(e)` gives you**: Claude Code's own decision, as an object whose `decision` is `allow`, `ask`, or `deny`. No permission prompt appears while `next(e)` runs.
+* **Arguments**: `e.input` holds the tool's arguments, such as `command` for Bash
+* **When `tool.check` fires**: after the [`PreToolUse` hooks](/docs/en/hooks#pretooluse) run, and before the permission prompt, [auto mode](/docs/en/permission-modes#eliminate-prompts-with-auto-mode)'s classifier, or a [`PermissionRequest`](/docs/en/hooks#permissionrequest) hook
 
 This hook refuses `git push` while the current branch is `main`:
 
 ```javascript theme={null}
 on('tool.check', { tool: 'Bash' }, async ($, e, next) => {
-  // What the permission rules and settings hooks decided: 'allow', 'ask', or 'deny'
+  // Claude Code's own decision
   const decided = await next(e)
   if (!e.input.command.includes('git push')) return decided
   const branch = await $.process.run(['git', 'branch', '--show-current'])
@@ -193,11 +203,45 @@ on('tool.check', { tool: 'Bash' }, async ($, e, next) => {
 })
 ```
 
-On `main`, the hook returns `deny`, even when a rule allows `git push`. On another branch, and for other commands, the call gets the decision it would get without the mod.
+The hook denies `git push` on `main` and passes every other call through:
+
+* **On `main`**: the hook returns `deny`, even when a rule allows `git push`
+* **On another branch, and for other commands**: the call gets the decision it would get without the mod
 
 The hook matches the text of the command, so treat it as a reminder for Claude. To block pushes to `main` for everyone, protect the branch on your Git host.
 
-A hook can return `allow`, `ask`, or `deny`, so it can also approve a call that a `PreToolUse` hook outside managed settings blocked. [Extend permissions with hooks](/docs/en/permissions#extend-permissions-with-hooks) lists which decisions hold over a mod.
+> [!NOTE]
+>
+> A `tool.check` hook can also return `allow` or `ask`. In [plan mode](/docs/en/permissions#hook-approvals-in-plan-mode), for a call that isn't read-only, such as a file edit, your hook can tighten the decision `next(e)` returns but can't loosen it. For the permission rules and `PreToolUse` hook decisions your hook's `allow` can't replace, see [Extend permissions with hooks](/docs/en/permissions#precedence-among-rules-hooks-and-mods).
+
+#### Check whether a tool call is read-only
+
+In a [`tool.check`](#approve-or-refuse-a-tool-call-before-the-user-is-asked) hook, `e.isReadOnly` is `true` when the tool reports the call as read-only. Otherwise the field is absent, not `false`. `e.isReadOnly` requires Claude Code v2.1.304 or later.
+
+Some tools, such as Read, Grep, Glob, and WebSearch, report every call as read-only. Bash and MCP tools report a call as read-only in these cases:
+
+* **Bash**: the command passes Claude Code's built-in [read-only command check](/docs/en/permissions#read-only-commands)
+* **An MCP tool**: the server sets the tool's `readOnlyHint` annotation to `true`
+
+The value is the tool's own report, so don't approve a call on this field alone. For example, WebFetch and Agent calls report as read-only, though [WebFetch](/docs/en/tools-reference#webfetch-tool-behavior) requests a URL and [Agent](/docs/en/tools-reference#agent-tool-behavior) starts a subagent that runs tools of its own.
+
+This hook returns an `ask` for every `mcp__github__` call that isn't read-only and wasn't already denied:
+
+```javascript theme={null}
+on('tool.check', { tool: /^mcp__github__/ }, async ($, e, next) => {
+  const decided = await next(e)
+  // Read-only calls and denied calls pass through unchanged
+  if (e.isReadOnly || decided.decision === 'deny') return decided
+  return { decision: 'ask', reason: 'This tool can change the GitHub repository' }
+})
+```
+
+#### Filter a `tool.check` hook by whether the call is read-only
+
+To limit which calls your hook handles by [`e.isReadOnly`](#check-whether-a-tool-call-is-read-only), use the [matcher](#filter-which-events-a-hook-handles) for read-only calls and the hook body for the rest:
+
+* **Read-only calls only**: add `isReadOnly: true` to the matcher, as in `on('tool.check', { tool: 'Bash', isReadOnly: true }, hook)`
+* **Calls that aren't read-only**: test `e.isReadOnly` in the hook body, as the [`mcp__github__` example](#check-whether-a-tool-call-is-read-only) does. If you put `isReadOnly: false` in a matcher, your hook never runs.
 
 ### Rewrite or add to a prompt
 
@@ -205,7 +249,7 @@ A `prompt.submit` hook sees each prompt before the turn starts, so it can rewrit
 
 | To do this | Return this |
 | :- | :- |
-| Rewrite the prompt. The message in the transcript shows the new text. | `next({ ...e, text: newText })` |
+| Rewrite the prompt. The transcript and your [prompt history](/docs/en/interactive-mode#command-history) show the new text. | `next({ ...e, text: newText })` |
 | Add text only Claude reads, after the prompt | `next({ ...e, context: [...(e.context ?? []), extraText] })` |
 | Stop the prompt from being sent | `{ drop: 'the reason' }` |
 
@@ -225,7 +269,9 @@ on('prompt.submit', async ($, e, next) => {
 
 When you send a prompt such as `open a PR for this change`, your message looks the same in the transcript, and Claude also reads a line such as `Current branch: feature/auth` after it. A prompt that doesn't mention a pull request goes through unchanged, and `git` doesn't run.
 
-[Other events](/docs/en/plugins/mods/reference#prompts-and-what-claude-reads) cover the rest of what Claude reads: `prompt.section` for each section of the system prompt, `prompt.context` for the context sent with the first message, and `skill.prompt` for a skill's text. Text from these hooks that changes between requests [invalidates the prompt cache](/docs/en/prompt-caching).
+To stop a prompt, return `{ drop: 'the reason' }` without calling `next`. The text goes back into the user's prompt input, and they see `Prompt dropped by a hook:` followed by your reason, so address the reason to them. If your hook returns a `drop` after its `next(e)` call let the prompt through, the turn still runs, and the hook [fails](#handle-a-hook-that-fails) with a message that includes `a drop after its next() was answered`.
+
+[Other events](/docs/en/plugins/mods/reference#prompts-and-what-claude-reads) cover the rest of what Claude reads: `prompt.section` for each section of the system prompt, `prompt.context` for the context sent with the first message, and `skill.prompt` for a skill's text. Text from these hooks that changes between requests [invalidates the prompt cache](/docs/en/prompt-caching). In a `skill.prompt` hook, you can also read [which plugin or file the skill came from](/docs/en/plugins/mods/reference#skill-prompt-fields).
 
 ### Follow a turn
 
@@ -257,9 +303,9 @@ Claude's response streams to the screen as it does without the mod. After each r
 
 `result.usage` holds the token counts the Claude API reports for a request, plus the `model` that answered: `input_tokens`, `output_tokens`, `cache_read_input_tokens`, and `cache_creation_input_tokens`. The hook runs for subagents' requests too, so check `e.agentId` when you want only the main conversation.
 
-<h3 id="hook-the-settings-hook-events">
-  Handle the settings hook events
-</h3>
+To see the tool calls that the API ran itself during the request, such as calls to the [advisor tool](/docs/en/advisor), read `result.serverToolUses`. Claude Code doesn't run these calls, so no `tool.call` or `tool.check` hook fires for them. The field is absent when the response has no such calls, and it requires Claude Code v2.1.290 or later.
+
+### Handle the settings hook events
 
 Settings hooks are the command, HTTP, prompt, and agent hooks you configure in settings files. Each [settings hook event](/docs/en/hooks#hook-events), such as `Stop`, `SessionEnd`, or `PostToolUse`, is also an event named `classic.` followed by the settings hook event's name, such as `classic.Stop`. `e` is the JSON a settings hook receives on stdin, including `transcript_path`.
 
@@ -297,10 +343,10 @@ Among the mods you install, a mod runs before the mods it lists under `dependenc
 
 The `PreToolUse` hooks configured in settings files also run during a tool call, at fixed points in the chain of mods:
 
-* **`PreToolUse` hooks from managed settings**: run before the first mod's `tool.call` hook, and a block from one of them is final, so no mod sees the call.
+* **`PreToolUse` hooks from managed settings**: run before the first mod's `tool.call` hook. When a managed hook blocks the call, no mod's `tool.call` hook runs for that call.
 * **`PreToolUse` hooks from every other settings file and from plugins' `hooks/hooks.json`**: run after the last mod calls `next`, as part of Claude Code's own behavior. A mod that answers `tool.call` without calling `next` keeps them from running, and a mod that calls `next` sees their decision in the result it returns.
 
-[`tool.check`](#approve-or-refuse-a-tool-call-before-the-user-is-asked) fires after those hooks and the permission rules have decided, so a hook on it can approve a call that a hook in the second group blocked.
+[`tool.check`](#approve-or-refuse-a-tool-call-before-the-user-is-asked) fires after the `PreToolUse` hooks have run. For the permission rules and `PreToolUse` hook decisions a `tool.check` hook's `allow` can't replace, see [Extend permissions with hooks](/docs/en/permissions#precedence-among-rules-hooks-and-mods).
 
 ### Handle a hook that fails
 
@@ -311,17 +357,33 @@ A hook that fails doesn't break the session, and you can decide what happens ins
 
 One line names the mod, the event, and the reason, such as `my-mod: tool.call hook skipped: threw Error: boom`. Where you read it depends on the session, as [Find out why a mod does nothing](/docs/en/plugins/mods/troubleshoot#find-out-why-a-mod-does-nothing) lists. A `ui.render` hook whose drawing doesn't validate is reported differently, as [Build a tree from elements](/docs/en/plugins/mods/interface#build-a-tree-from-elements) describes.
 
-To make a hook that blocks calls fail closed, add a `.catch` error handler that answers in its place. Here, `guard` is your hook function:
+To make a hook that blocks calls fail closed, add a `.catch` error handler that answers in its place. Here, `guard` is your hook function, and the handler tests [`next.called`](/docs/en/plugins/mods/reference#the-hook-function) to tell whether `guard` had already called `next` when it failed:
 
 ```javascript theme={null}
 // on returns a registration, and .catch attaches a handler to that one hook
 on('tool.call', { tool: 'Bash' }, guard).catch(async ($, e, next) => {
-  // next.error.kind is 'throw' or 'timeout', which says how guard failed
+  // guard had already called next, so return what came back
+  if (next.called) return next(e)
+  // next.error.kind says why the handler was asked, such as 'throw' or 'timeout'
   return { deny: 'The command guard failed, so this command was not run: ' + next.error.kind }
 })
 ```
 
-While `guard` works, the handler never runs. When `guard` throws or times out on a Bash call, Claude Code calls the handler with the same event. The handler returns `{ deny }`, so the command doesn't run, and Claude reads the text with `throw` or `timeout` at the end. Without the handler, Claude Code would skip `guard` and run the command. The handler has a shorter [time limit](/docs/en/plugins/mods/reference#limits) of its own.
+When `guard` throws or times out on a Bash call, Claude Code calls the handler with the same event:
+
+* **`guard` failed before it called `next`**: the command doesn't run, and Claude reads the `deny` text with the kind at the end
+* **`guard` failed after it called `next`**: the handler's `next(e)` resolves to the result that `guard`'s call produced without running the command again, and Claude reads that result
+
+The handler has a shorter [time limit](/docs/en/plugins/mods/reference#limits) of its own. If the handler itself throws or times out, Claude Code skips the hook as if it had no handler. When `guard` hadn't called `next`, the command then goes on as it would without the mod.
+
+The same handler shape fits a guard on `prompt.submit` or `config.set`. When `next.called` is false, return the refusal that the [events reference](/docs/en/plugins/mods/reference#events) lists for that event: `{ drop: 'the reason' }` for `prompt.submit`, `{ deny: 'the reason' }` for `config.set`.
+
+At `tool.check` and `plugin.register`, a refusal returned after `next` resolved still holds, so return it without testing `next.called`:
+
+* **`tool.check`**: return `{ decision: 'deny', reason: 'the reason' }`
+* **`plugin.register`**: return `{ refuse: 'the reason' }`, as [Refuse mods when your check fails](/docs/en/plugins/mods/admin#refuse-mods-when-your-check-fails) shows
+
+At `tool.call`, a `deny` returned after `next` resolved [withholds the result from Claude](#guard-or-change-a-tool-call).
 
 ## Next steps
 

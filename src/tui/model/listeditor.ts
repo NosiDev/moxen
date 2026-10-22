@@ -1,4 +1,6 @@
-import type { ListField, ListFieldView, ListItemView, SettingValue } from "../../core/configschema.js";
+import { numberLabel } from "./numberlabel.js";
+import { sliderLayout } from "./slider.js";
+import type { SettingEnds, ListField, ListFieldView, ListItemView, SettingValue } from "../../core/configschema.js";
 
 /**
  * Rows of the list editor (the harness profile editor), derived from the
@@ -17,7 +19,7 @@ export interface EditorOption {
 export const TEXT_OPTION = "\u0000text";
 
 export type FieldControl =
-  | { readonly kind: "pick"; readonly options: readonly EditorOption[] }
+  | { readonly kind: "pick"; readonly options: readonly EditorOption[]; readonly ends?: SettingEnds }
   | { readonly kind: "text"; readonly multiline: boolean }
   /** A key: typed into a masked input, kept in the OS keychain. */
   | { readonly kind: "secret" }
@@ -44,8 +46,22 @@ export type EditorRow =
   | { readonly kind: "addChild"; readonly path: string; readonly noun: string }
   | { readonly kind: "resolved"; readonly label: string; readonly value: string; readonly origin: string };
 
-function numberLabel(value: number): string {
-  return value >= 10_000 ? value.toLocaleString("en-US") : String(value);
+/** What a slider over a field's choices needs: the stops along the track, and the two actions beside it. */
+export interface SliderChoices {
+  readonly stops: readonly EditorOption[];
+  /** Back to the default (the `""` choice). */
+  readonly reset: EditorOption | undefined;
+  /** Type a value that is not a stop. */
+  readonly custom: EditorOption | undefined;
+}
+
+/** Numbers that fit along a track of `width` columns, or null when they are better listed. */
+export function sliderChoices(options: readonly EditorOption[], width: number): SliderChoices | null {
+  const stops = options.filter((option) => option.value !== "" && option.value !== TEXT_OPTION);
+  if (stops.length < 2 || stops.length > 8) return null;
+  if (!stops.every((option) => /^[\d.,]+[A-Za-z%]*$/.test(option.label))) return null;
+  if (!sliderLayout(stops.map((option) => option.label), width).fits) return null;
+  return { stops, reset: options.find((option) => option.value === ""), custom: options.find((option) => option.value === TEXT_OPTION) };
 }
 
 export function fieldControl(field: ListField, value: SettingValue): FieldControl {
@@ -55,9 +71,9 @@ export function fieldControl(field: ListField, value: SettingValue): FieldContro
     current === "" || options.some((entry) => entry.value === current) ? options : [{ value: current, label: current, description: "Set in the config file" }, ...options];
   switch (kind.type) {
     case "boolean":
-      return { kind: "pick", options: [{ value: "", label: "Not set" }, { value: "true", label: "On" }, { value: "false", label: "Off" }] };
+      return { kind: "pick", options: [{ value: "", label: "Default", description: "Not set here: what the description above says applies." }, { value: "true", label: "On" }, { value: "false", label: "Off" }] };
     case "enum":
-      return { kind: "pick", options: withCurrent([{ value: "", label: "Not set" }, ...kind.choices.map((choice) => ({ value: choice.value, label: choice.label, ...(choice.description ? { description: choice.description } : {}) }))]) };
+      return { kind: "pick", options: withCurrent([{ value: "", label: "Default", description: "Not set here: what the description above says applies." }, ...kind.choices.map((choice) => ({ value: choice.value, label: choice.label, ...(choice.description ? { description: choice.description } : {}) }))]) };
     case "integer":
     case "number": {
       if (kind.presets === undefined) return { kind: "text", multiline: false };
@@ -65,10 +81,11 @@ export function fieldControl(field: ListField, value: SettingValue): FieldContro
       return {
         kind: "pick",
         options: withCurrent([
-          { value: "", label: "Not set" },
+          { value: "", label: "Default", description: "Not set here: what the description above says applies." },
           ...kind.presets.map((preset) => ({ value: String(preset), label: `${numberLabel(preset)}${unit}` })),
           { value: TEXT_OPTION, label: "Another value…" },
         ]),
+        ...(kind.ends === undefined ? {} : { ends: kind.ends }),
       };
     }
     case "string":
@@ -88,7 +105,7 @@ function shownValue(field: ListField, view: ListFieldView | undefined): { shown:
   const effective = view?.effective;
   const kind = field.kind;
   const format = (raw: SettingValue): string => {
-    if (raw === undefined) return "Not set";
+    if (raw === undefined) return kind.type === "secret" ? "No key saved" : "Default";
     if (kind.type === "secret") return "Saved in the keychain";
     // A map or a list of words is shown on one line, however many it has.
     if (kind.type === "pairs") return String(raw).split("\n").map((line) => line.split("=")[0]).join(", ");
@@ -100,7 +117,7 @@ function shownValue(field: ListField, view: ListFieldView | undefined): { shown:
   };
   if (value !== undefined) return { shown: format(value), origin: null };
   if (effective !== undefined) return { shown: format(effective.value), origin: effective.origin };
-  return { shown: "Not set", origin: null };
+  return { shown: field.kind.type === "secret" ? "No key saved" : "Default", origin: null };
 }
 
 /** The editor's rows for one item: its fields under headings in the schema's order, nested lists as child rows. */
@@ -108,6 +125,7 @@ export function itemRows(fields: readonly ListField[], item: ListItemView): read
   const rows: EditorRow[] = [];
   let group: string | null = null;
   for (const field of fields) {
+    if (field.hidden === true) continue;
     const view = item.fields.find((entry) => entry.path === field.path);
     if (field.group !== group) {
       group = field.group;

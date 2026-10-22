@@ -103,10 +103,15 @@ The test passes because the hook's `reply` is the object under `value`, whose `t
 
 A stub for a mods API call returns an object with a `value` field, which holds what the call resolves to in your mod: `{ value: 7 }` makes `$.store.get` resolve to `7`. A stub for one of Claude Code's events, such as [`turn.step`](/docs/en/plugins/mods/reference#turns) or `tool.call`, returns that event's own result, such as `{ result: 'ok' }`. `$.session.send` and `$.prompt.fill` take their event's result too, as the table shows. [Look up what a stub returns](#look-up-what-a-stub-returns) shows which form each common name takes. These errors mean a stub is wrong or missing. A failed test's output includes a block headed `the engine reported:`, and each error appears there:
 
-* `returned neither { value } nor { deny }`: a stub for a mods API call returned a bare value
+* `returned neither { value } nor { deny }`: a stub for a mods API call returned a bare value, which fails the test
 * `no implementation for` followed by a name: your mod made that call and no stub answers it
 
-The kit also exports in-memory mocks that answer a whole namespace for you. `mock.clock(on)` answers [`$.clock`](/docs/en/plugins/mods/api#run-work-in-the-background), `mock.store(on, { count: 7 })` answers `$.store` from a store that starts with those entries, and `mock.env(on, { CI: 'true' })` answers `$.env.get` from those variables. `mock.clock` returns a mock clock that your test advances, so a test of a timer doesn't wait. `mock.store` returns nothing, so to check what your mod saved, write the two `store` stubs yourself as the [drawing test](#test-a-drawing) does.
+The kit also exports ready-made mocks for the clock, the store, environment variables, and rows appended to the conversation:
+
+* **`mock.clock(on)`**: answers [`$.clock`](/docs/en/plugins/mods/api#run-work-in-the-background) and returns a mock clock that your test advances, so a test of a timer doesn't wait.
+* **`mock.store(on, { count: 7 })`**: answers `$.store` from a store that starts with those entries. It returns nothing, so to check what your mod saved, write the two `store` stubs yourself as the [drawing test](#test-a-drawing) does.
+* **`mock.env(on, { CI: 'true' })`**: answers `$.env.get` from those variables.
+* **`mock.session(on)`**: returns a mock session whose `appended()` method lists the rows your mod added with [`$.session.append`](/docs/en/plugins/mods/reference#session), oldest first; it requires Claude Code v2.1.293 or later.
 
 ### Follow the test kit's rules
 
@@ -160,7 +165,7 @@ The test kit has a few rules of its own, and breaking one produces the errors ne
 
 ### Look up what a stub returns
 
-Every mods API call your mod makes in a test needs a stub that answers in Claude Code's place, except the few the kit answers itself: [`$.ui.invalidate`](/docs/en/plugins/mods/interface#redraw-when-something-changes) and [`$.state`](/docs/en/plugins/mods/interface#keep-state) calls. For `$.clock` calls, use `mock.clock(on)`, or your mod's `$.clock.now()` fails with `no implementation for clock.now`.
+Every mods API call your mod makes in a test needs a stub that answers in Claude Code's place, except the few the kit answers itself: [`$.ui.invalidate`](/docs/en/plugins/mods/interface#redraw-when-something-changes), [`$.state`](/docs/en/plugins/mods/interface#keep-state), and `$.session.append` calls. For `$.clock` calls, use `mock.clock(on)`, or your mod's `$.clock.now()` fails with `no implementation for clock.now`.
 
 This table lists the ones mods use most. The first column is the call your mod makes or the event it passes on with `next(e)`. The second is the function to pass to `on` under that name, so the `$.store.get` row becomes `on('store.get', ($, e) => ({ value: saved.get(e.key) }))`. A `'...'` in a stub marks text for you to fill in:
 
@@ -182,6 +187,7 @@ This table lists the ones mods use most. The first column is the call your mod m
 | `prompt.fill` | `() => ({ isFilled: true })` |
 | `$.prompt.read` | `() => ({ value: { text: '...', cursor: 0 } })` |
 | `$.ui.copy` | `() => ({ value: { isCopied: true } })` |
+| `$.ui.notify` | `() => ({ value: { isSent: true, channel: 'terminal_bell' } })`. The text is `e.text` and the title is `e.title`. |
 | `$.session.messages` | `() => ({ value: [{ role: 'assistant', text: '...', toolUses: [] }] })` |
 | `$.session.id`, `$.agent.list` | `() => ({ value: 'abc123' })`, `() => ({ value: [] })` |
 | `session.send` | `() => ({ isDelivered: true })`. `e.to` arrives as a string even when your mod passed `{ sessionId }`. |
@@ -189,6 +195,8 @@ This table lists the ones mods use most. The first column is the call your mod m
 | `ui.render` | `() => ({ type: 'Text', props: {}, children: ['...'] })` |
 
 `expect` has the assertions `toBe`, `toEqual`, `toMatch`, `toMatchObject`, `toContain`, `toBeDefined`, `toBeUndefined`, and `toThrow`, and `.not` before any of them.
+
+When an `expect` fails inside a stub or hook that you passed to `on` as a plain function rather than an async generator, the test fails. The engine skips that hook, and the failure output names it, such as `in the test's store.set hook`.
 
 ## Test a timer
 
@@ -313,9 +321,7 @@ Each method resolves after your handler has finished, so you can check the resul
 
 A drawing test checks the tree your hook returns and whether it's valid for that app. It doesn't check how the app paints it, so look at a new layout in a real session as well.
 
-<h3 id="test-a-drawing-after-clear">
-  Test a drawing after `/clear`
-</h3>
+### Test a drawing after `/clear`
 
 Each test starts with every `$.state` value at its default, which is how `/clear` leaves them. To test what your mod does next, skip `session.start`, fire `classic.SessionStart` with `source: 'clear'`, and check what your mod draws.
 
@@ -340,9 +346,7 @@ test('the saved count comes back after /clear', async ($, on) => {
 
 The test passes when your `classic.SessionStart` hook has copied the stored `7` into `$.state` before the pane draws. Without that hook in your module, the pane draws `Count: 0`, `find` returns `undefined`, and the test fails at `toBeDefined`.
 
-<h2 id="test-a-mod-that-judges-other-mods">
-  Test a policy mod
-</h2>
+## Test a policy mod
 
 A mod your organization lists in [`prependPlugins`](/docs/en/plugins/mods/admin) can refuse another mod before it loads. To test one, set your mod's tier and give the test a second mod for yours to allow or refuse:
 

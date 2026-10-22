@@ -10,12 +10,12 @@ Hosting a marketplace means putting your `marketplace.json` catalog where other 
 
 This page is for the person who operates a marketplace.
 
-<Note>
-  These cases are covered on other pages:
-
-  * **You haven't written the catalog file yet**: start with [Create a marketplace](/docs/en/plugins/create-marketplace)
-  * **You're an admin requiring, restricting, or pre-installing marketplaces across your organization's machines**: read [Manage plugins for your organization](/docs/en/plugins/org)
-</Note>
+> [!NOTE]
+>
+> These cases are covered on other pages:
+>
+> * **You haven't written the catalog file yet**: start with [Create a marketplace](/docs/en/plugins/create-marketplace)
+> * **You're an admin requiring, restricting, or pre-installing marketplaces across your organization's machines**: read [Manage plugins for your organization](/docs/en/plugins/org)
 
 Start with [Host your marketplace](#host-your-marketplace) to pick a host and the command your users run. Read [Keep users up to date](#keep-users-up-to-date) before your first release. Read [Rename or remove a plugin](#rename-or-remove-a-plugin) before you change a plugin's `name`.
 
@@ -124,7 +124,9 @@ Users without a git-host account can add a marketplace you serve as a `marketpla
 These entry sources need no git account:
 
 * **`archive`**: a zip downloaded over HTTPS. Users need neither `git` nor an account, only network access to the URL. Requires Claude Code v2.1.224 or later. Pin each archive with `sha256` so Claude Code refuses a changed download. To send credentials with the download, see [Authenticate archive downloads](#authenticate-archive-downloads).
-* **A public git repository**: Claude Code clones a public `url` or `git-subdir` source over HTTPS without credentials when the entry gives an `https://` URL. For a `github` source, or a `git-subdir` source written as `owner/repo`, users without a GitHub SSH key set `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1`.
+* **A public git repository**: Claude Code clones a public `url` or `git-subdir` source over HTTPS without credentials when the entry gives an `https://` URL. For a `github` source, or a `git-subdir` source written as `owner/repo`, tell users without a GitHub SSH key to set `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1`.
+
+Keep `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` in your instructions even if `claude plugin install` succeeds without it from the shell on a machine with no SSH key. For a `github` source, that command can fall back to HTTPS on its own, printing `SSH not configured, cloning via HTTPS`. Installs from `/plugin` inside a session and plugin updates don't fall back, so without the variable they fail for users who have no GitHub SSH key.
 
 For a team on one network, a `directory` marketplace on a shared filesystem also works without git accounts. Users need only read access to the path.
 
@@ -361,24 +363,26 @@ A `headersHelper` command doesn't run, or headers from `headers` or from the com
 
 ### How users accept a headersHelper command
 
-A user accepts a plugin entry's command each time they install or update that one plugin by itself. They do that from the plugin's own view in `/plugin`, or with `claude plugin install` or `claude plugin update`. Claude Code shows the command and the archive URL, and runs the command only after the user accepts.
+A user accepts a plugin entry's command each time they install or update that one plugin by itself. Claude Code shows the command and the archive URL, and runs the command only after the user accepts.
+
+Users can install or update the plugin inside a Claude Code session in a terminal, in their shell with no session running, or in the VS Code extension:
+
+* **Terminal session**: from the plugin's own view in `/plugin`.
+* **Shell**: with `claude plugin install` or `claude plugin update`.
+* **VS Code extension**: from the [**Manage plugins** dialog](/docs/en/vs-code#manage-plugins), with version 2.1.290 or later of the extension.
 
 In a non-interactive shell, pass [`--yes`](/docs/en/plugins/cli-reference#plugin-install) to accept the command. To accept only the command that a previous `--json` run displayed, pass [`--accept-command`](/docs/en/plugins/cli-reference#plugin-install) with the `sha256` the run reported.
 
-Claude Code runs only the command it showed, for the archive URL it showed. If the entry's command or archive URL changed in between, Claude Code refuses the install or update. A change in the query string alone doesn't count.
+Claude Code runs only the command it showed, for the archive URL it showed. If the entry's command or archive URL changed in between, Claude Code refuses the install or update. A change in the query string alone doesn't count, except in the VS Code extension or with `--accept-command`.
 
-<h3 id="installs-and-updates-that-refuse-the-command-instead-of-asking">
-  Installs and updates that refuse a command instead of asking
-</h3>
+### Installs and updates that refuse a command instead of asking
 
 On any operation other than a single-plugin install or update, Claude Code neither runs an entry's command nor downloads its archive. The plugin stays at its installed version or stays uninstalled, and the user sees one of these results:
 
 * **Installing several plugins at once, from a plugin suggestion, or as another plugin's dependency**: Claude Code refuses the plugin that has the command and directs the user to that plugin's own view in `/plugin`. The other plugins in a bulk install still install. A plugin that depends on the refused plugin fails to install until the user installs the refused plugin by itself.
 * **Background auto-update, or session start for a plugin whose archive was never downloaded**: Claude Code lists the plugin in the `/plugin` Errors tab so the user knows to install or update it themselves.
 
-<h3 id="when-a-marketplace-url-sources-command-runs">
-  When a marketplace `url` source's command runs
-</h3>
+### When a marketplace `url` source's command runs
 
 You declare a marketplace `url` source's `headersHelper` in a settings file, such as an [`extraKnownMarketplaces`](/docs/en/settings-reference#extraknownmarketplaces) entry, rather than in the catalog the marketplace publishes. Claude Code therefore doesn't ask the user to accept it on each install or update. Instead, the settings file that declares it decides when Claude Code runs it:
 

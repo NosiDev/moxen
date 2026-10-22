@@ -14,7 +14,14 @@ credentials, only whether a login exists.
 - A **project** maps folders to stored defaults (default model and more) in
   `<storeRoot>/projects.json`.
 - Delegated work runs in a **worktree**: its own git checkout, so an agent
-  works on its own copy of the code.
+  works on its own copy of the code. Its branch is `moxen/<title>`.
+  Archiving or deleting the thread removes the checkout (gitignored build
+  output included, so they do not pile up) and keeps the branch; a checkout
+  with uncommitted work is left alone. The running server also tidies up
+  after threads archived for `branchPruneDays` (14 by default, 0 never):
+  a `moxen/…` branch already merged into the project's branch is deleted,
+  and its copy on `origin` too when it was pushed and is the same commit.
+  A branch with unmerged commits is never deleted.
 
 ## How it runs
 

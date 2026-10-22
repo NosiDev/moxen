@@ -15,20 +15,21 @@ import { BackgroundTasksModal } from "../features/taskspanel/backgroundtasksmoda
 import { SettingsModal } from "../features/settings/settingsmodal.js";
 import { GitFooter, GitTab } from "../features/gitpanel/gitpanel.js";
 import { SubagentBar } from "../features/subagentview/subagentbar.js";
-import { describeScheduled, formatScheduleInput, parseScheduleInput } from "../model/schedule.js";
+import { describeScheduled } from "../model/schedule.js";
 import { subagentRun, subagentState, subagentTitle, useSubagentView } from "../features/subagentview/useSubagentView.js";
 import { useGitPanel } from "../features/gitpanel/useGitPanel.js";
 import { useProviderVersions } from "../features/settings/useProviderVersions.js";
-import { uiFromSnapshot, useSettings } from "../features/settings/useSettings.js";
-import { PickerModal, type PickerBody } from "../features/pickers/pickermodal.js";
+import { compactFromSnapshot, handoffOverridesFromSnapshot, uiFromSnapshot, useSettings } from "../features/settings/useSettings.js";
+import { PickerModal, type PickerBody, type PickerSlider } from "../features/pickers/pickermodal.js";
 import { useThreadSearch } from "../features/search/useThreadSearch.js";
+import { DateTimeModal } from "../ui/datetimemodal.js";
 import { ModalShell } from "../ui/modalshell.js";
 import { RenameModal } from "../ui/renamemodal.js";
 import { AnswerPanel } from "../features/answerpanel/answerpanel.js";
 import { PermissionPanel } from "../features/permissionpanel/permissionpanel.js";
 import { usePermissionFlow } from "../features/permissionpanel/usePermissionFlow.js";
 import { dispatchErrorMessage } from "../../core/errors.js";
-import type { ModelSelection, RuntimeMode, UiConfig } from "../../core/types.js";
+import type { ModelSelection, ProvidersConfig, RuntimeMode, UiConfig } from "../../core/types.js";
 import { compatibleRuntimeMode } from "../../core/catalog/permissions.js";
 import { offerableModels, offerableProviders } from "../../core/catalog/summary.js";
 import {
@@ -41,7 +42,8 @@ import {
 } from "../../core/attachments.js";
 import type { ImageAttachmentUpload } from "../../core/attachments.js";
 import { clipboardFileName } from "../model/hostClipboard.js";
-import { turnModelSelection } from "../model/display.js";
+import { defaultEffortId, describeEffort, isEffortDescriptor, modelRowDetail, turnModelSelection } from "../model/display.js";
+import { configuredDefaultModel } from "../model/settings.js";
 import { formatContextUsage, formatTokenCount, groupTurns } from "../model/turns.js";
 import { waitSpans } from "../model/waits.js";
 import { markModalDismissed } from "../model/modalDismiss.js";
@@ -54,7 +56,7 @@ import { bootLoadingStage, isBootReady } from "../model/readiness.js";
 import { HoverButton } from "../ui/hoverbutton.js";
 import { openExternal } from "../../core/infra/platformOpen.js";
 import { formatDuration } from "../model/turns.js";
-import { autoHandoffState, DEFAULT_AUTO_HANDOFF_MODE, DEFAULT_AUTO_HANDOFF_PERCENT } from "../model/autohandoff.js";
+import { autoHandoffState, compactFromConfig, handoffOverridesFromConfig, resolveCompact, resolveHandoff, type HandoffOverrides } from "../model/autohandoff.js";
 import { handOffTarget, openRequestPrompt, requestNoun } from "../model/gitpanel.js";
 import { renderMessage } from "../model/message.js";
 import { copiedAttachments, copiedToast, copyPrompt, matchCopy, uniqueName } from "../model/copystash.js";
@@ -89,6 +91,7 @@ import {
   TOAST_COLOR,
   TOAST_INSET,
   TOAST_STEP,
+  SCHEDULE_PANEL_HEIGHT,
 } from "./constants.js";
 import { clock, launchTarget, scrollPane } from "./utils.js";
 import { useTasksPanel } from "../features/taskspanel/useTasksPanel.js";
@@ -105,7 +108,7 @@ import { useThreadNotifications } from "./hooks/useThreadNotifications.js";
 import { useAnswerFlow } from "../features/answerpanel/useAnswerFlow.js";
 import { useSidebar } from "../features/sidebar/useSidebar.js";
 import { useDiffPanel } from "../features/diffpanel/useDiffPanel.js";
-import { ActionText, AgentsTab, BackgroundTab, ContextTab, DiffEmptyTab, SidePanelFrame, SideTabBar, TAB_LABEL as SIDE_TAB_LABEL } from "../features/sidepanel/sidepanel.js";
+import { ActionText, AgentsTab, BackgroundTab, InfoTab, type DelegatedInfo, ContextTab, DiffEmptyTab, SidePanelFrame, SideTabBar, TAB_LABEL as SIDE_TAB_LABEL } from "../features/sidepanel/sidepanel.js";
 import { useContextBreakdown, usePlanUsage, useSidePanel } from "../features/sidepanel/useSidePanel.js";
 import { agentThreads, effectiveContextBreakdown, nativeSubagents, planUsageGauges, type SideTab } from "../model/sidepanel.js";
 import { useComposer } from "../features/composer/useComposer.js";
@@ -117,6 +120,13 @@ import type { PickerName } from "../features/pickers/pickerTypes.js";
 import type { ClientApi } from "../../server/api.js";
 
 
+/** A path as the user would type it: their home directory as `~`. */
+function withHomeAsTilde(target: string | null): string | null {
+  const home = process.env.HOME;
+  if (target === null || !home || home === "/") return target;
+  return target === home ? "~" : target.startsWith(`${home}/`) ? `~${target.slice(home.length)}` : target;
+}
+
 export function App({
   client,
   onQuit,
@@ -125,6 +135,7 @@ export function App({
   launchView,
   setTerminalTitle,
   ui: launchUi,
+  providers: launchProviders,
 }: {
   client: ClientApi;
   onQuit: () => void;
@@ -144,6 +155,8 @@ export function App({
    * config they are not re-read per operation — a restart applies them.
    */
   ui?: UiConfig;
+  /** The providers' own settings at launch: only their hand-off overrides are read, until the settings page loads a fresher snapshot. */
+  providers?: ProvidersConfig;
 }) {
   const { width, height } = useTerminalDimensions();
   const [shell, setShell] = useState<ShellState>(emptyShellState);
@@ -201,12 +214,14 @@ export function App({
   // Reads on open and writes through the server; see `useSettings`. The
   // snapshot outlives the page, so once it exists the app draws from it:
   // a `ui.*` edit applies on the spot instead of after a restart.
-  const settings = useSettings(client, picker === "settings");
+  const settings = useSettings(client, picker === "settings" || picker === "model");
   // Each provider's install on the settings page, and the updaters behind the palette rows and the page's buttons;
   // the versions are read again whenever an update ends.
   const providerVersions = useProviderVersions(client, picker === "settings");
   const providerUpdates = useProviderUpdates(client, toasts.push, providerVersions.reload);
   const ui = uiFromSnapshot(settings.snapshot) ?? launchUi;
+  const handoffOverrides: HandoffOverrides = handoffOverridesFromSnapshot(settings.snapshot) ?? handoffOverridesFromConfig(launchProviders);
+  const compactSettings = compactFromSnapshot(settings.snapshot) ?? compactFromConfig(launchProviders);
   const [pickerFilter, setPickerFilter] = useState("");
   /** Where esc/backdrop returns focus after the command palette closes. */
   const [paletteReturnFocus, setPaletteReturnFocus] = useState<"chat" | "composer" | "diff">("chat");
@@ -492,6 +507,7 @@ export function App({
     setThreadState,
     setFocus,
     setError,
+    hideBinary: ui?.hideBinaryDiffs !== false,
   });
   /** The right-hand panel: the Diff tab follows the diff panel, the others open here. */
   const sidePanel = useSidePanel(diffPanel.expandedTurn !== null);
@@ -1111,11 +1127,29 @@ export function App({
     [shell.threads, openThreadId, now, providers],
   );
   const subagentRows = useMemo(() => nativeSubagents(threadState.activities), [threadState.activities]);
+  // A delegated thread has no agents of its own to list; its tab tells about the task instead.
+  const delegatedInfo = useMemo((): DelegatedInfo | null => {
+    const parentId = selected?.parentThreadId;
+    if (selected === null || parentId === undefined) return null;
+    const parent = shell.threads.find((thread) => thread.id === parentId);
+    const turn = selected.latestTurn ?? null;
+    const first = threadState.messages.find((message) => message.role === "user");
+    return {
+      task: first?.text.trim() || null,
+      parent: parent === undefined ? null : { threadId: parent.id, title: String(parent.title ?? parent.id) },
+      status: threadStatus(selected, now),
+      outcome: turn === null || turn.state === "running" ? null : turn.state,
+      startedAt: turn?.startedAt ?? turn?.requestedAt ?? null,
+      model: selected.modelSelection ? labelFor(selected.modelSelection).name : null,
+      branch: selected.branch ?? null,
+      worktreePath: withHomeAsTilde(selected.worktreePath ?? null),
+    };
+  }, [selected, shell.threads, threadState.messages, now, providers]); // eslint-disable-line react-hooks/exhaustive-deps
   const diffTurns = threadState.checkpoints.filter((row) => row.files.length > 0);
   const runningAgents = agentRows.filter((agent) => agent.status === "running").length + subagentRows.filter((agent) => agent.running).length;
   const sideBadges: Partial<Record<SideTab, string | null>> = {
     diff: diffTurns.length > 0 ? String(diffTurns.length) : null,
-    agents: runningAgents > 0 ? String(runningAgents) : agentRows.length + subagentRows.length > 0 ? String(agentRows.length + subagentRows.length) : null,
+    agents: delegatedInfo !== null ? null : runningAgents > 0 ? String(runningAgents) : agentRows.length + subagentRows.length > 0 ? String(agentRows.length + subagentRows.length) : null,
     context: contextUsageDisplay?.percent == null ? null : `${contextUsageDisplay.percent}%`,
     background: background.length > 0 ? String(background.length) : null,
   };
@@ -1210,13 +1244,14 @@ export function App({
       ? null
       : { key: resumeKey, usedTokens: threadState.contextUsage?.usedTokens ?? 0 };
   /** Past `ui.autoHandoffPercent` of the window the thread should move to a fresh one (MXN-22). */
-  const handoffMode = ui?.autoHandoff ?? DEFAULT_AUTO_HANDOFF_MODE;
+  const { mode: handoffMode, percent: handoffPercent, tokens: handoffTokens } = resolveHandoff(ui, handoffOverrides, effectiveModelSelection?.instanceId, effectiveModelSelection?.model);
   const handoffState =
     creating || openThreadId === null
       ? null
       : autoHandoffState({
           mode: handoffMode,
-          percent: ui?.autoHandoffPercent ?? DEFAULT_AUTO_HANDOFF_PERCENT,
+          percent: handoffPercent,
+          tokens: handoffTokens,
           usedTokens: threadState.contextUsage?.usedTokens ?? null,
           maxTokens: threadState.contextUsage?.maxTokens ?? null,
           hasReply: lastAssistantMessage !== null,
@@ -1226,6 +1261,26 @@ export function App({
           queuedMessages: queued.items.length,
         });
   const handoffReady = handoffState !== null && handoffState.blockers.length === 0;
+  /** Claude Code's own compaction is off: past the share, Moxen asks, or sends /compact itself. */
+  const compact = resolveCompact(compactSettings, effectiveModelSelection?.instanceId);
+  const compactState =
+    creating || openThreadId === null || compact === null
+      ? null
+      : autoHandoffState({
+          mode: compact.mode,
+          percent: compact.percent,
+          usedTokens: threadState.contextUsage?.usedTokens ?? null,
+          maxTokens: threadState.contextUsage?.maxTokens ?? null,
+          hasReply: lastAssistantMessage !== null,
+          turnRunning: sessionRunning,
+          runningSubthreads: 0,
+          runningBackgroundTasks: 0,
+          queuedMessages: 0,
+        });
+  const compactReady = compactState !== null && compactState.blockers.length === 0;
+  const compactKey = openThreadId === null || threadState.contextUsage === null ? null : `compact:${openThreadId}:${threadState.contextUsage.usedTokens}`;
+  const [dismissedCompactKey, setDismissedCompactKey] = useState<string | null>(null);
+  const compactSent = useRef<string | null>(null);
   const handoffKey = openThreadId === null ? null : `handoff:${openThreadId}`;
   const handoffAskedFor = useRef<Set<string>>(new Set());
   const [dismissedHandoffKey, setDismissedHandoffKey] = useState<string | null>(null);
@@ -1236,6 +1291,18 @@ export function App({
     usageBanner.continueInNewThread();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handoffMode, handoffReady, handoffKey]);
+  useEffect(() => {
+    // Once per thread until a compaction resets its usage: a refused or failed /compact is not retried in a loop.
+    const thread = openThreadId === null ? null : `compact:${openThreadId}`;
+    if (compact?.mode !== "auto" || !compactReady || thread === null || compactSent.current === thread) return;
+    compactSent.current = thread;
+    compactSession(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compact?.mode, compactReady, openThreadId]);
+  useEffect(() => {
+    // Below the line again (a compaction worked): the next climb may compact.
+    if (compactState === null) compactSent.current = null;
+  }, [compactState === null]);
   /** What waits over the composer, most urgent first; the banner pages between them. */
   const notices: Notice[] = [];
   if (usageBanner.banner !== null) {
@@ -1300,7 +1367,7 @@ export function App({
       key: handoffKey,
       glyph: "◈",
       glyphColor: COLOR.warn,
-      title: `Context ${handoffState.usedPercent}% full`,
+      title: `Context at ${handoffState.usedTokens.toLocaleString("en-US")} tokens${handoffState.usedPercent === null ? "" : ` (${handoffState.usedPercent}% full)`}`,
       detail: (
         <text fg={COLOR.dim} selectable={false}>
           {handoffState.blockers.length === 0
@@ -1311,6 +1378,23 @@ export function App({
       actions: [
         { label: "Hand off", fg: COLOR.accent, onClick: usageBanner.continueInNewThread },
         { label: "Not now", fg: COLOR.dim, hoverFg: COLOR.text, onClick: () => setDismissedHandoffKey(handoffKey) },
+      ],
+    });
+  }
+  if (compactState !== null && compactKey !== null && compactKey !== dismissedCompactKey && !(compact?.mode === "auto" && compactReady)) {
+    notices.push({
+      key: compactKey,
+      glyph: "◈",
+      glyphColor: COLOR.warn,
+      title: `Context at ${compactState.usedTokens.toLocaleString("en-US")} tokens${compactState.usedPercent === null ? "" : ` (${compactState.usedPercent}% full)`}`,
+      detail: (
+        <text fg={COLOR.dim} selectable={false}>
+          {compactState.blockers.length === 0 ? "  Compact it to make room, keeping the thread" : `  ${compact?.mode === "auto" ? "Compacting once" : "Waiting for"}: ${compactState.blockers.join(", ")}`}
+        </text>
+      ),
+      actions: [
+        { label: "Compact", fg: COLOR.accent, onClick: () => compactSession(() => setDismissedCompactKey(compactKey)) },
+        { label: "Not now", fg: COLOR.dim, hoverFg: COLOR.text, onClick: () => setDismissedCompactKey(compactKey) },
       ],
     });
   }
@@ -1642,7 +1726,7 @@ export function App({
             header: "Panels",
             rows: (["diff", "git", "context", "agents", "background"] as const).map((tab) => ({
               key: `panel:${tab}`,
-              label: `${sidePanelOpen && sidePanel.tab === tab ? "Hide" : "Show"} ${SIDE_TAB_LABEL[tab]} panel`,
+              label: `${sidePanelOpen && sidePanel.tab === tab ? "Hide" : "Show"} ${tab === "agents" && delegatedInfo !== null ? "Info" : SIDE_TAB_LABEL[tab]} panel`,
               ...(sideBadges[tab] == null ? {} : { meta: sideBadges[tab]! }),
               onPick: () => {
                 closePicker("chat");
@@ -1799,19 +1883,26 @@ export function App({
         ?.models.find((model) => model.slug === current?.model);
       const descriptors = catalogModel?.efforts ?? [];
       return {
-        kind: "list",
-        sections: descriptors.map((descriptor) => {
+        kind: "sliders",
+        sliders: descriptors.map((descriptor) => {
           const picked =
             (current?.options ?? []).find((option) => option.id === descriptor.id)?.value ?? descriptor.currentValue;
-          return {
+          const fallbackId = isEffortDescriptor(descriptor.id) ? defaultEffortId(descriptor.choices) : descriptor.choices.find((choice) => choice.isDefault === true)?.id;
+          const slider: PickerSlider = {
+            key: descriptor.id,
             header: descriptor.label,
-            rows: descriptor.choices.map((choice) => ({
-              key: `${descriptor.id}:${choice.id}`,
-              label: `${choice.label}${choice.isDefault === true ? " (default)" : ""}`,
-              selected: picked === choice.id,
-              onPick: () => pickEffort(descriptor.id, choice.id),
+            stops: descriptor.choices.map((choice) => ({
+              key: choice.id,
+              label: choice.label,
+              isDefault: choice.id === fallbackId,
+              ...(isEffortDescriptor(descriptor.id) ? { description: describeEffort(choice.id, choice.id === fallbackId) } : {}),
             })),
+            current: typeof picked === "string" ? picked : null,
+            // Reasoning levels run from quick to thorough; any other knob is just a row of choices.
+            ...(isEffortDescriptor(descriptor.id) ? { ends: { low: "Faster", high: "Smarter" }, effort: true, defaultCaption: `The default ${descriptor.label.toLowerCase()} for this model` } : {}),
+            onPick: (choiceId: string) => pickEffort(descriptor.id, choiceId),
           };
+          return slider;
         }),
       };
     }
@@ -1834,11 +1925,18 @@ export function App({
             ),
           }))
           .filter(({ models }) => models.length > 0)
-          .map(({ provider, models }) => ({
+          .map(({ provider, models }) => {
+            // "default" marks what a new thread starts on: the settings' choice when it names one of these models, else the catalog's.
+            const configured = configuredDefaultModel(settings.snapshot?.settings ?? [], provider.instanceId);
+            const pinned = configured !== undefined && models.some((model) => model.slug === configured) ? configured : undefined;
+            return { provider, models, pinned };
+          })
+          .map(({ provider, models, pinned }) => ({
             header: provider.displayName ?? provider.instanceId,
             rows: models.map((model) => ({
               key: `${provider.instanceId}:${model.slug}`,
               label: model.name,
+              ...modelRowDetail(model, pinned === undefined ? model.isDefault === true : model.slug === pinned),
               selected: current?.instanceId === provider.instanceId && current?.model === model.slug,
               onPick: () => pickModel({ instanceId: provider.instanceId, model: model.slug }),
             })),
@@ -1858,6 +1956,7 @@ export function App({
           rows: offered.map((model) => ({
             key: `${provider?.instanceId}:${model.slug}`,
             label: model.name,
+            ...modelRowDetail(model),
             selected: current?.model === model.slug,
             onPick: () => pickModel({ instanceId: provider!.instanceId, model: model.slug }),
           })),
@@ -1865,7 +1964,7 @@ export function App({
       ],
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [picker, providers, providersError, effectiveModelSelection, effectiveRuntimeMode, permissionChoices, creating, deleteArmed, deleteSupported, revertArmed, answerDraft, background, threadSearch]);
+  }, [picker, providers, providersError, settings.snapshot, effectiveModelSelection, effectiveRuntimeMode, permissionChoices, creating, deleteArmed, deleteSupported, revertArmed, answerDraft, background, threadSearch]);
 
   /** Wider and taller than a picker: the task browser shows commands and live output. */
   /**
@@ -1922,6 +2021,18 @@ export function App({
       top: Math.max(0, Math.floor((height - panelHeight) / 2)),
     };
   }, [width, height]);
+  /** The effort picker is a slider or two, not a list: a small panel sized to them. */
+  const effortGeometry = useMemo(() => {
+    const panelWidth = Math.min(72, Math.max(40, width - 6));
+    const sliders = pickerBody.kind === "sliders" ? Math.max(1, pickerBody.sliders.length) : 1;
+    const panelHeight = Math.min(Math.max(10, height - 6), 5 + 10 * sliders);
+    return {
+      width: panelWidth,
+      height: panelHeight,
+      left: Math.max(0, Math.floor((width - panelWidth) / 2)),
+      top: Math.max(0, Math.floor((height - panelHeight) / 2)),
+    };
+  }, [width, height, pickerBody]);
   const pickerGeometry = useMemo(() => {
     const panelWidth = Math.min(64, Math.max(30, width - 6));
     const panelHeight = Math.min(24, Math.max(10, height - 6));
@@ -2360,6 +2471,7 @@ export function App({
               onTab={showSideTab}
               onClose={closeSidePanel}
               focused={focus === "diff"}
+              {...(delegatedInfo === null ? {} : { agentsLabel: "Info" })}
               left={2}
               width={Math.max(10, diffPanel.diffWidth - 4)}
             />
@@ -2391,7 +2503,7 @@ export function App({
                 footer={
                   sidePanel.tab === "git" ? (
                     <GitFooter overview={gitPanel.overview} forge={gitPanel.forge} width={diffPanel.diffWidth} />
-                  ) : sidePanel.tab === "agents" ? (
+                  ) : sidePanel.tab === "agents" && delegatedInfo !== null ? null : sidePanel.tab === "agents" ? (
                     <text fg={COLOR.dim} selectable={false}>{`${agentRows.length} delegated · ${subagentRows.length} subagents`}</text>
                   ) : sidePanel.tab === "context" && effectiveBreakdown !== null ? (
                     <box style={{ flexDirection: "row", height: 1, flexShrink: 0 }} backgroundColor={SURFACE.panel}>
@@ -2443,6 +2555,8 @@ export function App({
                         .catch(() => undefined);
                     }}
                   />
+                ) : sidePanel.tab === "agents" && delegatedInfo !== null ? (
+                  <InfoTab info={delegatedInfo} now={now} onOpen={openThreadFromPanel} />
                 ) : sidePanel.tab === "agents" ? (
                   <AgentsTab
                     threads={agentRows}
@@ -2650,26 +2764,16 @@ export function App({
           }}
         />
       ) : picker === "schedule" ? (
-        <RenameModal
-          initialTitle={formatScheduleInput(new Date())}
-          title="Schedule message"
-          placeholder="2026-09-27 14:30"
-          hint="enter schedules · a date and time, 14:30, tomorrow 9:00, in 30m · esc cancels"
-          maxLength={40}
+        <DateTimeModal
           screenWidth={width}
           screenHeight={height}
           left={renameGeometry.left}
-          top={renameGeometry.top}
+          top={Math.max(0, Math.floor((height - SCHEDULE_PANEL_HEIGHT) / 2))}
           width={renameGeometry.width}
-          height={renameGeometry.height}
-          onSubmit={(text) => {
-            const parsed = parseScheduleInput(text, new Date());
-            if (parsed.at === null) {
-              toasts.push("schedule", "warn", parsed.error, COPY_TOAST_MS);
-              return;
-            }
+          height={SCHEDULE_PANEL_HEIGHT}
+          onSubmit={(at) => {
             closePicker("composer");
-            send(draft, "queue", parsed.at);
+            send(draft, "queue", at);
           }}
           onClose={() => closePicker("composer")}
         />
@@ -2685,6 +2789,7 @@ export function App({
           onTest={settings.test}
           onTestMcp={settings.testMcp}
           onProbe={settings.probe}
+          onDiscover={settings.discover}
           onExport={settings.exportProfile}
           onImport={settings.importProfile}
           notice={settings.notice}
@@ -2768,10 +2873,10 @@ export function App({
           }
           screenWidth={width}
           screenHeight={height}
-          left={picker === "message" ? messageGeometry.left : pickerGeometry.left}
-          top={picker === "message" ? messageGeometry.top : pickerGeometry.top}
-          width={picker === "message" ? messageGeometry.width : pickerGeometry.width}
-          height={picker === "message" ? messageGeometry.height : pickerGeometry.height}
+          left={(picker === "message" ? messageGeometry : picker === "effort" ? effortGeometry : pickerGeometry).left}
+          top={(picker === "message" ? messageGeometry : picker === "effort" ? effortGeometry : pickerGeometry).top}
+          width={(picker === "message" ? messageGeometry : picker === "effort" ? effortGeometry : pickerGeometry).width}
+          height={(picker === "message" ? messageGeometry : picker === "effort" ? effortGeometry : pickerGeometry).height}
             onClose={() =>
               closePicker(
                 picker === "diff-turn" ? "diff" : picker === "message" ? "chat" : picker === "command" ? paletteReturnFocus : "composer",

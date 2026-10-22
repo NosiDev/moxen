@@ -10,7 +10,7 @@ import os from "node:os";
 
 import { describe, expect, it } from "vitest";
 
-import { testHarness } from "../../core/testing/harness.js";
+import { testHarness, type SentTurn, type TestHarnessOptions } from "../../core/testing/harness.js";
 import { openThreadStore } from "../../core/threads/store.js";
 import { sendTurn } from "../../core/threads/threads.js";
 import type { TurnOwner } from "../../core/threads/types.js";
@@ -23,8 +23,8 @@ async function deadPid(): Promise<number> {
   return child.pid!;
 }
 
-async function setup() {
-  const harness = await testHarness();
+async function setup(options: TestHarnessOptions = {}) {
+  const harness = await testHarness(options);
   const connection = new DirectConnection({ storeRoot: harness.root, drivers: harness.drivers, config: async () => harness.config });
   const done = await connection.dispatch({ type: "thread.handover", cwd: harness.work, prompt: "First", wait: true, threadEnvMode: "local" });
   const store = await openThreadStore(harness.root);
@@ -67,6 +67,28 @@ describe("orphaned turns", () => {
       expect(await statusOf(orphan)).toBe("interrupted");
       await connection.query({ type: "thread.turn.await", threadId, turnId: queued.turn.id });
       expect(await statusOf(queued.turn.id)).toBe("completed");
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("sends the images of a queued turn that runs after a restart", async () => {
+    const sent: SentTurn[] = [];
+    const { connection, threadId, strand, store } = await setup({ onSendTurn: (turn) => void sent.push(turn) });
+    try {
+      await strand({ pid: await deadPid(), host: os.hostname() });
+      // Queued before the "restart": its image is written to disk with the message.
+      const queued = await sendTurn(store, threadId, {
+        prompt: "Look at this",
+        delivery: "queue",
+        attachments: [{ type: "image", name: "shot.png", mimeType: "image/png", sizeBytes: 8, dataUrl: "data:image/png;base64,iVBORw0KGgo=" }],
+      });
+      expect(queued.turn.status).toBe("queued");
+      // A new process opens the thread: recovery promotes the queued turn and runs it.
+      await connection.query({ type: "thread.inspect", threadId });
+      await connection.query({ type: "thread.turn.await", threadId, turnId: queued.turn.id });
+      const look = sent.find((turn) => turn.prompt.includes("Look at this"));
+      expect(look?.images).toEqual([{ name: "shot.png", mimeType: "image/png", data: "iVBORw0KGgo=" }]);
     } finally {
       await connection.close();
     }

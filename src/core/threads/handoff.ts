@@ -93,19 +93,21 @@ function openPlan(activities: readonly StoredActivity[]): string[] {
   return [];
 }
 
-function stoppedBecause(last: TurnBlock | undefined, activities: readonly StoredActivity[]): string {
-  if (last === undefined) return "The thread had not run a turn yet.";
+/** Why the thread's last turn ended, and whether that is the end of the work: a turn that simply completed may have finished the task. */
+function stoppedBecause(last: TurnBlock | undefined, activities: readonly StoredActivity[]): { text: string; completed: boolean } {
+  const stopped = (text: string) => ({ text, completed: false });
+  if (last === undefined) return stopped("The thread had not run a turn yet.");
   const limit = activities.find(
     (activity) => activity.turnId === last.turn.id && (activity.kind === "usage.limit" || activity.kind === "usage.wrap-up"),
   );
   if (limit) {
     const label = typeof limit.payload?.label === "string" ? `${limit.payload.label} ` : "";
-    return `It stopped on a plan usage limit (${label}window), mid-task. Nothing about the work itself went wrong.`;
+    return stopped(`It stopped on a plan usage limit (${label}window), mid-task. Nothing about the work itself went wrong.`);
   }
-  if (last.turn.status === "failed") return `Its last turn failed: ${oneLine(last.turn.error ?? "no error recorded", 300)}`;
-  if (last.turn.status === "interrupted") return "Its last turn was interrupted before it finished.";
-  if (last.turn.status === "running" || last.turn.status === "queued") return "Its last turn had not finished.";
-  return "Its last turn finished; carry on from the last request.";
+  if (last.turn.status === "failed") return stopped(`Its last turn failed: ${oneLine(last.turn.error ?? "no error recorded", 300)}`);
+  if (last.turn.status === "interrupted") return stopped("Its last turn was interrupted before it finished.");
+  if (last.turn.status === "running" || last.turn.status === "queued") return stopped("Its last turn had not finished.");
+  return { text: "Its last turn ran to completion. The work may already be done: this thread was moved on (its context window may have filled), not necessarily because anything was left.", completed: true };
 }
 
 export interface HandoffOptions {
@@ -155,12 +157,15 @@ export async function buildHandoff(store: ThreadStore, threadId: string, options
   const firstPrompt = blocks.find((block) => block.prompts.length > 0)?.prompts[0]?.text.trim() ?? null;
   const lastPrompt = [...blocks].reverse().find((block) => block.prompts.length > 0)?.prompts.at(-1)?.text.trim() ?? null;
   const plan = openPlan(activities);
+  const stopped = stoppedBecause(blocks.at(-1), activities);
+  // Only a last turn that ran to completion, with nothing queued and no open checklist step, may be a finished task.
+  const finished = stopped.completed && unsent.length === 0 && plan.every((row) => row.startsWith("- [x]"));
   const where = thread.env.branch ? `${thread.env.path} (branch ${thread.env.branch})` : thread.env.path;
 
   const head: string[] = [
     `# Continuing: ${thread.title}`,
     "",
-    "You are picking up a thread another session started and could not finish. Below is its record, written by Moxen from the thread's ledger — you have none of the original context beyond this. Read \"Where it stopped\" first.",
+    `You are picking up a thread another session worked on${finished ? "" : " and did not finish"}. Below is its record, written by Moxen from the thread's ledger — you have none of the original context beyond this. Read "Where it stopped" first.`,
     "",
     `- Working directory: ${where}`,
     ...(options.projectTitle ? [`- Project: ${options.projectTitle}`] : []),
@@ -169,7 +174,7 @@ export async function buildHandoff(store: ThreadStore, threadId: string, options
     "",
     "## Where it stopped",
     "",
-    stoppedBecause(blocks.at(-1), activities),
+    stopped.text,
   ];
   if (firstPrompt !== null && firstPrompt !== lastPrompt) head.push("", "The thread began with:", "", `> ${oneLine(firstPrompt, 400)}`);
   if (lastPrompt !== null) head.push("", "The last request, verbatim:", "", lastPrompt);
@@ -188,7 +193,9 @@ export async function buildHandoff(store: ThreadStore, threadId: string, options
     "",
     "---",
     "",
-    "Continue the task from \"Where it stopped\". Do not start over: verify what is already done, then finish what is left.",
+    finished
+      ? "Check the working tree against the last request before doing anything. If the work is complete, say so and wait for the user — do not redo it. If part of the request is still open, finish that part."
+      : "Continue the task from \"Where it stopped\". Do not start over: verify what is already done, then finish what is left.",
   ].join("\n");
 
   // Keep the most recent turns verbatim, shrinking older ones until the

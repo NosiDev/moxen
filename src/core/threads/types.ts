@@ -238,6 +238,8 @@ export interface StoredDelegation {
   readonly prompt: string;
   /** The branch the child's own worktree was cut from; absent when it shares the parent's checkout. */
   readonly baseBranch?: string | null;
+  /** The parent is told when the task settles for good, however many turns that takes (a usage-limit pause and its resume included). */
+  readonly notify?: boolean;
   readonly status: DelegationStatus;
   readonly createdAt: string;
   readonly updatedAt: string;

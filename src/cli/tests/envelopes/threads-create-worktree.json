@@ -67,7 +67,7 @@
         },
         "runtimeMode": "full-access",
         "interactionMode": "default",
-        "branch": "moxen/<short>",
+        "branch": "moxen/isolated-change",
         "worktreePath": "<root>trees/<id-3>",
         "createdAt": "<time>"
       },
@@ -95,7 +95,7 @@
     },
     "worktree": {
       "path": "<root>trees/<id-3>",
-      "branch": "moxen/<short>",
+      "branch": "moxen/isolated-change",
       "baseBranch": "main",
       "startFromOrigin": true
     },

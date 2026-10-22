@@ -17,7 +17,7 @@ export interface CompactionSettings {
   readonly effort: string;
 }
 
-export const DEFAULT_COMPACTION: CompactionSettings = { auto: true, fraction: null, tokens: null, keepRecentTokens: 15_000, effort: "low" };
+export const DEFAULT_COMPACTION: CompactionSettings = { auto: true, fraction: null, tokens: null, keepRecentTokens: 16_384, effort: "low" };
 
 /** Room always left under the threshold for the next answer and its tool results. */
 const MIN_HEADROOM_TOKENS = 16_000;

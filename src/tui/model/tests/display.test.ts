@@ -7,6 +7,8 @@ import {
   displayModelName,
   isEffortDescriptor,
   isTerminalTooSmall,
+  describeEffort,
+  modelRowDetail,
   prettifyModelSlug,
   turnModelSelection,
 } from "../display.js";
@@ -234,5 +236,29 @@ describe("turnModelSelection", () => {
     expect(turnModelSelection(thread, null)).toEqual(current);
     expect(turnModelSelection({ modelSelection: current }, "turn-1")).toEqual(current);
     expect(turnModelSelection(null, "turn-1")).toBeUndefined();
+  });
+});
+
+describe("modelRowDetail", () => {
+  const effort = (...ids: string[]) => [{ id: "effort", label: "Effort", currentValue: null, choices: ids.map((id) => ({ id, label: id, isDefault: null })) }];
+  it("tags the default and gives the range of reasoning levels", () => {
+    expect(modelRowDetail({ isDefault: true, efforts: effort("low", "medium", "max") })).toEqual({ badge: "default", meta: "low–max" });
+    expect(modelRowDetail({ isDefault: false, efforts: effort("low") })).toEqual({ meta: "low" });
+    expect(modelRowDetail({ isDefault: null, efforts: [] })).toEqual({});
+  });
+  it("leaves out knobs that are not reasoning levels", () => {
+    expect(modelRowDetail({ isDefault: null, efforts: [{ id: "fastMode", label: "Fast", currentValue: null, choices: [{ id: "on", label: "on", isDefault: null }] }] })).toEqual({});
+  });
+});
+
+describe("describeEffort", () => {
+  it("says what a level means, and that it is the default when it is", () => {
+    expect(describeEffort("medium", false)).toBe("Balanced speed and depth");
+    expect(describeEffort("medium", true)).toBe("Balanced speed and depth · default for this model");
+    expect(describeEffort("HIGH", false)).toBe("Deeper reasoning for harder tasks");
+  });
+  it("has nothing to say about a level it does not know, except that it is the default", () => {
+    expect(describeEffort("turbo", false)).toBeUndefined();
+    expect(describeEffort("turbo", true)).toBe("The default effort for this model");
   });
 });

@@ -6,9 +6,10 @@ import path from "node:path";
 import { CliError } from "./errors.js";
 import { parseMcpServers, type McpServerEntry } from "./mcp.js";
 import { normalizeHarnessConfig } from "./providers/harness/profiles.js";
-import { writeListValue } from "./configlist.js";
+import { HIDDEN_VALUE, writeListValue } from "./configlist.js";
+import { normalizeHandoffModels } from "./handoffmodels.js";
 import { SETTING_KEYS, listTarget, parseSettingValue, secretKeyName, settingDescriptor, writeSetting } from "./configschema.js";
-import { secretRef, writeSecret } from "./secrets.js";
+import { isSecretRef, secretRef, writeSecret } from "./secrets.js";
 import type {
   ClaudeProviderConfig,
   CliConfig,
@@ -94,10 +95,36 @@ function configRoot(): string {
     : path.join(os.homedir(), ".config");
 }
 
+/**
+ * On a new launch of the real program (never the mock, a test, or anything
+ * with `MOXEN_CONFIG` set), bring the config from where older builds kept it
+ * (`~/.config/moxen/config.json`) to `~/.moxen/config.json`. It is copied,
+ * not moved: a Moxen process that started on the old build keeps reading the
+ * old file, so nothing already running loses its settings. Returns whether
+ * a copy was made; every failure is swallowed, because a launch must not
+ * depend on it (the old file is still found by `defaultConfigPath`).
+ */
+export function migrateLegacyConfig(): boolean {
+  if (appEnv("CONFIG") || appEnv("NO_CONFIG_MIGRATION")) return false;
+  try {
+    const current = path.join(appHomeDir(), "config.json");
+    const legacy = path.join(configRoot(), APP_NAME, "config.json");
+    if (fs.existsSync(current) || !fs.existsSync(legacy)) return false;
+    fs.mkdirSync(path.dirname(current), { recursive: true });
+    fs.copyFileSync(legacy, current, fs.constants.COPYFILE_EXCL);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function defaultConfigPath(): string {
   const override = appEnv("CONFIG");
   if (override) return path.resolve(expandHome(override));
-  return path.join(configRoot(), APP_NAME, "config.json");
+  const current = path.join(appHomeDir(), "config.json");
+  // Configs written before everything moved under ~/.moxen stay where they are until moved by hand.
+  const legacy = path.join(configRoot(), APP_NAME, "config.json");
+  return !fs.existsSync(current) && fs.existsSync(legacy) ? legacy : current;
 }
 
 function asString(value: unknown, key: string): string {
@@ -166,17 +193,28 @@ export function normalizeConfig(raw: unknown): CliConfig {
     if (value === null) throw new CliError("INVALID_CONFIG", "autoContinueAtUsageLimit must be true or false.");
     if (value) result.autoContinueAtUsageLimit = true;
   }
+  if (input.branchPruneDays !== undefined) {
+    const value = Number(input.branchPruneDays);
+    if (!Number.isInteger(value) || value < 0 || value > 365) {
+      throw new CliError("INVALID_CONFIG", "branchPruneDays must be a whole number of days from 0 to 365.");
+    }
+    result.branchPruneDays = value;
+  }
   if (input.installSkills !== undefined) {
     const raw: unknown = input.installSkills;
     const value = raw === true || raw === "true" ? true : raw === false || raw === "false" ? false : null;
     if (value === null) throw new CliError("INVALID_CONFIG", "installSkills must be true or false.");
     if (!value) result.installSkills = false;
   }
+  if (input.mcpRunner !== undefined) {
+    if (input.mcpRunner !== "npx" && input.mcpRunner !== "bunx" && input.mcpRunner !== "pnpm" && input.mcpRunner !== "yarn") throw new CliError("INVALID_CONFIG", "mcpRunner must be npx, bunx, pnpm or yarn.");
+    if (input.mcpRunner !== "npx") result.mcpRunner = input.mcpRunner;
+  }
   if (input.mcpServers !== undefined) {
     const servers = parseMcpServers(input.mcpServers, "config") as Record<string, McpServerEntry>;
     if (Object.keys(servers).length > 0) result.mcpServers = servers;
   }
-  const ui = normalizeSection<UiConfig>(input.ui, "ui", ["backdrop", "modelScenes", "defaultSidePanel", "contextRefreshSeconds", "usageRefreshSeconds", "autoHandoff", "autoHandoffPercent"]);
+  const ui = normalizeSection<UiConfig>(input.ui, "ui", ["backdrop", "modelScenes", "hideBinaryDiffs", "defaultSidePanel", "contextRefreshSeconds", "usageRefreshSeconds", "autoHandoff", "autoHandoffPercent", "autoHandoffTokens"]);
   if (ui) result.ui = ui;
   const git = normalizeSection<GitConfig>(input.git, "git", ["historyLimit", "autoFetch"]);
   if (git) result.git = git;
@@ -232,6 +270,14 @@ function checkTyped(kind: string, value: unknown, label: string): unknown {
   throw new CliError("INVALID_CONFIG", `${label} must be a string.`);
 }
 
+/** A provider section's per-model hand-off thresholds, as the one field to merge in. */
+function handoffModelsOf(section: unknown, prefix: string): { autoHandoffModels: Record<string, number> } | undefined {
+  const raw = asSection(section, prefix).autoHandoffModels;
+  if (raw === undefined || raw === null) return undefined;
+  const map = normalizeHandoffModels(raw, `${prefix}.autoHandoffModels`);
+  return map ? { autoHandoffModels: map } : undefined;
+}
+
 function normalizeProviders(raw: unknown): ProvidersConfig | undefined {
   if (raw === undefined) return undefined;
   const input = asSection(raw, "providers");
@@ -245,24 +291,36 @@ function normalizeProviders(raw: unknown): ProvidersConfig | undefined {
       "partialMessages",
       "agentSkills",
       "autoCompactWindow",
+      "autoCompact",
+      "autoCompactPercent",
+      "ultracode",
+      "autoHandoff",
+      "autoHandoffTokens",
+      "autoHandoffPercent",
       "runtimeMode",
       "model",
       "thinkingEffort",
       "moxenTools",
       "todos",
+      "mcpExclude",
+      "disabledNativeTools",
+      "webSearchOrder", "webFetchOrder",
     ]);
     const launchArgs = asSection(input.claude, "providers.claude").launchArgs;
     const args = Array.isArray(launchArgs) && launchArgs.every((entry) => typeof entry === "string") ? (launchArgs as string[]) : undefined;
-    if (claude || args) result.claude = { ...(claude ?? {}), ...(args ? { launchArgs: args } : {}) };
+    const models = handoffModelsOf(input.claude, "providers.claude");
+    if (claude || args || models) result.claude = { ...(claude ?? {}), ...(args ? { launchArgs: args } : {}), ...models };
   }
   if (input.opencode !== undefined) {
-    const opencode = normalizeSection<OpencodeProviderConfig>(input.opencode, "providers.opencode", ["binaryPath", "bundledSkills", "runtimeMode", "model", "thinkingEffort", "moxenTools", "todos"]);
-    if (opencode) result.opencode = opencode;
+    const opencode = normalizeSection<OpencodeProviderConfig>(input.opencode, "providers.opencode", ["binaryPath", "bundledSkills", "autoCompact", "compactBuffer", "autoHandoff", "autoHandoffTokens", "autoHandoffPercent", "runtimeMode", "model", "thinkingEffort", "moxenTools", "todos", "mcpExclude", "disabledNativeTools", "webSearchOrder", "webFetchOrder", "moxenPrompt"]);
+    const models = handoffModelsOf(input.opencode, "providers.opencode");
+    if (opencode || models) result.opencode = { ...opencode, ...models };
   }
   if (input.harness !== undefined) {
     const withProfiles = normalizeHarnessConfig(input.harness);
-    const defaults = normalizeSection<HarnessProviderConfig>(input.harness, "providers.harness", ["runtimeMode", "model", "thinkingEffort", "moxenTools", "todos", "slots", "autoCompact", "autoCompactPercent", "keepRecentTokens", "webSearch", "webSearchKey", "webSearchKeyEnv", "searxngUrl", "webBrowser", "webBrowserPath", "webPrivateNetwork"]);
-    if (withProfiles || defaults) result.harness = { ...defaults, ...withProfiles };
+    const defaults = normalizeSection<HarnessProviderConfig>(input.harness, "providers.harness", ["runtimeMode", "model", "thinkingEffort", "moxenTools", "todos", "mcpExclude", "autoHandoff", "autoHandoffTokens", "autoHandoffPercent", "slots", "autoCompact", "autoCompactPercent", "autoCompactTokens", "keepRecentTokens", "webSearch", "webSearchKey", "webSearchKeyEnv", "searxngUrl", "webBrowser", "webBrowserPath", "webPrivateNetwork"]);
+    const models = handoffModelsOf(input.harness, "providers.harness");
+    if (withProfiles || defaults || models) result.harness = { ...defaults, ...withProfiles, ...models };
   }
   return Object.keys(result).length > 0 ? result : undefined;
 }
@@ -349,6 +407,8 @@ export function setConfigValue(config: CliConfig, key: ConfigKey, rawValue: stri
  * that sets a key from the outside (the settings page, `config set`) uses this.
  */
 export async function setConfigValueSecure(config: CliConfig, key: ConfigKey, rawValue: string): Promise<CliConfig> {
+  const mcp = /^mcpServers\[([^\]]+)\](?:\.(env|headers))?$/.exec(key);
+  if (mcp !== null) return setConfigValue(config, key, await keepMcpSecrets(mcp[1]!, mcp[2] as "env" | "headers" | undefined, rawValue));
   const name = secretKeyName(key);
   if (name === null) return setConfigValue(config, key, rawValue);
   const value = rawValue.trim();
@@ -358,4 +418,46 @@ export async function setConfigValueSecure(config: CliConfig, key: ConfigKey, ra
     throw new CliError("KEYCHAIN_UNAVAILABLE", `Could not use the OS keychain: ${error instanceof Error ? error.message : String(error)}`);
   }
   return setConfigValue(config, key, value === "" ? "" : secretRef(name));
+}
+
+/**
+ * An MCP server's `env` and `headers` hold keys and tokens, so what is typed
+ * goes to the OS keychain and the config gets a reference. `field` is `env`,
+ * `headers`, or undefined when `rawValue` is the whole entry as JSON. A value
+ * that is already a reference, or the `<hidden>` placeholder that keeps the
+ * stored one, is left as it is.
+ */
+async function keepMcpSecrets(id: string, field: "env" | "headers" | undefined, rawValue: string): Promise<string> {
+  const keep = async (where: "env" | "headers", name: string, value: string): Promise<string> => {
+    if (value === "" || value === HIDDEN_VALUE || isSecretRef(value)) return value;
+    const secret = `mcp-${id}-${where}-${name}`;
+    try {
+      await writeSecret(secret, value);
+    } catch (error) {
+      throw new CliError("KEYCHAIN_UNAVAILABLE", `Could not use the OS keychain: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return secretRef(secret);
+  };
+  if (field !== undefined) {
+    const lines: string[] = [];
+    for (const line of rawValue.split("\n")) {
+      const at = line.indexOf("=");
+      lines.push(at <= 0 || line.trim() === "" ? line : `${line.slice(0, at)}=${await keep(field, line.slice(0, at).trim(), line.slice(at + 1).trim())}`);
+    }
+    return lines.join("\n");
+  }
+  let entry: unknown;
+  try {
+    entry = JSON.parse(rawValue);
+  } catch {
+    return rawValue;
+  }
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return rawValue;
+  const out = { ...(entry as Record<string, unknown>) };
+  for (const where of ["env", "headers"] as const) {
+    const record = out[where];
+    if (record === null || typeof record !== "object" || Array.isArray(record)) continue;
+    out[where] = Object.fromEntries(await Promise.all(Object.entries(record as Record<string, unknown>).map(async ([name, value]) => [name, typeof value === "string" ? await keep(where, name, value) : value])));
+  }
+  return JSON.stringify(out);
 }

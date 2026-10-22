@@ -36,8 +36,10 @@ export function useDiffPanel(params: {
   setThreadState: Dispatch<SetStateAction<ThreadState>>;
   setFocus: (focus: "chat" | "diff") => void;
   setError: (message: string) => void;
+  /** Leave binary files out of the file list. */
+  hideBinary: boolean;
 }) {
-  const { client, width, openThreadId, selected, shellProjects, threadState, threadStateRef, groups, selectedIdRef, chatScrollRef, setThreadState, setFocus, setError } = params;
+  const { client, width, openThreadId, selected, shellProjects, threadState, threadStateRef, groups, selectedIdRef, chatScrollRef, setThreadState, setFocus, setError, hideBinary } = params;
 
   const [expandedTurn, setExpandedTurn] = useState<number | null>(null);
   const [patch, setPatch] = useState<string | null>(null);
@@ -222,7 +224,11 @@ export function useDiffPanel(params: {
     setExpandedWork((current) => new Map(current).set(id, expand));
   };
 
-  const patchFiles = useMemo(() => (patch === null ? [] : splitPatchByFile(patch)), [patch]);
+  const patchFiles = useMemo(() => {
+    if (patch === null) return [];
+    const files = splitPatchByFile(patch);
+    return hideBinary ? files.filter((file) => !file.binary) : files;
+  }, [patch, hideBinary]);
 
   const toggleDiffFile = (index: number) => {
     setFocus("diff");

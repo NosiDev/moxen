@@ -1,5 +1,5 @@
 {
-  "note": "Claude models the Agent SDK can be asked for. The SDK exposes no model-listing API, so this list is maintained by hand; slugs drift as Anthropic ships, and `updatedAt` makes staleness visible.",
+  "note": "Claude models the Agent SDK can be asked for. The installed Claude Code's own list (`supportedModels()`) wins when known; this hand-maintained list is the fallback; slugs drift as Anthropic ships, and `updatedAt` makes staleness visible.",
   "updatedAt": "2026-10-15",
   "default": "claude-fable-5-1",
   "models": [
@@ -31,14 +31,6 @@
             {
               "id": "max",
               "label": "Max"
-            },
-            {
-              "id": "ultracode",
-              "label": "Ultracode"
-            },
-            {
-              "id": "ultrathink",
-              "label": "Ultrathink"
             }
           ]
         }
@@ -72,14 +64,6 @@
             {
               "id": "max",
               "label": "Max"
-            },
-            {
-              "id": "ultracode",
-              "label": "Ultracode"
-            },
-            {
-              "id": "ultrathink",
-              "label": "Ultrathink"
             }
           ]
         }
@@ -113,14 +97,6 @@
             {
               "id": "max",
               "label": "Max"
-            },
-            {
-              "id": "ultracode",
-              "label": "Ultracode"
-            },
-            {
-              "id": "ultrathink",
-              "label": "Ultrathink"
             }
           ]
         }
@@ -154,14 +130,6 @@
             {
               "id": "max",
               "label": "Max"
-            },
-            {
-              "id": "ultracode",
-              "label": "Ultracode"
-            },
-            {
-              "id": "ultrathink",
-              "label": "Ultrathink"
             }
           ]
         }
@@ -195,14 +163,6 @@
             {
               "id": "max",
               "label": "Max"
-            },
-            {
-              "id": "ultracode",
-              "label": "Ultracode"
-            },
-            {
-              "id": "ultrathink",
-              "label": "Ultrathink"
             }
           ]
         }
@@ -236,10 +196,6 @@
             {
               "id": "max",
               "label": "Max"
-            },
-            {
-              "id": "ultrathink",
-              "label": "Ultrathink"
             }
           ]
         }
@@ -269,10 +225,6 @@
             {
               "id": "max",
               "label": "Max"
-            },
-            {
-              "id": "ultrathink",
-              "label": "Ultrathink"
             }
           ]
         }
@@ -335,10 +287,6 @@
             {
               "id": "max",
               "label": "Max"
-            },
-            {
-              "id": "ultrathink",
-              "label": "Ultrathink"
             }
           ]
         }
@@ -372,10 +320,6 @@
             {
               "id": "max",
               "label": "Max"
-            },
-            {
-              "id": "ultrathink",
-              "label": "Ultrathink"
             }
           ]
         }
@@ -405,10 +349,6 @@
             {
               "id": "max",
               "label": "Max"
-            },
-            {
-              "id": "ultrathink",
-              "label": "Ultrathink"
             }
           ]
         }
@@ -442,10 +382,6 @@
             {
               "id": "max",
               "label": "Max"
-            },
-            {
-              "id": "ultrathink",
-              "label": "Ultrathink"
             }
           ]
         }

@@ -9,20 +9,30 @@ import type { Readable, Writable } from "node:stream";
 import { createInterface } from "node:readline";
 
 import type { ClientApi } from "../api.js";
-import { callMoxenTool, MOXEN_TOOLS, TODOS_TOOL } from "./tools.js";
+import { callMoxenTool, moxenToolsFor } from "./tools.js";
 
 /** Newest first; an unknown client version is answered with the newest. */
 export const MCP_PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"] as const;
 
 /** What the server tells a model about itself, whatever the transport. */
 export const MOXEN_MCP_INSTRUCTIONS =
-  "moxen runs coding agents as threads. Use delegate to hand a self-contained task to a subagent thread " +
-  "(any provider and model, in its own git worktree), then task_status to collect its report. " +
-  "The models tool lists the providers, models and efforts you can delegate to.";
+  "moxen runs coding agents as threads. Do not delegate unless the user asks you to (or a skill they invoked says to): each subagent starts cold and costs the user usage, so do the work yourself by default. " +
+  "When they do ask, use delegate to hand a self-contained task to a subagent thread " +
+  "(any provider and model, in its own git worktree). When it settles, a <task-notification> message arrives in your conversation " +
+  "with its headline and branch, mid-turn or as a turn of its own. Do not poll task_status: keep working or end your turn, " +
+  "and call it once for the full report. " +
+  "The models tool lists the providers, models and efforts you can delegate to. " +
+  "web_fetch reads a web page as text; it is not part of delegating.";
+
+/** What a delegated task is told: it has no delegation tools, so only what is left is described. */
+export const MOXEN_DELEGATED_MCP_INSTRUCTIONS = "web_fetch reads a web page as text, retrying through a browser for pages built by scripts.";
 
 /** How a client asks for the `todos` tool too: the HTTP endpoint's query, the stdio server's flag. */
 export const MOXEN_CHECKLIST_QUERY = "checklist=1";
 export const MOXEN_CHECKLIST_ARG = "--checklist";
+/** How a client asks for the tools of a delegated task (no delegation): the HTTP endpoint's query, the stdio server's flag. */
+export const MOXEN_DELEGATED_QUERY = "delegated=1";
+export const MOXEN_DELEGATED_ARG = "--delegated";
 
 export interface McpSessionOptions {
   readonly api: ClientApi;
@@ -31,6 +41,8 @@ export interface McpSessionOptions {
   readonly version?: string;
   /** Also offer `todos`: the provider keeps no checklist of its own. */
   readonly checklist?: boolean;
+  /** The thread is a delegated task: no delegation tools (it does not delegate again). */
+  readonly delegated?: boolean;
 }
 
 export interface ServeMcpOptions extends McpSessionOptions {
@@ -68,20 +80,20 @@ export async function answerMcp(options: McpSessionOptions, raw: unknown): Promi
           protocolVersion,
           capabilities: { tools: {} },
           serverInfo: { name: "moxen", version: options.version ?? "0.0.0" },
-          instructions: MOXEN_MCP_INSTRUCTIONS,
+          instructions: options.delegated === true ? MOXEN_DELEGATED_MCP_INSTRUCTIONS : MOXEN_MCP_INSTRUCTIONS,
         });
       }
       case "ping":
         return reply({});
       case "tools/list":
-        return reply({ tools: options.checklist === true ? [...MOXEN_TOOLS, TODOS_TOOL] : MOXEN_TOOLS });
+        return reply({ tools: moxenToolsFor({ checklist: options.checklist === true, delegated: options.delegated === true }) });
       case "tools/call": {
         const name = typeof params.name === "string" ? params.name : "";
         const args =
           params.arguments !== null && typeof params.arguments === "object" && !Array.isArray(params.arguments)
             ? (params.arguments as Record<string, unknown>)
             : {};
-        const result = await callMoxenTool(options.api, options.parentThreadId, name, args);
+        const result = await callMoxenTool(options.api, options.parentThreadId, name, args, { delegated: options.delegated === true });
         return reply({ content: [{ type: "text", text: result.text }], isError: result.isError });
       }
       default:

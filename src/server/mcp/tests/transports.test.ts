@@ -117,7 +117,8 @@ describe("in-process tools for Claude", () => {
     expect(shape.fork!.safeParse(true).success).toBe(true);
     expect(shape.task!.safeParse("do it").success).toBe(true);
     expect(shape.task!.safeParse(undefined).success).toBe(false);
-    expect(shape.title!.safeParse(undefined).success).toBe(true);
+    expect(shape.title!.safeParse(undefined).success).toBe(false);
+    expect(shape.title!.safeParse("fix login").success).toBe(true);
     expect(shape.isolation!.safeParse("worktree").success).toBe(true);
     expect(shape.isolation!.safeParse("elsewhere").success).toBe(false);
   });

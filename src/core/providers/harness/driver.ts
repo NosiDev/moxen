@@ -411,6 +411,7 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
       instructions: session.instructions,
       append: target?.profile.systemPromptAppend,
       mcpServers: session.mcp.servers,
+      serverSlots: target ? target.profile.slots ?? this.config?.slots : undefined,
     });
   }
 

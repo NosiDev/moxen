@@ -28,6 +28,38 @@ describe("LoopGuard", () => {
     expect(out.at(-1)).toBe("stop");
   });
 
+  it("does not count a call that keeps answering differently", () => {
+    const guard = new LoopGuard({ repeatWarn: 3, repeatStop: 5 });
+    const verdicts: string[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      verdicts.push(guard.record("bash", '{"command":"npm test"}'));
+      guard.observe("bash", '{"command":"npm test"}', `${12 - i} failing`);
+    }
+    expect(verdicts.every((verdict) => verdict === "ok")).toBe(true);
+  });
+
+  it("still catches a call that answers the same every time", () => {
+    const guard = new LoopGuard({ repeatWarn: 3, repeatStop: 5 });
+    const verdicts: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      verdicts.push(guard.record("bash", '{"command":"npm test"}'));
+      guard.observe("bash", '{"command":"npm test"}', "3 failing");
+    }
+    expect(verdicts).toEqual(["ok", "ok", "warn", "warn", "stop"]);
+  });
+
+  it("does not take a read-edit rotation for a loop while the reads keep changing", () => {
+    const guard = new LoopGuard();
+    const out: string[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      out.push(guard.record("read", "{}"));
+      guard.observe("read", "{}", `version ${i}`);
+      out.push(guard.record("edit", `{"step":${i}}`));
+      guard.observe("edit", `{"step":${i}}`, "ok");
+    }
+    expect(out.every((verdict) => verdict === "ok")).toBe(true);
+  });
+
   it("leaves distinct work alone", () => {
     const guard = new LoopGuard();
     for (let i = 0; i < 30; i += 1) expect(guard.record("read", `{"path":"${i}"}`)).toBe("ok");

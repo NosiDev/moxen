@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import type { ProviderSummary } from "../../../core/catalog/summary.js";
 import { describeSettings, settingDescriptor } from "../../../core/configschema.js";
-import { DEFAULT_CONFIG } from "../../../core/config.js";
+import { DEFAULT_CONFIG, normalizeConfig } from "../../../core/config.js";
 import type { CliConfig } from "../../../core/types.js";
-import { providerVersionLine, settingControl, settingValueLabel, updatableProviderOf, type ProviderCheckView } from "../settings.js";
+import { configuredDefaultModel, handoffModelEntries, handoffStops, handoffTokensLabel, providerVersionLine, settingControl, settingValueLabel, updatableProviderOf, withHandoffModel, type ProviderCheckView } from "../settings.js";
 
 function provider(instanceId: string, models: Array<{ slug: string; name: string; efforts?: string[]; hidden?: boolean }>, enabled = true): ProviderSummary {
   return {
@@ -73,10 +73,41 @@ describe("settingControl", () => {
     expect(control("forge.enabled")).toEqual({ kind: "toggle" });
   });
 
+  it("lays short numeric presets out in a row, and filters long lists by typing", () => {
+    const ttl = control("sessionTtl");
+    expect(ttl.kind === "pick" && ttl.layout).toBe("slider");
+    const permissions = control("runtimeMode");
+    expect(permissions.kind === "pick" && permissions.layout).toBe("list");
+    expect(permissions.kind === "pick" && permissions.searchable).toBe(false);
+  });
+
+  it("hides a permission mode the governed providers do not take, but not when they do not say", () => {
+    const view = describeSettings(DEFAULT_CONFIG).find((entry) => entry.descriptor.key === "providers.claude.runtimeMode")!;
+    const withModes = { ...provider("claudeAgent", []), supportedRuntimeModes: ["approval-required", "full-access"] as ProviderSummary["supportedRuntimeModes"] };
+    const some = settingControl(view.descriptor, undefined, describeSettings(DEFAULT_CONFIG), [withModes]);
+    expect(some.kind === "pick" && some.options.map((entry) => entry.value)).toEqual(["", "approval-required", "full-access"]);
+    const unknown = settingControl(view.descriptor, undefined, describeSettings(DEFAULT_CONFIG), [provider("claudeAgent", [])]);
+    expect(unknown.kind === "pick" && unknown.options).toHaveLength(5);
+  });
+
+  it("makes a long model list searchable", () => {
+    const many = provider("claudeAgent", Array.from({ length: 12 }, (_, at) => ({ slug: `m${at}`, name: `Model ${at}` })));
+    const view = describeSettings(DEFAULT_CONFIG).find((entry) => entry.descriptor.key === "model")!;
+    const picked = settingControl(view.descriptor, undefined, describeSettings(DEFAULT_CONFIG), [many]);
+    expect(picked.kind === "pick" && picked.searchable).toBe(true);
+    expect(picked.kind === "pick" && picked.layout).toBe("list");
+  });
+
+  it("says plainly when a model has no effort to pick", () => {
+    const efforts = control("thinkingEffort", { ...DEFAULT_CONFIG, provider: "claudeAgent", model: "claude-old" });
+    expect(efforts.kind === "pick" && efforts.options).toHaveLength(1);
+    expect(efforts.kind === "pick" && efforts.options[0]?.description).toMatch(/no effort/);
+  });
+
   it("labels values by what they mean", () => {
     const descriptor = settingDescriptor("speedMode")!;
     const pick = control("speedMode");
-    expect(settingValueLabel(descriptor, undefined, pick)).toBe("Not set");
+    expect(settingValueLabel(descriptor, undefined, pick)).toBe("Default");
     expect(settingValueLabel(descriptor, "fast", pick)).toBe("Fast");
     const model = control("model", { ...DEFAULT_CONFIG, model: "gpt-6" });
     expect(settingValueLabel(settingDescriptor("model")!, "gpt-6", model)).toBe("GPT-6");
@@ -143,17 +174,137 @@ describe("an integer setting that is unset by default", () => {
   const descriptor = settingDescriptor("providers.claude.autoCompactWindow")!;
   const control = (value: number | undefined) => settingControl(descriptor, value, describeSettings(DEFAULT_CONFIG), null);
 
-  it("offers Not set first, so it can be cleared, and shows big presets with separators", () => {
+  it("offers the default first, so it can be cleared, and counts token windows in powers of two", () => {
     const picked = control(undefined);
     expect(picked.kind).toBe("pick");
     if (picked.kind !== "pick") return;
-    expect(picked.options.map((entry) => entry.label)).toEqual(["Not set", "200,000", "300,000", "500,000", "800,000", "1,000,000"]);
+    expect(picked.options.map((entry) => entry.label)).toEqual(["Default", "128K", "256K", "512K", "1M"]);
     expect(picked.options[0]!.value).toBe("");
-    expect(settingValueLabel(descriptor, undefined, picked)).toBe("Not set");
+    expect(settingValueLabel(descriptor, undefined, picked)).toBe("Default");
+    expect(picked.layout).toBe("slider");
   });
 
   it("reads a chosen window back the same way", () => {
-    const picked = control(300_000);
-    expect(settingValueLabel(descriptor, 300_000, picked)).toBe("300,000");
+    const picked = control(262_144);
+    expect(settingValueLabel(descriptor, 262_144, picked)).toBe("256K");
+  });
+});
+
+describe("MCP servers on a provider's page", () => {
+  const config = normalizeConfig({
+    mcpServers: {
+      fs: { command: "npx" },
+      gh: { command: "npx", providers: ["claude"] },
+      off: { command: "x", disabled: true },
+    },
+    providers: { harness: { mcpExclude: "fs" } },
+  });
+  const settings = describeSettings(config);
+  const descriptor = (key: string) => settings.find((view) => view.descriptor.key === key)!;
+
+  it("lists every server, and says why one stays out whatever is ticked", () => {
+    const control = settingControl(descriptor("providers.claude.mcpExclude").descriptor, undefined, settings, null);
+    expect(control.kind === "servers" && control.servers.map((server) => [server.name, server.locked])).toEqual([
+      ["fs", null],
+      ["gh", null],
+      ["off", "switched off on its own entry"],
+    ]);
+    const harness = settingControl(descriptor("providers.harness.mcpExclude").descriptor, "fs", settings, null);
+    expect(harness.kind === "servers" && harness.servers.find((server) => server.name === "gh")?.locked).toBe("only offered to claude");
+    expect(harness.kind === "servers" && harness.excluded).toEqual(["fs"]);
+  });
+
+  it("summarises how many it gets, counting only the ones it could get", () => {
+    const label = (key: string, value: string | undefined) => {
+      const d = descriptor(key).descriptor;
+      return settingValueLabel(d, value, settingControl(d, value, settings, null));
+    };
+    expect(label("providers.claude.mcpExclude", undefined)).toBe("All 2 servers");
+    expect(label("providers.claude.mcpExclude", "fs")).toBe("1 of 2");
+    expect(label("providers.claude.mcpExclude", "fs,gh")).toBe("None");
+    expect(label("providers.harness.mcpExclude", undefined)).toBe("The server");
+  });
+});
+
+describe("a provider's own tools and web preference on its page", () => {
+  const view = (config: Parameters<typeof describeSettings>[0], key: string) => describeSettings(config).find((entry) => entry.descriptor.key === key)!;
+
+  it("lists the provider's tools with the ones switched off ticked out, keeping a name the catalogue lacks", () => {
+    const settings = describeSettings(normalizeConfig({}));
+    const d = settings.find((entry) => entry.descriptor.key === "providers.opencode.disabledNativeTools")!.descriptor;
+    const control = settingControl(d, "websearch, madeup", settings, null);
+    expect(control.kind === "tools" && control.tools.map((tool) => tool.name)).toContain("webfetch");
+    expect(control.kind === "tools" && control.excluded).toEqual(["websearch", "madeup"]);
+    expect(settingValueLabel(d, "websearch, madeup", control)).toBe("2 off");
+    expect(settingValueLabel(d, undefined, settingControl(d, undefined, settings, null))).toBe("All on");
+  });
+
+  it("greys each web order out until a tool it could rank is available to the provider, and says what it covers", () => {
+    const search = "providers.claude.webSearchOrder";
+    const fetch = "providers.claude.webFetchOrder";
+    expect(view(normalizeConfig({}), search).unavailable).toContain("Brave Search or Exa");
+    // Moxen's own web_fetch is there for the fetch order unless Moxen's tools are off.
+    expect(view(normalizeConfig({}), fetch).unavailable).toBeUndefined();
+    expect(view(normalizeConfig({ providers: { claude: { moxenTools: false } } }), fetch).unavailable).toContain("Moxen's tools on");
+    const brave = { type: "stdio" as const, command: "npx", args: ["-y", "@brave/brave-search-mcp-server"] };
+    expect(view(normalizeConfig({ mcpServers: { search: brave } }), search).unavailable).toBeUndefined();
+    // Switched off, limited to another provider, or excluded on this one: not available to it.
+    expect(view(normalizeConfig({ mcpServers: { search: { ...brave, disabled: true } } }), search).unavailable).toBeDefined();
+    expect(view(normalizeConfig({ mcpServers: { search: { ...brave, providers: ["opencode"] } } }), search).unavailable).toBeDefined();
+    expect(view(normalizeConfig({ mcpServers: { search: brave }, providers: { claude: { mcpExclude: "search" } } }), search).unavailable).toBeDefined();
+    // A search server of someone else's, however it is named, is not one Moxen can guide.
+    expect(view(normalizeConfig({ mcpServers: { "brave-search": { type: "stdio", command: "npx", args: ["-y", "some-other-brave-server"] } } }), search).unavailable).toBeDefined();
+    expect(view(normalizeConfig({}), search).descriptor.description).toContain("does not turn any tool off");
+  });
+
+  it("lists the ranked tools first in their order, then the rest, and shows the ranking as the value", () => {
+    const config = normalizeConfig({ mcpServers: { search: { type: "stdio", command: "npx", args: ["-y", "@brave/brave-search-mcp-server"] } }, providers: { claude: { webSearchOrder: "native, brave, gone", disabledNativeTools: "WebSearch" } } });
+    const settings = describeSettings(config);
+    const d = settings.find((entry) => entry.descriptor.key === "providers.claude.webSearchOrder")!.descriptor;
+    const control = settingControl(d, "native, brave, gone", settings, null);
+    expect(control.kind === "order" && control.rows.map((row) => [row.id, row.rank, row.locked])).toEqual([
+      ["native", 1, "switched off under Built-in tools off"],
+      ["brave", 2, null],
+      ["gone", 3, "unknown"],
+      ["exa", null, "Exa is not added, or is off for this provider"],
+    ]);
+    expect(settingValueLabel(d, "native, brave, gone", control)).toBe("Claude Code's own → Brave Search → gone");
+    expect(settingValueLabel(d, undefined, settingControl(d, undefined, settings, null))).toBe("No preference");
+  });
+});
+
+describe("per-model hand-off sizes on a provider's page", () => {
+  const claude = provider("claudeAgent", [{ slug: "opus", name: "Opus" }, { slug: "sonnet", name: "Sonnet" }, { slug: "old", name: "Old", hidden: true }]);
+  const other = provider("codex", [{ slug: "gpt", name: "GPT" }]);
+
+  it("lists the provider's visible models with their sizes, then overrides the catalog no longer has", () => {
+    expect(handoffModelEntries([claude, other], "claude", "opus=500000, gone=300000")).toEqual([
+      { slug: "opus", name: "Opus", tokens: 500_000 },
+      { slug: "sonnet", name: "Sonnet", tokens: null },
+      { slug: "gone", name: "gone", tokens: 300_000 },
+    ]);
+    // Before the catalog arrives the overrides are still there to see and clear.
+    expect(handoffModelEntries(null, "claude", "opus=500000")).toEqual([{ slug: "opus", name: "opus", tokens: 500_000 }]);
+  });
+
+  it("writes one model's size and leaves the others, and removes it with null", () => {
+    expect(withHandoffModel("opus=500000", "sonnet", 128_000)).toBe("opus=500000, sonnet=128000");
+    expect(withHandoffModel("opus=500000, sonnet=128000", "opus", null)).toBe("sonnet=128000");
+    expect(withHandoffModel("opus=500000", "opus", null)).toBe("");
+  });
+
+  it("labels sizes and keeps a hand-set size among the stops", () => {
+    expect([100_000, 128_000, 1_000_000, 1_500_000, 300_500].map(handoffTokensLabel)).toEqual(["100K", "128K", "1M", "1.5M", "300,500"]);
+    expect(handoffStops(null)).toHaveLength(8);
+    expect(handoffStops(300_000)).toContain(300_000);
+    expect(handoffStops(300_000)).toEqual([...handoffStops(300_000)].sort((a, b) => a - b));
+  });
+
+  it("counts the overrides on the collapsed row", () => {
+    const descriptor = settingDescriptor("providers.claude.autoHandoffModels")!;
+    const label = (value: string) => settingValueLabel(descriptor, value, settingControl(descriptor, value, [], [claude]));
+    expect(label("")).toBe("None set");
+    expect(label("opus=500000")).toBe("1 model");
+    expect(label("opus=500000, sonnet=100000")).toBe("2 models");
   });
 });

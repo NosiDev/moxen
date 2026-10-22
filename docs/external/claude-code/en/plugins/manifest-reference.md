@@ -10,12 +10,12 @@ A plugin manifest is the `plugin.json` file in a plugin's `.claude-plugin/` dire
 
 This reference is for plugin creators, and for marketplace owners who put component fields in a marketplace entry.
 
-<Note>
-  These cases are covered on other pages:
-
-  * **Learning to build a plugin**: start with [Create a plugin](/docs/en/plugins/create)
-  * **What each component does at runtime**: see [Plugin components](/docs/en/plugins/components)
-</Note>
+> [!NOTE]
+>
+> These cases are covered on other pages:
+>
+> * **Learning to build a plugin**: start with [Create a plugin](/docs/en/plugins/create)
+> * **What each component does at runtime**: see [Plugin components](/docs/en/plugins/components)
 
 Start at the section that matches what you're looking up:
 
@@ -175,7 +175,7 @@ Claude Code namespaces every component under it, so an agent `reviewer` in plugi
 | Puts `official` beside `claude` or `anthropic`, such as `official-claude-tools` | Error |
 | Has `claude`, `anthropic`, or `anthropics` as a whole word anywhere else, such as `mcp-for-claude` | Warning |
 
-The error reads `Plugin name "<name>" is reserved: it passes as one of Anthropic's own`, and the warning reads `Plugin name "<name>" reads as one of Anthropic's own`. `claude plugin init` and `claude plugin tag` refuse a name that draws the error. Only these commands check the name. Claude Code still installs and loads a plugin whose name they refuse.
+The error reads `Plugin name "<name>" is reserved: it passes as one of Anthropic's own`, and the warning reads `Plugin name "<name>" reads as one of Anthropic's own`. `claude plugin init` and `claude plugin tag` refuse a name that draws the error. Claude Code still installs and loads a plugin whose name they refuse.
 
 ### `displayName`
 

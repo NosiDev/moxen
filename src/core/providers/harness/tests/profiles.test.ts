@@ -66,7 +66,7 @@ describe("harness profiles", () => {
     const own = normalizeHarnessConfig({ profiles: [{ ...profile, compaction: { fraction: 0.5, effort: "minimal" } }] })!;
     const defaults = { ...own, autoCompact: false, autoCompactPercent: 80, keepRecentTokens: 9000 };
     expect(resolveCompactionSettings(defaults, own.profiles![0]!)).toMatchObject({ auto: false, fraction: 0.5, keepRecentTokens: 9000, effort: "minimal" });
-    expect(resolveCompactionSettings(undefined, normalizeHarnessConfig({ profiles: [profile] })!.profiles![0]!)).toMatchObject({ auto: true, fraction: null, keepRecentTokens: 15000, effort: "low" });
+    expect(resolveCompactionSettings(undefined, normalizeHarnessConfig({ profiles: [profile] })!.profiles![0]!)).toMatchObject({ auto: true, fraction: null, keepRecentTokens: 16384, effort: "low" });
     expect(resolveCompactionSettings({ profiles: [], autoCompactPercent: 80 }, own.profiles![0]!).fraction).toBe(0.5);
     expect(() => normalizeHarnessConfig({ profiles: [{ ...profile, compaction: { fraction: 2 } }] })).toThrow(/compaction\.fraction/);
     expect(() => normalizeHarnessConfig({ profiles: [{ ...profile, compaction: { auto: "yes" } }] })).toThrow(/compaction\.auto/);

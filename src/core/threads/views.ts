@@ -240,3 +240,17 @@ export const USAGE_CONTINUE_PROMPT =
 
 /** How long after a reported reset a continue waits: a reset given to the second can still refuse a request sent on it. */
 export const USAGE_CONTINUE_GRACE_MS = 60_000;
+
+/**
+ * Whether a tool searches the web or fetches a page, by its (possibly
+ * namespaced) name: Claude's `WebSearch`, OpenCode's `webfetch`, the harness's
+ * `web_search`, and the search MCP servers' own (`mcp__exa__web_search_exa`,
+ * `mcp__exa__web_fetch_exa`, `mcp__brave__brave_news_search`). Null for the rest.
+ */
+export function webToolKind(tool: string): "search" | "fetch" | null {
+  const flat = tool.toLowerCase().replace(/[^a-z]/g, "");
+  if (flat.includes("webfetch")) return "fetch";
+  if (tool.toLowerCase().split(/[^a-z]+/).filter((part) => part.length > 0).pop() === "fetch") return "fetch";
+  if (flat.includes("websearch") || /(?:news|image|video|local|place)search/u.test(flat)) return "search";
+  return null;
+}

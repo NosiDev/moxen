@@ -10,7 +10,10 @@ Claude Code supports multiple authentication methods depending on your setup. In
 
 ## Log in to Claude Code
 
-After [installing Claude Code](/docs/en/setup#install-claude-code), run `claude` in your terminal. On first launch, Claude Code opens a browser window for you to log in. If you've set the `ANTHROPIC_API_KEY` environment variable and you approve the key when Claude Code asks whether to use it, Claude Code skips the login prompt.
+After [installing Claude Code](/docs/en/setup#install-claude-code), run `claude` in your terminal. Claude Code opens a browser window for you to log in on first launch, except in cases such as these, where it can skip the login prompt:
+
+* **API key**: you've set the `ANTHROPIC_API_KEY` environment variable and you approve the key when Claude Code asks whether to use it
+* **Earlier sign-in**: you ran [`claude auth login`](/docs/en/cli-reference#cli-commands) in your shell before your first session, or you rebuilt a dev container that keeps your credentials in a [volume](/docs/en/devcontainer#persist-authentication-and-settings-across-rebuilds). If you see the login prompt anyway, [check what can cause it](#login-prompt-still-appears-after-an-earlier-sign-in).
 
 If the browser doesn't open automatically, press `c` to copy the login URL to your clipboard, then paste it into your browser.
 
@@ -31,6 +34,15 @@ Admins can direct which login method developers use and require claude.ai logins
 To log out and re-authenticate, type `/logout` at the Claude Code prompt. Logging out also resets your first-launch setup state, so the next time you run `claude` it walks you through login and setup again.
 
 If you're having trouble logging in, see [authentication troubleshooting](/docs/en/troubleshoot-install#login-and-authentication).
+
+### Login prompt still appears after an earlier sign-in
+
+If you signed in earlier and first-launch setup shows the login prompt instead of [skipping it](#log-in-to-claude-code), check for causes such as these:
+
+* **Expired sign-in**: your earlier sign-in expired and Claude Code can't refresh it. Log in again at the prompt.
+* **Login restricted to an organization**: an administrator set [`forceLoginOrgUUID`](/docs/en/settings-reference#forceloginorguuid) in managed settings to [require logins from specific organizations](#restrict-login-to-your-organization). The prompt appears whether or not your account belongs to one of them. Log in with an account in a required organization. If you don't have one, ask your administrator to add you.
+* **Required login method**: your sign-in isn't the kind that [`forceLoginMethod`](/docs/en/settings-reference#forceloginmethod) in a settings file requires. With `"claudeai"`, an API key from an earlier Claude Console login doesn't count as an existing sign-in. With `"console"`, a claude.ai account doesn't. Log in with the kind of account that setting names.
+* **Older version**: before v2.1.290, the prompt appeared during setup whether or not you were signed in. [Update Claude Code](/docs/en/setup#update-claude-code) to skip it.
 
 ### Log in with multiple accounts
 
@@ -60,52 +72,48 @@ For teams and organizations, you can configure Claude Code access in one of thes
 * **Claude for Teams**: self-service plan with collaboration features, admin tools, SSO, billing management, and [server-managed settings](/docs/en/server-managed-settings) for organization-wide Claude Code configuration. Best for smaller teams.
 * **Claude for Enterprise**: adds domain capture, role-based permissions, and the compliance API. Best for larger organizations with security and compliance requirements.
 
-<Steps>
-  <Step title="Subscribe">
-    Subscribe to [Claude for Teams](https://claude.com/pricing?utm_source=claude_code\&utm_medium=docs\&utm_content=authentication_teams_step#team-&-enterprise) or contact sales for [Claude for Enterprise](https://anthropic.com/contact-sales?utm_source=claude_code\&utm_medium=docs\&utm_content=authentication_enterprise_step).
-  </Step>
+**1. Subscribe**
 
-  <Step title="Invite team members">
-    Invite team members from the admin dashboard.
-  </Step>
+Subscribe to [Claude for Teams](https://claude.com/pricing?utm_source=claude_code\&utm_medium=docs\&utm_content=authentication_teams_step#team-&-enterprise) or contact sales for [Claude for Enterprise](https://anthropic.com/contact-sales?utm_source=claude_code\&utm_medium=docs\&utm_content=authentication_enterprise_step).
 
-  <Step title="Install and log in">
-    Team members install Claude Code and log in with their claude.ai accounts.
-  </Step>
-</Steps>
+**2. Invite team members**
+
+Invite team members from the admin dashboard.
+
+**3. Install and log in**
+
+Team members install Claude Code and log in with their claude.ai accounts.
 
 ### Claude Console authentication
 
 For organizations that prefer API-based billing, you can set up access through the Claude Console.
 
-<Steps>
-  <Step title="Create or use a Console account">
-    Use your existing Claude Console account or create a new one.
-  </Step>
+**1. Create or use a Console account**
 
-  <Step title="Add users">
-    You can add users through either method:
+Use your existing Claude Console account or create a new one.
 
-    * Bulk invite users from within the Console: Settings -> Members -> Invite
-    * [Set up SSO](https://support.claude.com/en/articles/13132885-setting-up-single-sign-on-sso)
-  </Step>
+**2. Add users**
 
-  <Step title="Assign roles">
-    When inviting users, assign one of:
+You can add users through either method:
 
-    * **Claude Code** role: users can only create Claude Code API keys
-    * **Developer** role: users can create any kind of API key
-  </Step>
+* Bulk invite users from the Console's Members page at [platform.claude.com/settings/members](https://platform.claude.com/settings/members): click **Invite**
+* [Set up SSO](https://support.claude.com/en/articles/13132885-setting-up-single-sign-on-sso)
 
-  <Step title="Users complete setup">
-    Each invited user needs to:
+**3. Assign roles**
 
-    * Accept the Console invite
-    * [Check system requirements](/docs/en/setup#system-requirements)
-    * [Install Claude Code](/docs/en/setup#install-claude-code)
-    * Log in with Console account credentials
-  </Step>
-</Steps>
+When inviting users, assign one of:
+
+* **Claude Code** role: users can only create Claude Code API keys
+* **Developer** role: users can create any kind of API key
+
+**4. Users complete setup**
+
+Each invited user needs to:
+
+* Accept the Console invite
+* [Check system requirements](/docs/en/setup#system-requirements)
+* [Install Claude Code](/docs/en/setup#install-claude-code)
+* Log in with Console account credentials
 
 #### Sign in without an API key
 
@@ -114,7 +122,7 @@ You can sign in to your Console account without creating an API key, even when y
 * **Sign in with your Console account**, labeled `(recommended)`: Claude Code keeps the OAuth token from that sign-in and stores it as an [Anthropic profile](#anthropic-profiles-and-federation-credentials). It creates no API key
 * **Create an API key**, labeled `(legacy)`: Claude Code creates a Console API key for you and stores it with your other credentials
 
-In practice, the profile stores an OAuth login while an API key is a static credential: Claude Code refreshes the profile's login automatically, and when refresh fails, requests fail with [Anthropic profile login expired](/docs/en/errors#anthropic-profile-login-expired) until you sign in again.
+In practice, the profile stores an OAuth login while an API key is a static credential. Claude Code refreshes the profile's login automatically, and when refresh fails, requests fail with an [expired profile login error](/docs/en/errors#anthropic-profile-login-expired) until you sign in again.
 
 You don't get the choice on every machine. Claude Code creates an API key without asking in these cases:
 
@@ -130,27 +138,23 @@ After you sign in without a key, you have a profile instead of a stored API key:
 * **What it signs you out of**: Claude Code signs you out of any claude.ai login stored on the machine
 * **How to undo it**: run `/logout`, which removes and revokes the credential this sign-in wrote
 
-If your organization uses [server-managed settings](/docs/en/server-managed-settings), they apply to this sign-in on Claude Code v2.1.257 or later.
-
 Everything else about profiles applies to this sign-in, including where it ranks against your other credentials, the `Profile` row you get in `/status`, and the features that need a claude.ai login. See [Anthropic profiles and federation credentials](#anthropic-profiles-and-federation-credentials).
 
 ### Cloud provider authentication
 
 For teams using Amazon Bedrock, Google Cloud's Agent Platform, or Microsoft Foundry:
 
-<Steps>
-  <Step title="Follow provider setup">
-    Follow the [Amazon Bedrock docs](/docs/en/amazon-bedrock), [Google Cloud's Agent Platform docs](/docs/en/google-vertex-ai), or [Microsoft Foundry docs](/docs/en/microsoft-foundry).
-  </Step>
+**1. Follow provider setup**
 
-  <Step title="Distribute configuration">
-    Distribute the environment variables and instructions for generating cloud credentials to your users. Read more about how to [manage configuration here](/docs/en/settings).
-  </Step>
+Follow the [Amazon Bedrock docs](/docs/en/amazon-bedrock), [Google Cloud's Agent Platform docs](/docs/en/google-vertex-ai), or [Microsoft Foundry docs](/docs/en/microsoft-foundry).
 
-  <Step title="Install Claude Code">
-    Users can [install Claude Code](/docs/en/setup#install-claude-code).
-  </Step>
-</Steps>
+**2. Distribute configuration**
+
+Distribute the environment variables and instructions for generating cloud credentials to your users. Read more about how to [manage configuration here](/docs/en/settings).
+
+**3. Install Claude Code**
+
+Users can [install Claude Code](/docs/en/setup#install-claude-code).
 
 ### Restrict login to your organization
 
@@ -268,7 +272,7 @@ For the federation variables, Claude Code also reads the other variables in the 
 
 To confirm which source Claude Code chose, run `/status`. A `Profile` row names the source in place of the `Login method` row. When the profile is the credential in use, `Organization` and `Email` rows show its account.
 
-When a `user_oauth` profile's login has expired and Claude Code can't renew it, requests fail with [Anthropic profile login expired](/docs/en/errors#anthropic-profile-login-expired).
+When a `user_oauth` profile's login has expired and Claude Code can't renew it, requests fail with an [expired profile login error](/docs/en/errors#anthropic-profile-login-expired).
 
 Features that need your claude.ai login, such as [claude.ai connectors](/docs/en/mcp#use-mcp-servers-from-claude-ai) and [`/schedule`](/docs/en/routines), aren't available while one of these sources is selected. To stop Claude Code from selecting a source:
 
@@ -285,25 +289,23 @@ claude setup-token
 
 The command opens the same browser authorization flow as `/login`, and the token prints to the terminal after you approve access in the browser. It does not save the token anywhere; copy it and set it as the `CLAUDE_CODE_OAUTH_TOKEN` environment variable wherever you want to authenticate:
 
-<Tabs>
-  <Tab title="macOS, Linux, WSL">
-    ```bash theme={null}
-    export CLAUDE_CODE_OAUTH_TOKEN=your-token
-    ```
-  </Tab>
+**macOS, Linux, WSL**
 
-  <Tab title="Windows PowerShell">
-    ```powershell theme={null}
-    $env:CLAUDE_CODE_OAUTH_TOKEN = "your-token"
-    ```
-  </Tab>
+```bash theme={null}
+export CLAUDE_CODE_OAUTH_TOKEN=your-token
+```
 
-  <Tab title="Windows CMD">
-    ```batch theme={null}
-    set CLAUDE_CODE_OAUTH_TOKEN=your-token
-    ```
-  </Tab>
-</Tabs>
+**Windows PowerShell**
+
+```powershell theme={null}
+$env:CLAUDE_CODE_OAUTH_TOKEN = "your-token"
+```
+
+**Windows CMD**
+
+```batch theme={null}
+set CLAUDE_CODE_OAUTH_TOKEN=your-token
+```
 
 This token authenticates with your Claude subscription and requires a Pro, Max, Team, or Enterprise plan. It can only make model requests, so it can't establish [Remote Control](/docs/en/remote-control) sessions or fetch [claude.ai connectors](/docs/en/mcp#use-mcp-servers-from-claude-ai). MCP servers you configure locally still work.
 

@@ -141,6 +141,38 @@ describe("opencode driver", () => {
     expect(await Effect.runPromise(driver.hasSession("thread-1"))).toBe(true);
   });
 
+  it("starts its server with the tools the setting switches off, and restarts it once nothing runs when the setting changes", async () => {
+    const transport = new FakeOpencodeTransport({ messages: assistantMessages() });
+    const driver = new OpenCodeDriver({ transport, env: {}, reconcileDelayMs: 5 });
+    drivers.push(driver);
+    await Effect.runPromise(driver.startSession({ threadId: "thread-1", workingDirectory: "/repo", disabledNativeTools: ["websearch"], moxenPrompt: true }));
+    expect(transport.ensureCalls.map((call) => [call.disabledNativeTools, call.moxenPrompt])).toEqual([["websearch", true]]);
+
+    // A change while a turn runs waits: the turn is on that server.
+    const sent = await Effect.runPromise(driver.sendTurn({ threadId: "thread-1", prompt: "hi" }));
+    await driver.updateNativeTools("thread-1", ["websearch", "webfetch"], true);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(transport.servers[0]!.disposed).toBe(false);
+
+    const outcome = driver.awaitTurn("thread-1", sent.turnId);
+    await transport.servers[0]!.push({ type: "session.idle", properties: { sessionID: "opencode-session-1" } });
+    await outcome;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(transport.servers[0]!.disposed).toBe(true);
+
+    // The next send meets a fresh server, started with the new set.
+    const again = await Effect.runPromise(driver.sendTurn({ threadId: "thread-1", prompt: "again" }));
+    expect(transport.ensureCalls.map((call) => call.disabledNativeTools)).toEqual(["websearch", "webfetch,websearch"]);
+
+    // Switching Moxen's prompt off is a change to the server's config as well, and restarts it the same way.
+    const settled = driver.awaitTurn("thread-1", again.turnId);
+    await transport.servers[1]!.push({ type: "session.idle", properties: { sessionID: "opencode-session-1" } });
+    await settled;
+    await driver.updateNativeTools("thread-1", ["websearch", "webfetch"], false);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(transport.servers[1]!.disposed).toBe(true);
+  });
+
   it("sends turns with the parsed model and completes on idle with usage", async () => {
     const { transport, driver } = start({ messages: assistantMessages() });
     await startSession(driver);

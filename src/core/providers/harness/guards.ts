@@ -35,6 +35,8 @@ const HISTORY = 40;
  */
 export class LoopGuard {
   readonly #seen = new Map<string, number>();
+  /** What each call last came back with, so a call that now answers differently counts as progress, not as a repeat. */
+  readonly #lastResult = new Map<string, string>();
   readonly #recent: string[] = [];
   readonly #settings: LoopGuardSettings;
 
@@ -44,9 +46,30 @@ export class LoopGuard {
     this.#settings = { ...merged, repeatStop: Math.max(merged.repeatStop, merged.repeatWarn) };
   }
 
+  static key(name: string, rawArguments: string): string {
+    return `${name}\u0000${rawArguments.replace(/\s+/g, "")}`;
+  }
+
+  /**
+   * What a call answered. The same call is only a loop while it keeps getting
+   * the same answer: `git status`, a test run or a re-read of an edited file
+   * is the same call and legitimately comes back different each time. When
+   * the answer changes the run of repeats starts over, for that call and for
+   * any rotation it was part of.
+   */
+  observe(name: string, rawArguments: string, result: string): void {
+    if (!this.#settings.calls) return;
+    const key = LoopGuard.key(name, rawArguments);
+    const previous = this.#lastResult.get(key);
+    this.#lastResult.set(key, result);
+    if (previous === undefined || previous === result) return;
+    this.#seen.set(key, 1);
+    this.#recent.length = 0;
+  }
+
   record(name: string, rawArguments: string): LoopVerdict {
     if (!this.#settings.calls) return "ok";
-    const key = `${name}\u0000${rawArguments.replace(/\s+/g, "")}`;
+    const key = LoopGuard.key(name, rawArguments);
     const count = (this.#seen.get(key) ?? 0) + 1;
     this.#seen.set(key, count);
     this.#recent.push(key);

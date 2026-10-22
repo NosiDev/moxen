@@ -418,6 +418,7 @@ async function runCalls(
     } catch (error) {
       result = { content: `${call.name} failed: ${(error as Error).message}`, isError: true };
     }
+    guard.observe(call.name, call.arguments, result.content);
     if (verdict === "warn") result = { ...result, content: `${result.content}\n\n[${LOOP_WARNING}]` };
     finishWith(checked.args, result);
   };

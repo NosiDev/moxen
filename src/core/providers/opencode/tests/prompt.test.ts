@@ -1,0 +1,32 @@
+import { describe, expect, it } from "vitest";
+
+import { buildOpencodeSystemPrompt } from "../prompt.js";
+
+describe("Moxen's system prompt for OpenCode", () => {
+  it("carries the Harness's working principles and names the tools the way OpenCode does", () => {
+    const prompt = buildOpencodeSystemPrompt();
+    expect(prompt).toContain("# Doing the work");
+    expect(prompt).toContain("# Checking your work");
+    expect(prompt).toContain("# Acting with care");
+    expect(prompt).toContain("OpenCode's permission system refuses some actions");
+    expect(prompt).toContain("oldString");
+    expect(prompt).not.toContain("Moxen's safety check");
+    expect(prompt).not.toContain("web_fetch");
+    // What the runtime instructions already say is not said twice.
+    expect(prompt).not.toContain("progress notes");
+    expect(prompt).not.toContain("<task-notification>");
+    // Plan mode is OpenCode's own `plan` agent running this same text: the prompt has to defer to its reminder.
+    expect(prompt).toContain("when one says you are in plan mode");
+    // The cadence of status updates is the runtime instructions' to set, so the prompt does not set a second one.
+    expect(prompt).not.toContain("Before your first tool call");
+  });
+
+  it("does not point the model at a tool the server was told to leave off, and carries nothing that changes between turns", () => {
+    const prompt = buildOpencodeSystemPrompt("webfetch,websearch,subagent,question");
+    expect(prompt).not.toContain("On the web, prefer");
+    expect(prompt).not.toContain("A subagent works");
+    expect(prompt).not.toContain("ask with question");
+    expect(prompt).toContain("The skill tool lists skills");
+    expect(prompt).not.toMatch(/Working directory|20\d\d-\d\d-\d\d/);
+  });
+});

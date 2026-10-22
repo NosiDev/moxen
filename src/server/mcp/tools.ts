@@ -9,7 +9,11 @@
  * returns as soon as the task is under way, and `task_status` waits at most
  * `MAX_WAIT_MS` for it to finish before answering with where it stands.
  */
+import os from "node:os";
+import path from "node:path";
+
 import { CliError } from "../../core/errors.js";
+import { fetchPage } from "../../core/providers/harness/web/fetch.js";
 import type { DelegatedTaskStatus } from "../../core/threads/views.js";
 import type { ClientApi } from "../api.js";
 
@@ -35,13 +39,17 @@ export const MOXEN_TOOLS: readonly McpTool[] = [
     name: "delegate",
     description:
       "Hand a self-contained task to a new subagent thread, which runs in parallel on any provider and model. " +
+      "Only when the user has asked you to delegate (or a skill they invoked says to): each subagent starts cold and spends their usage, so by default do the work yourself. " +
       "By default it works in its own git worktree, on a new branch cut from yours, and commits there. " +
-      "Returns at once with a taskId: follow it with task_status, whose final summary is the subagent's report.",
+      "Returns at once with a taskId. Do not poll: the subagent's result arrives as a task notification when it settles, so keep working on something else or end your turn and wait.",
     inputSchema: {
       type: "object",
       properties: {
         task: { type: "string", description: "Everything the subagent needs: it sees none of your conversation." },
-        title: { type: "string", description: "Short title for the subagent's thread." },
+        title: {
+          type: "string",
+          description: "Short name for the subagent's thread, a few words (\"fix login redirect\"). It also names its worktree branch, moxen/<name>.",
+        },
         provider: { type: "string", description: "Provider instance id (claudeAgent, opencode/<provider>…); defaults to yours. The models tool lists them." },
         model: { type: "string", description: "Model slug on that provider; defaults to yours." },
         effort: { type: "string", description: "Reasoning effort for that model (one of its efforts in the models tool); defaults to the model's own." },
@@ -57,7 +65,7 @@ export const MOXEN_TOOLS: readonly McpTool[] = [
             "For side questions that need your context; the task text can then be short.",
         },
       },
-      required: ["task"],
+      required: ["task", "title"],
       additionalProperties: false,
     },
   },
@@ -65,6 +73,7 @@ export const MOXEN_TOOLS: readonly McpTool[] = [
     name: "task_status",
     description:
       "Where a delegated task stands: running, or finished with the subagent's report and the branch holding its work. " +
+      "For a full report after a task notification, or one deliberate check on a task taking far longer than expected; never as a polling loop. " +
       `Waits up to waitMs (max ${MAX_WAIT_MS}) for it to finish first.`,
     inputSchema: {
       type: "object",
@@ -93,6 +102,24 @@ export const MOXEN_TOOLS: readonly McpTool[] = [
     annotations: { readOnlyHint: true },
   },
   {
+    name: "web_fetch",
+    description:
+      "Reads a web page or file by address and returns it as text: pages become readable text with their links, JSON and text files come back as they are. " +
+      "Use it for documentation, an issue, an API response, or a server running on this machine (http://localhost:3000). " +
+      "Pages built by scripts, or that turn away plain requests, are retried through a browser when one is installed; set render to true to go straight to it. " +
+      "A long page is cut, and the whole text is saved to a file whose path is given. It cannot sign in: use the command line for a service the user is signed in to (gh for GitHub).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "The full address to fetch." },
+        render: { type: "boolean", description: "Load the page in a browser first, for pages built by scripts." },
+      },
+      required: ["url"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
     name: "task_cancel",
     description: "Stop a delegated task that is still running. Its thread and worktree are kept.",
     inputSchema: {
@@ -103,6 +130,15 @@ export const MOXEN_TOOLS: readonly McpTool[] = [
     },
   },
 ];
+
+/** The tools that hand work to other threads: a delegated task is itself the delegation, so it gets none of them. */
+export const DELEGATION_TOOLS: ReadonlySet<string> = new Set(["delegate", "task_status", "models", "task_cancel"]);
+
+/** The tools one session is offered: all of them, less the delegation ones for a delegated task, plus the checklist where the provider keeps none. */
+export function moxenToolsFor(options: { readonly checklist?: boolean; readonly delegated?: boolean }): readonly McpTool[] {
+  const tools = options.delegated === true ? MOXEN_TOOLS.filter((tool) => !DELEGATION_TOOLS.has(tool.name)) : MOXEN_TOOLS;
+  return options.checklist === true ? [...tools, TODOS_TOOL] : tools;
+}
 
 /**
  * A checklist for providers with none of their own (OpenCode v2 has no
@@ -214,9 +250,11 @@ export async function callMoxenTool(
   parentThreadId: string,
   name: string,
   args: Record<string, unknown>,
-  options: { readonly sleep?: (ms: number) => Promise<void> } = {},
+  options: { readonly sleep?: (ms: number) => Promise<void>; readonly delegated?: boolean } = {},
 ): Promise<ToolResult> {
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  // Hidden from the list, and refused here too: a client can call a tool it was never shown.
+  if (options.delegated === true && DELEGATION_TOOLS.has(name)) return { text: `${name} is not available in a delegated task: do the task yourself.`, isError: true };
   try {
     switch (name) {
       case "delegate":
@@ -232,6 +270,8 @@ export async function callMoxenTool(
         const recorded = await api.dispatch({ type: "thread.plan.set", threadId: parentThreadId, plan: plan as never });
         return ok({ recorded: recorded.steps, ...(note === null ? {} : { note }) });
       }
+      case "web_fetch":
+        return await webFetchTool(args);
       case "task_cancel": {
         const taskId = argString(args, "taskId", true)!;
         const cancelled = await api.dispatch({ type: "thread.task.cancel", parentThreadId, taskId });
@@ -245,6 +285,30 @@ export async function callMoxenTool(
     const code = cause instanceof CliError ? `${cause.code}: ` : "";
     return { text: `${code}${message}`, isError: true };
   }
+}
+
+/**
+ * The Harness's `web_fetch`, offered to every provider: the same request, the
+ * same refusal to reach cloud metadata or the local network, the same browser
+ * fallback. No approval step of its own — the provider's permission prompt for
+ * an MCP tool is the user's say here. The local network stays off; the
+ * Harness setting that opens it is the Harness's.
+ */
+async function webFetchTool(args: Record<string, unknown>): Promise<ToolResult> {
+  const url = argString(args, "url", true)!;
+  const result = await fetchPage(
+    url,
+    { render: args.render === true },
+    {
+      policy: { allowPrivate: false },
+      browser: { mode: "auto", path: undefined },
+      env: process.env,
+      artifactDir: path.join(os.tmpdir(), "moxen-web"),
+      signal: AbortSignal.timeout(60_000),
+      acceptsImages: false,
+    },
+  );
+  return { text: result.content, isError: result.isError === true };
 }
 
 function ok(value: unknown): ToolResult {
@@ -262,7 +326,7 @@ async function delegateTool(api: ClientApi, parentThreadId: string, args: Record
   // Worktree by default, when there is a branch to cut one from — except a
   // fork, whose copied conversation lives with the parent's checkout.
   const isolation = isolationArg ?? (fork ? "shared" : parent.thread.branch ? "worktree" : "shared");
-  const title = argString(args, "title");
+  const title = argString(args, "title", true)!;
   const provider = argString(args, "provider");
   const model = argString(args, "model");
   const effort = argString(args, "effort");
@@ -272,7 +336,7 @@ async function delegateTool(api: ClientApi, parentThreadId: string, args: Record
     task,
     wait: false,
     isolation,
-    ...(title ? { title } : {}),
+    title,
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),
     ...(effort ? { thinkingEffort: effort } : {}),
@@ -285,7 +349,7 @@ async function delegateTool(api: ClientApi, parentThreadId: string, args: Record
     model: `${delegated.modelSelection.instanceId}/${delegated.modelSelection.model}`,
     isolation,
     ...(delegated.worktree ? { worktree: delegated.worktree.path, branch: delegated.worktree.branch } : {}),
-    next: "Call task_status with this taskId to wait for the report.",
+    next: "Running. Do not poll task_status: a task notification arrives when it settles. Keep working or end your turn.",
   };
 }
 
@@ -311,7 +375,7 @@ async function statusTool(
     status: described.task.status,
     finished,
     ...(described.child.worktreePath ? { worktree: described.child.worktreePath, branch: described.child.branch } : {}),
-    ...(finished ? { report: described.task.summary } : { next: "Still running: call task_status again." }),
+    ...(finished ? { report: described.task.summary } : { next: "Still running. Do not call task_status in a loop: a task notification arrives when it settles." }),
   };
 }
 

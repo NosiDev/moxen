@@ -6,11 +6,14 @@
 # Effect
 
 `@opencode/plugin/effect` is the Effect-native version of the OpenCode plugin API. Its context operations return
-Effects or Streams, callbacks return Effects, and plugin lifetime is represented by `Scope`. Install `effect` with the
-plugin package.
+Effects or Streams, callbacks return Effects, and plugin lifetime is represented by `Scope`.
+
+OpenCode provides `effect` (including exported `effect/*` subpaths) and `@opencode/plugin` at runtime when loading
+plugins and their `node_modules` dependencies. Install them as peer/dev dependencies for local type-checking and testing
+rather than bundling them into your plugin.
 
 ```sh
-bun add @opencode/plugin effect
+bun add --peer @opencode/plugin effect
 ```
 
 Export an Effect plugin from `.opencode/plugins/` to load it automatically.
@@ -348,14 +351,14 @@ effect: (ctx) =>
 For account-specific discovery, pass the connection used to load the inventory as `sourceConnection`. OpenCode excludes
 that provider while another connection is selected, until your plugin publishes its refreshed inventory.
 
+{/* prettier-ignore */}
 ```ts
-const connection = yield * ctx.integration.connection.active("acme")
+const connection = yield* ctx.integration.connection.active("acme")
 if (!connection) return
-const inventory = yield * loadInventory(connection)
-yield *
-  ctx.provider.transform((editor) => {
-    editor.add({ info: inventory.provider, models: inventory.models, sourceConnection: connection })
-  })
+const inventory = yield* loadInventory(connection)
+yield* ctx.provider.transform((editor) => {
+  editor.add({ info: inventory.provider, models: inventory.models, sourceConnection: connection })
+})
 ```
 
 Schemas: [`Provider.Info`](/api#schema-Provider.Info), [`Model.Info`](/api#schema-Model.Info).
@@ -550,7 +553,7 @@ Connect with a key or drive an OAuth attempt through the connected API.
 effect: (ctx) =>
   Effect.gen(function* () {
     const integration = ctx.integration
-    const token = yield* Config.redacted("GITHUB_TOKEN").pipe(Effect.orDie)
+    const token = yield* Config.Redacted("GITHUB_TOKEN").pipe(Effect.orDie)
     yield* integration.connect
       .key({ integrationID: Integration.ID.make("github"), key: Redacted.value(token) })
       .pipe(Effect.orDie)
@@ -824,6 +827,19 @@ effect: (ctx) =>
   }),
 ```
 
+List sessions a page at a time. To get the next page, pass `cursor.next` back as `cursor`. The cursor remembers your
+filters, so you don't need to repeat them.
+
+```ts
+effect: (ctx) =>
+  Effect.gen(function* () {
+    const page = yield* ctx.session.list({ directory: ctx.location.directory, limit: 20 }).pipe(Effect.orDie)
+    const next = page.cursor.next
+      ? yield* ctx.session.list({ cursor: page.cursor.next, limit: 20 }).pipe(Effect.orDie)
+      : undefined
+  }),
+```
+
 Remove a temporary session with `remove`. Removal stops active execution and recursively deletes child sessions.
 
 ```ts
@@ -852,6 +868,7 @@ Schemas: [`Session.Info`](/api#schema-Session.Info), [`Model.Ref`](/api#schema-M
 ```ts
 type SessionDomain = Pick<
   SessionApi<unknown>,
+  | "list"
   | "create"
   | "get"
   | "remove"
@@ -1006,14 +1023,14 @@ namespaces and unsupported characters in tool names become `_`. Missing names ar
 `add` with a complete definition. Updates preserve the name and namespace. Assign new schemas or options to replace
 them rather than mutating nested values. Invalid updates are logged and leave the previous definition intact.
 
+{/* prettier-ignore */}
 ```ts
-yield *
-  ctx.tool.transform((editor) => {
-    editor.update("acme_greeting", (tool) => {
-      tool.description = "Greet the user by name"
-    })
-    editor.remove("acme_obsolete")
+yield* ctx.tool.transform((editor) => {
+  editor.update("acme_greeting", (tool) => {
+    tool.description = "Greet the user by name"
   })
+  editor.remove("acme_obsolete")
+})
 ```
 
 Updates and removals replay in order with additions, including after MCP catalog refreshes.
@@ -1503,7 +1520,7 @@ type Transform<Input> = (callback: (input: Input) => void) => Effect.Effect<Regi
 ## Publish
 
 A package plugin uses the same default export as a local Effect plugin. Export the Effect implementation from the main
-entrypoint and declare both runtime dependencies.
+entrypoint and declare `effect` as a `peerDependency`.
 
 ```json title="package.json"
 {
@@ -1514,11 +1531,27 @@ entrypoint and declare both runtime dependencies.
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@opencode/plugin": "latest",
-    "effect": "4.0.0-rc.111"
+    "@opencode/plugin": "latest"
+  },
+  "peerDependencies": {
+    "effect": "^4.0.0"
   }
 }
 ```
+
+OpenCode redirects imports of `effect`, exported `effect/*` subpaths, and `@opencode/plugin` (including imports from
+dependencies in the plugin's `node_modules`) to the host's runtime instances so fibers, loggers, and `Schema` parsers
+share one runtime copy.
+
+- Do not bundle `effect` into the published plugin artifact. If you build with a bundler, mark `effect` and `effect/*`
+  external.
+- Plugins and their `node_modules` dependencies always execute against the host OpenCode release's `effect` instance.
+  Use `effect` APIs and module paths compatible with the OpenCode release you target; dependencies built on another
+  `effect` major (such as Effect 3) also receive the host's `effect` and are not supported.
+- Only public `effect` subpaths are provided. A plugin that imports one of Effect's private `internal` modules fails to
+  load with an error naming the path.
+- The compiled OpenCode binary does not include the Scalar and Swagger UI assets used by Effect's HTTP API docs pages;
+  serving those pages from a plugin shows a notice instead.
 
 The package entrypoint exports `Plugin.define` with an `effect` function.
 

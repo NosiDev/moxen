@@ -27,6 +27,7 @@ import path from "node:path";
 
 import { APP_DISPLAY_NAME, APP_NAME } from "../config.js";
 import type { ThreadEnv } from "./types.js";
+import { buildWebGuidance, type WebGuidanceInput } from "./webguidance.js";
 
 export interface RuntimeInstructionsInput {
   /** The model selection's instance id (`claudeAgent`, `opencode/…`): names the harness. */
@@ -43,6 +44,10 @@ export interface RuntimeInstructionsInput {
   readonly userInstructions?: readonly string[];
   /** False when the user switched the to-do list off for this provider. */
   readonly checklist?: boolean;
+  /** True when the session has Moxen's delegation tools (not a delegated task itself, and Moxen's tools not switched off for the provider). */
+  readonly delegationTools?: boolean;
+  /** The web tools the session has (Claude and OpenCode only): which to prefer and how to use each well. */
+  readonly web?: WebGuidanceInput;
 }
 
 /**
@@ -64,6 +69,23 @@ export const RESEARCH_GUIDANCE =
 export const PROGRESS_GUIDANCE =
   "While you work, keep your messages to short progress notes, one line each: what you are about to do or just did " +
   '("Reading the driver", "Editing the settle logic"). Save explanations, summaries and long text for your final message, once the work is done.';
+
+/**
+ * Shell commands are where agents burn the most retries: they write bash and
+ * run it in zsh (a pattern that matches nothing is an error there, not a
+ * literal), or write GNU `sed`/`grep` for the BSD ones macOS ships, or reach
+ * for heredocs in fish. The text is fixed (no detected shell, no platform), so
+ * it stays the same between sessions and is true on every machine: it says
+ * what differs and what is safe in all of them.
+ */
+export const SHELL_GUIDANCE = [
+  "Commands you run go through the user's own shell, which is usually zsh (the macOS default), bash or fish, and the tools on a Mac are the BSD ones, not GNU. Most failed commands are syntax written for the wrong one, so write for the lowest common denominator and read the error before a retry:",
+  "- Quote every pattern. In zsh a glob that matches nothing is an error (`no matches found: --include=*.ts`) instead of being passed on as text, and fish fails the same way; write `--include='*.ts'`, `find . -name '*.ts'`, `git log -- 'src/*.ts'`. Single quotes pass text through untouched, but they cannot contain a single quote: use double quotes for that, and escape `$` and backticks inside them.",
+  "- zsh does not split an unquoted variable into words and bash does, fish never does; arrays count from 1 in zsh and fish and from 0 in bash. Avoid both: pass the paths as arguments, or loop over `find ... -print0 | xargs -0`. zsh's `echo` expands `\\n` and `\\t` where bash's does not; use `printf '%s\\n' \"$text\"` for anything exact.",
+  "- BSD sed needs an argument after -i (`sed -i '' 's/a/b/' file`, where GNU takes none), has no `\\+`, `\\|` or `\\n` in a pattern or replacement (use `sed -E`, and a real newline or `tr`), and BSD grep has no `-P` (use `grep -E`). Also differ: `date -d`, `stat -c` and `xargs -r`. To change a file, use the edit tool rather than sed; to search it, use grep or glob rather than the shell's.",
+  "- fish is not POSIX: `set -x NAME value` instead of `export NAME=value`, `$status` instead of `$?`, `(cmd)` or `$(cmd)` for substitution, `end` instead of `fi`, `done` or `}`, no heredocs and no `!!`. If you are not sure of the shell, or the command has a loop, a condition, a variable or a heredoc, hand it to bash explicitly: `bash -c '...'`, or for several lines `bash <<'EOF'` (not in fish; there, `bash -c`). A quoted heredoc delimiter (`<<'EOF'`) switches every expansion off, which makes it the safe way to pass code, JSON or text with quotes and `$` in it.",
+  "- Quote paths that contain spaces. Prefer absolute paths to `cd`, so a command does not depend on where an earlier one left the shell; and do not prepend `cd <the directory you are in>` to a git command, which already works there.",
+].join("\n");
 
 /**
  * What a session is told about the update block (`withInstructionsUpdate`)
@@ -107,6 +129,14 @@ export const CHECKLIST_GUIDANCE =
   "Only mark an item completed once it is really done and checked: if tests fail, the work is partial or you hit an error you have not " +
   "solved, leave it in_progress and add an item for what is blocking it.";
 
+/**
+ * What a session is told about the message Moxen sends it when a task it delegated settles. It arrives as a turn of
+ * the conversation, so without this a model reads it as the user's words, or as noise.
+ */
+export const TASK_NOTIFICATION_GUIDANCE =
+  "A message that begins with <task-notification> comes from Moxen, not from the person you are talking to: a task you delegated has settled. " +
+  "It lists each task's title, status and headline; call task_status with a taskId for the full report. Do not poll task_status while a task runs, and do not treat the message as a request from the user.";
+
 /** A subagent that delegates or hands off spawns work nobody is tracking. */
 export const NO_REDELEGATION_GUIDANCE =
   "Do the task yourself. Do not delegate to other threads or hand the conversation off, whether through a tool or " +
@@ -128,11 +158,15 @@ export function buildRuntimeInstructions(input: RuntimeInstructionsInput): strin
       `through the ${harnessName(input.instanceId)} harness. No need to mention this otherwise.`,
     RESEARCH_GUIDANCE,
     PROGRESS_GUIDANCE,
+    SHELL_GUIDANCE,
     INSTRUCTIONS_UPDATE_GUIDANCE,
     ...(harnessName(input.instanceId) === "OpenCode" ? [OPENCODE_SUBAGENT_GUIDANCE, ...(input.checklist === false ? [] : [CHECKLIST_GUIDANCE])] : []),
     // Claude Code's MCP results are wrapped by a hook; the other providers say so in their own prompts.
     ...(driverKindOfInstance(input.instanceId) === "claude" ? [UNTRUSTED_NOTE] : []),
   ];
+  if (input.delegationTools === true && !input.delegation) sections.push(TASK_NOTIFICATION_GUIDANCE);
+  const web = input.web ? buildWebGuidance(input.web) : "";
+  if (web !== "") sections.push(web);
   const delegation = input.delegation ?? null;
 
   if (delegation) {

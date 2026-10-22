@@ -39,7 +39,7 @@ const MODEL_FIELDS: readonly ListField[] = [
   {
     path: "family",
     label: "Model family",
-    description: "Which set of known template quirks to start from. Set it when the model's name does not say (a fine-tune called `my-coder`).",
+    description: "Which model line this is, so Moxen starts from what is known about how it wants its prompts shaped (the 'Template quirks' further down). Set it when the model's name does not say, such as a fine-tune called `my-coder`. Generic is safe for anything.",
     group: "Model",
     kind: { type: "enum", choices: FAMILY_CHOICES },
   },
@@ -68,7 +68,7 @@ const QUIRK_FIELDS: readonly ListField[] = [
   ...QUIRK_BOOLEANS.map(([name, label, description]): ListField => ({
     path: `quirks.${name}`,
     label,
-    description: `${description} Set here, it beats both the preset and a probe; clear it to go back to those.`,
+    description: `${description} Most servers need none of the template quirks: pick a Model family and leave the rest on Default. Set here, it beats both the family and a probe; Default goes back to those.`,
     group: "Template quirks",
     kind: { type: "boolean" },
   })),
@@ -77,21 +77,41 @@ const QUIRK_FIELDS: readonly ListField[] = [
     label: "Role of the first prompt",
     description: "What the leading prompt is sent as. Beats the preset and the probe.",
     group: "Template quirks",
-    kind: { type: "enum", choices: [choice("system", "system"), choice("developer", "developer"), choice("user", "user")] },
+    kind: {
+      type: "enum",
+      choices: [
+        choice("system", "system", "The usual: a system message."),
+        choice("developer", "developer", "OpenAI's newer name for it, which some reasoning models require."),
+        choice("user", "user", "For a template that has no system role: the prompt goes in as the first user message."),
+      ],
+    },
   },
   {
     path: "quirks.emptyAssistantContent",
     label: "Content of a tool-call-only reply",
-    description: "What an assistant message that only calls tools carries as text: nothing, or a single dot (for servers that reject empty content).",
+    description: "When the model answers with only a tool call and no words, what to put in the text part of that message when it is sent back. Leave it unless the server errors on empty content.",
     group: "Template quirks",
-    kind: { type: "enum", choices: [choice("empty", "Empty"), choice("dot", "A dot (.)")] },
+    kind: {
+      type: "enum",
+      choices: [
+        choice("empty", "Empty", "Send no text. What most servers expect."),
+        choice("dot", "A dot (.)", "Send a single dot, for a server that rejects an empty message."),
+      ],
+    },
   },
   {
     path: "quirks.reasoningReplay",
     label: "Send earlier reasoning back",
-    description: "How past reasoning goes back to the model: in its own field, as <thinking> text, or not at all.",
+    description: "Whether the model's earlier thinking is shown to it again on later turns, and how. Some models reason better when they see it; others get confused or the server refuses the extra field.",
     group: "Template quirks",
-    kind: { type: "enum", choices: [choice("field", "In its field"), choice("text", "As text"), choice("none", "Not at all")] },
+    kind: {
+      type: "enum",
+      choices: [
+        choice("field", "In its field", "Sent in the field below, as the server returned it."),
+        choice("text", "As text", "Pasted into the message inside <thinking> tags, for servers with no such field."),
+        choice("none", "Not at all", "Dropped: the model only sees its earlier answers."),
+      ],
+    },
   },
   {
     path: "quirks.reasoningField",
@@ -103,16 +123,29 @@ const QUIRK_FIELDS: readonly ListField[] = [
   {
     path: "quirks.anthropicThinking",
     label: "Thinking (Anthropic)",
-    description: "How reasoning is switched on: adaptive (Claude 4.6 and newer decide for themselves), a fixed token budget (older models), or left out.",
+    description: "How thinking is turned on for an Anthropic server. Pick by model age: newer Claude models decide for themselves, older ones need a number of tokens set aside.",
     group: "Template quirks",
-    kind: { type: "enum", choices: [choice("adaptive", "Adaptive"), choice("budget", "Token budget"), choice("off", "Off")] },
+    kind: {
+      type: "enum",
+      choices: [
+        choice("adaptive", "Adaptive", "The model decides how much to think. Claude 4.6 and newer."),
+        choice("budget", "Token budget", "A fixed number of tokens set aside for thinking. Older Claude models."),
+        choice("off", "Off", "Never ask for thinking."),
+      ],
+    },
   },
   {
     path: "quirks.images",
     label: "Image parts",
-    description: "Whether image content is sent natively. `Takes images` on the model normally decides this.",
+    description: "How an image is passed to the model. `Takes images` on the model normally decides this for you; set it here only to force one way.",
     group: "Template quirks",
-    kind: { type: "enum", choices: [choice("native", "Native"), choice("none", "Text note instead")] },
+    kind: {
+      type: "enum",
+      choices: [
+        choice("native", "Native", "Sent as a real image, for a model that can see."),
+        choice("none", "Text note instead", "Replaced by a short note saying an image was here, for a model or server that cannot take one."),
+      ],
+    },
   },
 ];
 
@@ -121,14 +154,19 @@ export const HARNESS_PROFILE_FIELDS: readonly ListField[] = [
   {
     path: "apiFormat",
     label: "API format",
-    description: "Which API the server speaks: chat (OpenAI Chat Completions, what llama.cpp, vLLM and Ollama offer), responses (OpenAI Responses), or anthropic (Anthropic Messages). Unset means chat.",
+    description: "Which API the server speaks. If you are not sure, it is Chat Completions: that is what a local server (llama.cpp, vLLM, Ollama) offers. Default: Chat Completions.",
     group: "Endpoint",
-    kind: { type: "enum", choices: [choice("chat", "Chat Completions"), choice("responses", "OpenAI Responses"), choice("anthropic", "Anthropic Messages")] },
+    kind: { type: "enum", choices: [
+        choice("chat", "Chat Completions", "The common one: llama.cpp, vLLM, Ollama, LM Studio, OpenRouter and most others."),
+        choice("responses", "OpenAI Responses", "OpenAI's newer API; also what some gateways in front of OpenAI models offer."),
+        choice("anthropic", "Anthropic Messages", "Anthropic's own API, or a proxy that speaks it."),
+      ],
+    },
   },
   {
     path: "baseUrl",
     label: "Base URL",
-    description: "The server's address, with or without /v1. No username or password in it.",
+    description: "The server's address, such as http://localhost:8080. Type it with or without /v1: Moxen adds /v1 when it is missing, for every API format. If the server sits under another path (like /openai/v1), give the whole path ending in /v1. No username or password in it.",
     group: "Endpoint",
     kind: { type: "string", placeholder: "http://localhost:8080" },
   },
@@ -151,7 +189,7 @@ export const HARNESS_PROFILE_FIELDS: readonly ListField[] = [
     label: "Server slots",
     description: "Requests the server runs at once (llama.cpp `-np`). With 1, Moxen's own subagents wait their turn instead of starving you.",
     group: "Endpoint",
-    kind: { type: "integer", presets: [1, 2, 4, 8] },
+    kind: { type: "integer", presets: [1, 2, 4, 8], ends: { low: "Fewer", high: "More" } },
   },
   {
     path: "models",
@@ -160,10 +198,10 @@ export const HARNESS_PROFILE_FIELDS: readonly ListField[] = [
     group: "Models",
     kind: { type: "list", noun: "model", fields: MODEL_FIELDS },
   },
-  { path: "sampling.temperature", label: "Temperature", description: "Sampling temperature, 0 to 5. Unset leaves it to the server.", group: "Sampling", kind: { type: "number", presets: [0, 0.2, 0.6, 0.7, 1] } },
-  { path: "sampling.topP", label: "Top P", description: "Nucleus sampling, 0 to 1.", group: "Sampling", kind: { type: "number", presets: [0.8, 0.9, 0.95, 1] } },
-  { path: "sampling.topK", label: "Top K", description: "Sampling pool size.", group: "Sampling", kind: { type: "integer", presets: [20, 40, 64] } },
-  { path: "sampling.minP", label: "Min P", description: "Smallest probability a token may have, 0 to 1.", group: "Sampling", kind: { type: "number", presets: [0, 0.05, 0.1] } },
+  { path: "sampling.temperature", label: "Temperature", description: "Sampling temperature, 0 to 5. Unset leaves it to the server.", group: "Sampling", kind: { type: "number", presets: [0, 0.2, 0.6, 0.7, 1], ends: { low: "Focused", high: "Creative" } } },
+  { path: "sampling.topP", label: "Top P", description: "Nucleus sampling, 0 to 1.", group: "Sampling", kind: { type: "number", presets: [0.8, 0.9, 0.95, 1], ends: { low: "Narrower", high: "Wider" } } },
+  { path: "sampling.topK", label: "Top K", description: "Sampling pool size.", group: "Sampling", kind: { type: "integer", presets: [20, 40, 64], ends: { low: "Narrower", high: "Wider" } } },
+  { path: "sampling.minP", label: "Min P", description: "Smallest probability a token may have, 0 to 1.", group: "Sampling", kind: { type: "number", presets: [0, 0.05, 0.1], ends: { low: "Looser", high: "Stricter" } } },
   {
     path: "preserveThinking",
     label: "Keep reasoning in history",
@@ -181,23 +219,24 @@ export const HARNESS_PROFILE_FIELDS: readonly ListField[] = [
   {
     path: "compaction.fraction",
     label: "Compact at (share of window)",
-    description: "0.3 to 0.95. Overrides the Moxen Harness percentage for this profile. Needs a context window on the model.",
+    description: "Kept so older profiles still load: 0.3 to 0.95 of the window. 'Compact at' in tokens wins when it is set.",
     group: "Compaction",
+    hidden: true,
     kind: { type: "number", presets: [0.5, 0.6, 0.7, 0.8, 0.9] },
   },
   {
     path: "compaction.tokens",
-    label: "Compact at (tokens)",
-    description: "An exact threshold in tokens; wins over the share.",
+    label: "Compact at",
+    description: "Tokens of context at which this profile compacts. Overrides the Moxen Harness setting of the same name. Needs a context window on the model.",
     group: "Compaction",
-    kind: { type: "integer" },
+    kind: { type: "integer", presets: [32_768, 65_536, 131_072, 262_144, 524_288], ends: { low: "Earlier", high: "Later" } },
   },
   {
     path: "compaction.keepRecentTokens",
     label: "Kept word for word",
     description: "How much of the newest conversation stays unsummarised. Overrides the Moxen Harness setting.",
     group: "Compaction",
-    kind: { type: "integer", presets: [8_000, 15_000, 30_000, 50_000] },
+    kind: { type: "integer", presets: [8_192, 16_384, 32_768, 65_536], ends: { low: "Less", high: "More" } },
   },
   {
     path: "compaction.effort",
@@ -214,10 +253,10 @@ export const HARNESS_PROFILE_FIELDS: readonly ListField[] = [
     kind: { type: "boolean" },
   },
   { path: "loopGuard.calls", label: "Catch repeated tool calls", description: "Warn, then end the turn, when the model makes the same tool call (or the same few calls in turn) again and again. Unset: on.", group: "Behaviour", kind: { type: "boolean" } },
-  { path: "loopGuard.repeatWarn", label: "Warn after identical calls", description: "The same tool call this many times in one turn gets a warning. Unset: 4.", group: "Behaviour", kind: { type: "integer", presets: [3, 4, 5, 8] } },
-  { path: "loopGuard.repeatStop", label: "Stop after identical calls", description: "…and this many ends the turn. Unset: 6.", group: "Behaviour", kind: { type: "integer", presets: [5, 6, 8, 12] } },
+  { path: "loopGuard.repeatWarn", label: "Warn after identical calls", description: "The same tool call, getting the same answer, this many times in one turn gets a warning. A call that answers differently each time (a test run, a re-read after an edit) is progress and is not counted. Unset: 4.", group: "Behaviour", kind: { type: "integer", presets: [3, 4, 5, 8], ends: { low: "Sooner", high: "Later" } } },
+  { path: "loopGuard.repeatStop", label: "Stop after identical calls", description: "…and this many ends the turn. It is never earlier than the warning. Unset: 6.", group: "Behaviour", kind: { type: "integer", presets: [5, 6, 8, 12], ends: { low: "Sooner", high: "Later" } } },
   { path: "loopGuard.text", label: "Catch repeated text", description: "Cut a reply off when it, or its reasoning, repeats one stretch of text over and over. Turn it off if it ends replies that were fine. Unset: on.", group: "Behaviour", kind: { type: "boolean" } },
-  { path: "loopGuard.textRepeats", label: "Stop repeated text after", description: "A reply repeating one stretch of text this many times is cut off. Unset: 10.", group: "Behaviour", kind: { type: "integer", presets: [6, 10, 20] } },
+  { path: "loopGuard.textRepeats", label: "Stop repeated text after", description: "A reply repeating one stretch of text this many times is cut off. Unset: 10.", group: "Behaviour", kind: { type: "integer", presets: [6, 10, 20], ends: { low: "Sooner", high: "Later" } } },
   {
     path: "systemPromptAppend",
     label: "Extra instructions",

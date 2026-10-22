@@ -1,3 +1,4 @@
+import { webToolKind } from "../../../core/threads/views.js";
 import type { ReactNode, RefObject } from "react";
 import { useEffect, useMemo, useState } from "react";
 import type { ScrollBoxRenderable } from "@opentui/core";
@@ -6,7 +7,7 @@ import { TextAttributes, bold, fg, t } from "@opentui/core";
 import { useHover } from "../../hooks/useHover.js";
 import { useAnimTick } from "../../hooks/useAnimTick.js";
 import { markModalDismissed } from "../../model/modalDismiss.js";
-import { describeActivity, fileRowCounts, formatMs, readRangeLabel } from "../../model/activity.js";
+import { describeActivity, fileRowCounts, formatMs, readRangeLabel, webToolSource } from "../../model/activity.js";
 import { findPatchFile, type PatchFile } from "../../model/patch.js";
 import { formatBytes, renderMessage } from "../../model/message.js";
 import { isCompactPrompt, isUsageContinue, taskNotifications, untilLabel, type TaskNotificationView, type TimelineEntry } from "../../model/thread.js";
@@ -352,16 +353,17 @@ function ActivityRow({ entry, now, turnFiles = [], onOpenUrl, width = 80 }: { en
   }
 
   if (view.kind === "web") {
-    const name = view.tool.toLowerCase().replace(/[^a-z]/g, "");
+    const web = webToolKind(view.tool);
     const url = /^https?:\/\//i.test(view.query) ? view.query : null;
     const title =
-      name.endsWith("webfetch")
+      web === "fetch"
         ? `Fetched ${url === null ? truncate(view.query, 48) : hostOf(url)}`
-        : name.endsWith("websearch")
+        : web === "search"
           ? `Searched for "${truncate(view.query, 48)}"`
           : view.tool;
+    const source = web === null ? null : webToolSource(view.tool);
     return (
-      <ToolChip rail={COLOR.agent} glyph="○" title={truncate(title, 72)} time={time} running={view.running}>
+      <ToolChip rail={COLOR.agent} glyph="○" title={truncate(source === null ? title : `${title} · ${source}`, 72)} time={time} running={view.running}>
         {url === null || onOpenUrl === undefined ? null : (
           <text fg={COLOR.accent} attributes={TextAttributes.UNDERLINE} selectable={false} onMouseDown={() => onOpenUrl(url)}>
             {truncate(url, 72)}
@@ -1234,8 +1236,6 @@ function TurnBlock({  group,
   const inFlow = open || group.limited;
   const closing = inFlow ? null : (group.reply ?? group.live);
   const live = open ? group.live : null;
-  // A thought still running renders last; finished, it takes its place in line.
-  const thought = open ? runningThought(group) : null;
   // Expanded, a prompt sent mid-turn sits where it landed in the work; folded,
   // it stays with the turn's opening prompts above the fold.
   const nudges = workExpanded ? group.nudges : [];
@@ -1243,11 +1243,10 @@ function TurnBlock({  group,
   // its card stays where it landed — below the fold, not above it with the
   // opening prompts.
   const lateNotices = workExpanded ? [] : group.nudges.filter((entry) => taskNotifications(entry.message) !== null);
-  const inLine =
+  const work =
     (inFlow && group.reply !== null) || nudges.length > 0
       ? [...group.work, ...(inFlow && group.reply !== null ? [group.reply] : []), ...nudges].sort((left, right) => left.at.localeCompare(right.at))
       : group.work;
-  const work = thought === null ? inLine : inLine.filter((entry) => entry !== thought);
 
   // Fold rule: the Worked fold always hides the work when collapsed. Once
   // expanded, tools stay flat only until an assistant message lands after
@@ -1341,8 +1340,6 @@ function TurnBlock({  group,
           onOpenActions={() => onOpenMessageActions(closing)}
         />
       )}
-
-      {thought === null ? null : renderToolRow(thought)}
 
       {group.diff === null ? null : (
         <TurnDiffRow

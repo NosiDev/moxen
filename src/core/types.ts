@@ -23,6 +23,8 @@ export interface CliConfig {
   thinkingEffort?: string;
   /** MCP servers injected into every provider session (`core/mcp.ts`). */
   mcpServers?: Record<string, McpServerEntry>;
+  /** What starts an npm package when a well-known MCP server is added: npx (the default), bunx, `pnpm dlx` or `yarn dlx`. */
+  mcpRunner?: "npx" | "bunx" | "pnpm" | "yarn";
   /** Appended to every provider session's system prompt (`core/threads/instructions.ts`). */
   instructions?: string;
   /**
@@ -37,6 +39,12 @@ export interface CliConfig {
    * off, the providers are pointed at the bundled folder instead.
    */
   installSkills?: boolean;
+  /**
+   * Days after a thread is archived or deleted before its `moxen/*` branch is
+   * deleted, locally and (when it was pushed) on `origin`: only a branch already
+   * merged, so no unique work is lost. Unset: 14. 0: never.
+   */
+  branchPruneDays?: number;
   /** TUI presentation; ignored by the CLI, which has no panels. */
   ui?: UiConfig;
   git?: GitConfig;
@@ -57,12 +65,16 @@ export interface UiConfig {
   backdrop?: BackdropMode;
   /** Each model's own scene behind the new-thread view; off keeps the monitoring field. On by default. */
   modelScenes?: boolean;
+  /** Leave binary files out of the Diff tab. On by default. */
+  hideBinaryDiffs?: boolean;
   defaultSidePanel?: "context" | "git" | "agents" | "background";
   contextRefreshSeconds?: number;
   usageRefreshSeconds?: number;
   /** What to do when a thread passes `autoHandoffPercent` of its window: ask with a card, hand off on its own, or nothing. Unset: ask. */
   autoHandoff?: "off" | "ask" | "auto";
   autoHandoffPercent?: number;
+  /** Tokens of context at which a thread is handed off; wins over `autoHandoffPercent` at the same level. Unset: half the model's window. */
+  autoHandoffTokens?: number;
 }
 
 export interface GitConfig {
@@ -90,8 +102,18 @@ export interface ProvidersConfig {
 
 /** Moxen Harness: our own agent loop against endpoints the user configures. */
 export interface HarnessProviderConfig {
+  /** Hand off long threads on this provider: ask, on its own, or never. Unset: the global `ui.autoHandoff`. */
+  autoHandoff?: "off" | "ask" | "auto";
+  /** Tokens of context at which this provider's threads are handed off. Unset: this provider's share, else the global setting. */
+  autoHandoffTokens?: number;
+  /** Share (percent) of a model's window at which this provider's threads are handed off. Unset: the global setting. */
+  autoHandoffPercent?: number;
+  /** Tokens per model slug; beats everything else for that model. */
+  autoHandoffModels?: Record<string, number>;
   /** Offer Moxen's own tools (delegate, handoff, task status) to threads on this provider. Unset: yes. */
   moxenTools?: boolean;
+  /** MCP servers this provider does not get, as comma-separated names. Unset: it gets every server the server entry itself offers it. Settings key: `providers.<kind>.mcpExclude`. */
+  mcpExclude?: string;
   /** Offer the model a to-do list on this provider. Unset: yes. */
   todos?: boolean;
   /** Permission mode new threads on this provider start in; unset follows the global `runtimeMode`. */
@@ -105,6 +127,8 @@ export interface HarnessProviderConfig {
   autoCompact?: boolean;
   /** Percent of the context window at which to compact; unset: 70 for windows of 128k or more, 60 below. */
   autoCompactPercent?: number;
+  /** Tokens of context at which a harness session compacts; wins over `autoCompactPercent`. */
+  autoCompactTokens?: number;
   keepRecentTokens?: number;
   /** How many requests a profile's server takes at once when the profile does not say; unset means no limit. */
   slots?: number;
@@ -209,10 +233,28 @@ export interface HarnessProfileConfig {
 
 /** What the user may set for OpenCode. Its external-server URL and password are not offered yet (see `configschema.ts`). */
 export interface OpencodeProviderConfig {
+  /** Hand off long threads on this provider: ask, on its own, or never. Unset: the global `ui.autoHandoff`. */
+  autoHandoff?: "off" | "ask" | "auto";
+  /** Tokens of context at which this provider's threads are handed off. Unset: this provider's share, else the global setting. */
+  autoHandoffTokens?: number;
+  /** Share (percent) of a model's window at which this provider's threads are handed off. Unset: the global setting. */
+  autoHandoffPercent?: number;
+  /** Tokens per model slug; beats everything else for that model. */
+  autoHandoffModels?: Record<string, number>;
   /** Offer Moxen's own tools (delegate, handoff, task status) to threads on this provider. Unset: yes. */
   moxenTools?: boolean;
+  /** MCP servers this provider does not get, as comma-separated names. Unset: it gets every server the server entry itself offers it. Settings key: `providers.<kind>.mcpExclude`. */
+  mcpExclude?: string;
   /** Offer the model a to-do list on this provider. Unset: yes. */
   todos?: boolean;
+  /** Replace OpenCode's own base system prompt with Moxen's. Unset: yes. */
+  moxenPrompt?: boolean;
+  /** The provider's own tools to switch off, as comma-separated names (`core/nativetools.ts`). Unset: it keeps them all. Settings key: `providers.<kind>.disabledNativeTools`. */
+  disabledNativeTools?: string;
+  /** The order the model should prefer web search tools in, as comma-separated ids (`brave`, `exa`, `native`). Unset: no preference. Settings key: `providers.<kind>.webSearchOrder`. */
+  webSearchOrder?: string;
+  /** The same for fetching a page (`moxen`, `exa`, `native`). Settings key: `providers.<kind>.webFetchOrder`. */
+  webFetchOrder?: string;
   /** Permission mode new threads on this provider start in; unset follows the global `runtimeMode`. */
   runtimeMode?: RuntimeMode;
   /** Model new threads on this provider start with, when nothing more specific names one. */
@@ -222,13 +264,33 @@ export interface OpencodeProviderConfig {
   binaryPath?: string;
   /** Tell spawned OpenCode servers about moxen's bundled skills. */
   bundledSkills?: boolean;
+  /** Whether spawned OpenCode servers compact on their own near the context limit. Unset: whatever OpenCode's own config says. */
+  autoCompact?: boolean;
+  /** Tokens kept free below the model's limit; a larger buffer compacts earlier. Unset: OpenCode's own (10%). */
+  compactBuffer?: number;
 }
 
 export interface ClaudeProviderConfig {
+  /** Hand off long threads on this provider: ask, on its own, or never. Unset: the global `ui.autoHandoff`. */
+  autoHandoff?: "off" | "ask" | "auto";
+  /** Tokens of context at which this provider's threads are handed off. Unset: this provider's share, else the global setting. */
+  autoHandoffTokens?: number;
+  /** Share (percent) of a model's window at which this provider's threads are handed off. Unset: the global setting. */
+  autoHandoffPercent?: number;
+  /** Tokens per model slug; beats everything else for that model. */
+  autoHandoffModels?: Record<string, number>;
   /** Offer Moxen's own tools (delegate, handoff, task status) to threads on this provider. Unset: yes. */
   moxenTools?: boolean;
+  /** MCP servers this provider does not get, as comma-separated names. Unset: it gets every server the server entry itself offers it. Settings key: `providers.<kind>.mcpExclude`. */
+  mcpExclude?: string;
   /** Offer the model a to-do list on this provider. Unset: yes. */
   todos?: boolean;
+  /** The provider's own tools to switch off, as comma-separated names (`core/nativetools.ts`). Unset: it keeps them all. Settings key: `providers.<kind>.disabledNativeTools`. */
+  disabledNativeTools?: string;
+  /** The order the model should prefer web search tools in, as comma-separated ids (`brave`, `exa`, `native`). Unset: no preference. Settings key: `providers.<kind>.webSearchOrder`. */
+  webSearchOrder?: string;
+  /** The same for fetching a page (`moxen`, `exa`, `native`). Settings key: `providers.<kind>.webFetchOrder`. */
+  webFetchOrder?: string;
   /** Permission mode new threads on this provider start in; unset follows the global `runtimeMode`. */
   runtimeMode?: RuntimeMode;
   /** Model new threads on this provider start with, when nothing more specific names one. */
@@ -245,6 +307,12 @@ export interface ClaudeProviderConfig {
   agentSkills?: boolean;
   /** Tokens at which Claude Code auto-compacts (100000 to 1000000); unset leaves its own default for the model. */
   autoCompactWindow?: number;
+  /** Who compacts a long thread: Claude Code itself ("claude"), or Moxen, which turns Claude Code's off and sends `/compact` past `autoCompactPercent` of the window: asking first ("ask") or on its own ("auto"). Unset: ask. */
+  autoCompact?: "claude" | "ask" | "auto";
+  /** With Moxen compacting: the share of the window, 10 to 95, past which a thread is compacted. Unset: 80. */
+  autoCompactPercent?: number;
+  /** Run every Claude Code session with Ultracode (workflow orchestration) on. Unset: off. */
+  ultracode?: boolean;
 }
 
 export interface RuntimeState {
@@ -449,3 +517,13 @@ export function driverKindOfInstance(instanceId: string): "claude" | "opencode" 
   if (key === "claudeagent" || key === "claude") return "claude";
   return null;
 }
+
+/** One model a server lists when asked (`harness.models.discover`). */
+export interface DiscoveredModel {
+  readonly id: string;
+  readonly contextWindow?: number;
+}
+
+export type DiscoverResult =
+  | { readonly ok: true; readonly models: readonly DiscoveredModel[]; readonly host: string }
+  | { readonly ok: false; readonly message: string; readonly host: string | null };

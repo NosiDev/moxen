@@ -4,7 +4,7 @@ import { testRender } from "@opentui/react/test-utils";
 
 import { Composer } from "../../features/composer/composer.js";
 import { DiffPanel } from "../../features/diffpanel/diffpanel.js";
-import { AgentsTab, ContextTab, SidePanelFrame, SideTabBar } from "../../features/sidepanel/sidepanel.js";
+import { AgentsTab, ContextTab, InfoTab, SidePanelFrame, SideTabBar } from "../../features/sidepanel/sidepanel.js";
 import type { SideTab } from "../../model/sidepanel.js";
 import { fail } from "../helpers.js";
 
@@ -141,6 +141,50 @@ export async function runSidePanelTabs(): Promise<void> {
   if (new Set(toolRows.map((row) => row.lastIndexOf("░") === -1 ? row.lastIndexOf("█") : row.lastIndexOf("░"))).size !== 1) {
     fail("heaviest tool bars do not end on the same column");
   }
+
+  // A delegated thread's tab is Info: the task, who asked, where the work is.
+  const infoOpened: string[] = [];
+  function InfoHarness() {
+    const scrollRef = useRef<ScrollBoxRenderable | null>(null);
+    return (
+      <box style={{ width: 60, height: 20, flexDirection: "column" }}>
+        <SideTabBar tab="agents" badges={{}} onTab={() => {}} onClose={() => {}} agentsLabel="Info" />
+        <SidePanelFrame width={60} focused scrollRef={scrollRef} onFocus={() => {}}>
+          <InfoTab
+            info={{
+              task: "Audit the routes and list the ones missing auth.",
+              parent: { threadId: "parent-1", title: "Harden the API" },
+              status: "running",
+              outcome: null,
+              startedAt: new Date(now - 65_000).toISOString(),
+              model: "Sonnet 5.5",
+              branch: "moxen/audit-routes",
+              worktreePath: "~/.moxen/threads/worktrees/df0ea54d-2cde-4255-8389-afb07b867a83",
+            }}
+            now={now}
+            onOpen={(threadId) => infoOpened.push(threadId)}
+          />
+        </SidePanelFrame>
+      </box>
+    );
+  }
+  const infoSetup = await testRender(<InfoHarness />, { width: 62, height: 22, exitOnCtrlC: false });
+  await infoSetup.flush();
+  const info = infoSetup.captureCharFrame();
+  console.log("--- side panel: info tab (delegated thread) ---");
+  console.log(info);
+  for (const expected of ["Info", "Delegated task", "running 1m 5s", "Sonnet 5.5", "Harden the API", "moxen/audit-routes", "Task", "Audit the routes and list"]) {
+    if (!info.includes(expected)) fail(`info tab is missing "${expected}"`);
+  }
+  // The path wraps inside its own column, never over the label.
+  const worktreeRow = info.split("\n").find((row) => row.includes("Worktree"));
+  if (worktreeRow === undefined || !/Worktree\s+~\//.test(worktreeRow)) fail("the worktree label and its path run together");
+  if (info.includes("Agents")) fail("a delegated thread's tab should not be called Agents");
+  const infoRows = info.split("\n");
+  const parentRow = infoRows.findIndex((row) => row.includes("Harden the API"));
+  await act(async () => infoSetup.mockMouse.click(infoRows[parentRow]!.indexOf("Harden") + 1, parentRow));
+  await infoSetup.flush();
+  if (infoOpened[0] !== "parent-1") fail("clicking the parent did not open it");
 
   // The composer footer: gauges per window, shed before the model label
   // when the composer narrows (as it does beside an open panel).

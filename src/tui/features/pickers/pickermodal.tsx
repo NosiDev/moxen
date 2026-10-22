@@ -4,7 +4,10 @@ import { useKeyboard } from "@opentui/react";
 import { ModalShell } from "../../ui/modalshell.js";
 import { markModalDismissed } from "../../model/modalDismiss.js";
 import { marqueeWindow } from "../../model/skills.js";
+import { Slider } from "../../ui/slider.js";
+import { effortTones, sliderLayout } from "../../model/slider.js";
 import { COLOR, SURFACE, truncate } from "../../theme.js";
+import { TextAttributes } from "@opentui/core";
 
 /** Marquee tick for the highlighted row's meta text, ms per column — same cadence as the skill popup. */
 const PICKER_MARQUEE_INTERVAL_MS = 350;
@@ -13,6 +16,8 @@ export interface PickerRow {
   key: string;
   label: string;
   meta?: string;
+  /** A short tag in the accent before the meta ("default"). */
+  badge?: string;
   /** Current choice: dot prefix plus highlight. */
   selected?: boolean;
   /**
@@ -31,7 +36,23 @@ export interface PickerSection {
   rows: PickerRow[];
 }
 
+/** A few stops along a track, as the effort picker offers them; a list when they would not fit. */
+export interface PickerSlider {
+  key: string;
+  header: string;
+  stops: ReadonlyArray<{ key: string; label: string; isDefault?: boolean; description?: string | undefined }>;
+  /** The stop in force; null when none is. */
+  current: string | null;
+  ends?: { readonly low: string; readonly high: string };
+  /** Colour the stops cool to hot, as reasoning levels. */
+  effort?: boolean;
+  /** What the highlighted stop is called when it is the default ("The default effort for this model"). */
+  defaultCaption?: string;
+  onPick: (stopKey: string) => void;
+}
+
 export type PickerBody =
+  | { kind: "sliders"; sliders: PickerSlider[] }
   | { kind: "loading" }
   | { kind: "error"; message: string }
   | { kind: "list"; sections: PickerSection[] };
@@ -82,6 +103,33 @@ export function PickerModal({
 }) {
   const [index, setIndex] = useState(0);
   const [marqueeTick, setMarqueeTick] = useState(0);
+  const sliderWidth = Math.max(10, width - 5);
+  /** Sliders need room for every label; narrower than that they are a list like any other picker. */
+  const sliding = body.kind === "sliders" && body.sliders.every((slider) => sliderLayout(slider.stops.map((stop) => stop.label), sliderWidth).fits);
+  const listBody = useMemo<Exclude<PickerBody, { kind: "sliders" }>>(() => {
+    if (body.kind !== "sliders") return body;
+    return {
+      kind: "list",
+      sections: body.sliders.map((slider) => ({
+        header: slider.header,
+        rows: slider.stops.map((stop) => ({
+          key: `${slider.key}:${stop.key}`,
+          label: `${stop.label}${stop.isDefault === true ? " (default)" : ""}`,
+          selected: slider.current === stop.key,
+          onPick: () => slider.onPick(stop.key),
+        })),
+      })),
+    };
+  }, [body]);
+  /** Which slider has the keys, and where each one's marker is. */
+  const [focusSlider, setFocusSlider] = useState(0);
+  const [stopAt, setStopAt] = useState<Record<string, number>>({});
+  const stopOf = (slider: PickerSlider): number => {
+    const set = stopAt[slider.key];
+    if (set !== undefined) return set;
+    const current = slider.stops.findIndex((stop) => stop.key === slider.current);
+    return Math.max(0, current >= 0 ? current : slider.stops.findIndex((stop) => stop.isDefault === true));
+  };
 
   // The highlighted row's meta text auto-scrolls instead of sitting
   // truncated or overflowing — ticks only while the modal is mounted.
@@ -91,10 +139,10 @@ export function PickerModal({
   }, []);
 
   const visible = useMemo(() => {
-    if (body.kind !== "list") return [];
+    if (listBody.kind !== "list") return [];
     const query = prefiltered ? "" : filter.trim().toLowerCase();
     const rows: PickerRow[] = [];
-    for (const section of body.sections) {
+    for (const section of listBody.sections) {
       for (const row of section.rows) {
         if (query.length === 0) {
           rows.push(row);
@@ -105,15 +153,15 @@ export function PickerModal({
       }
     }
     return rows;
-  }, [body, filter, prefiltered]);
+  }, [listBody, filter, prefiltered]);
 
   const visibleSections = useMemo(() => {
-    if (body.kind !== "list") return [];
+    if (listBody.kind !== "list") return [];
     const keys = new Set(visible.map((row) => row.key));
-    return body.sections
+    return listBody.sections
       .map((section) => ({ ...section, rows: section.rows.filter((row) => keys.has(row.key)) }))
       .filter((section) => section.rows.length > 0);
-  }, [body, visible]);
+  }, [listBody, visible]);
 
   const safe = visible.length === 0 ? -1 : Math.min(index, visible.length - 1);
 
@@ -123,6 +171,22 @@ export function PickerModal({
     if (key.name === "escape" || key.name === "esc") {
       markModalDismissed();
       onClose();
+      return;
+    }
+    if (sliding && body.kind === "sliders") {
+      const slider = body.sliders[Math.min(focusSlider, body.sliders.length - 1)];
+      if (slider === undefined) return;
+      if (key.name === "return" || key.name === "kpenter") {
+        const stop = slider.stops[stopOf(slider)];
+        if (stop !== undefined) slider.onPick(stop.key);
+        return;
+      }
+      if (key.name === "left" || key.name === "right") {
+        const next = Math.max(0, Math.min(stopOf(slider) + (key.name === "left" ? -1 : 1), slider.stops.length - 1));
+        setStopAt((current) => ({ ...current, [slider.key]: next }));
+        return;
+      }
+      if (key.name === "up" || key.name === "down") setFocusSlider((current) => Math.max(0, Math.min(current + (key.name === "up" ? -1 : 1), body.sliders.length - 1)));
       return;
     }
     // With no rows there is nothing to pick or move over, but typing must still
@@ -157,7 +221,15 @@ export function PickerModal({
   });
 
   const inner = Math.max(10, width - 4);
-  const hint = filterable ? "↑↓ move · enter selects · esc closes · type to filter" : "↑↓ move · enter selects · esc closes";
+  // The scrollbar and the content's right padding take two columns of a row.
+  const rowWidth = Math.max(10, inner - 2);
+  const hint = sliding
+    ? body.kind === "sliders" && body.sliders.length > 1
+      ? "←→ move · ↑↓ next setting · enter selects · esc closes"
+      : "←→ move · enter selects · esc closes"
+    : filterable
+      ? "↑↓ move · enter selects · esc closes · type to filter"
+      : "↑↓ move · enter selects · esc closes";
 
   return (
     <ModalShell screenWidth={screenWidth} screenHeight={screenHeight} left={left} top={top} width={width} height={height} onClose={onClose}>
@@ -166,27 +238,57 @@ export function PickerModal({
         <text fg={COLOR.faint} bg={SURFACE.raised}>{"esc"}</text>
       </box>
       {filterable ? (
-        <box style={{ flexDirection: "row", height: 1, flexShrink: 0, marginTop: 1 }}>
-          <text fg={filter.length === 0 ? COLOR.faint : COLOR.text} bg={SURFACE.raised}>
-            {filter.length === 0 ? "Search" : `${filter}▍`}
+        <box style={{ flexDirection: "row", height: 1, flexShrink: 0, marginTop: 1, paddingLeft: 1 }} backgroundColor={SURFACE.hover} selectable={false}>
+          <text fg={COLOR.dim} bg={SURFACE.hover} selectable={false}>{"⌕  "}</text>
+          <text fg={filter.length === 0 ? COLOR.dim : COLOR.bright} bg={SURFACE.hover} selectable={false}>
+            {filter.length === 0 ? "Search" : `${filter}▏`}
           </text>
         </box>
       ) : null}
       <scrollbox style={{ flexGrow: 1, marginTop: 1 }} stickyStart="top" contentOptions={{ paddingRight: 1 }}>
-        {body.kind === "loading" ? (
+        {sliding && body.kind === "sliders" ? (
+          body.sliders.map((slider, at) => {
+            const stopIndex = stopOf(slider);
+            const labels = slider.stops.map((stop) => stop.label);
+            const focused = at === Math.min(focusSlider, body.sliders.length - 1);
+            const highlighted = slider.stops[stopIndex];
+            return (
+              <box key={slider.key} style={{ flexDirection: "column", flexShrink: 0, marginTop: at === 0 ? 0 : 1 }}>
+                <text fg={focused ? COLOR.bright : COLOR.dim} bg={SURFACE.raised} attributes={TextAttributes.BOLD} selectable={false}>{slider.header}</text>
+                <Slider
+                  idPrefix={`picker-${slider.key}`}
+                  stops={labels}
+                  active={stopIndex}
+                  chosen={slider.stops.findIndex((stop) => stop.key === slider.current)}
+                  width={sliderWidth}
+                  {...(slider.ends === undefined ? {} : { ends: slider.ends })}
+                  {...(slider.effort === true ? { tones: effortTones(slider.stops.map((stop) => stop.key)) } : {})}
+                  caption={highlighted?.description ?? (highlighted?.isDefault === true ? slider.defaultCaption ?? "The default" : undefined)}
+                  onMove={(next) => {
+                    setFocusSlider(at);
+                    setStopAt((current) => ({ ...current, [slider.key]: next }));
+                  }}
+                  onPick={(next) => {
+                    const stop = slider.stops[next];
+                    if (stop !== undefined) slider.onPick(stop.key);
+                  }}
+                />
+              </box>
+            );
+          })
+        ) : listBody.kind === "loading" || body.kind === "loading" ? (
           <text fg={COLOR.dim} bg={SURFACE.raised}>{" loading…"}</text>
-        ) : body.kind === "error" ? (
-          <text fg={COLOR.danger} bg={SURFACE.raised}>{` ${body.message}`}</text>
-        ) : visibleSections.length === 0 ? (
+        ) : listBody.kind === "error" ? (
+          <text fg={COLOR.danger} bg={SURFACE.raised}>{` ${listBody.message}`}</text>
+        ) : sliding ? null : visibleSections.length === 0 ? (
           <text fg={COLOR.faint} bg={SURFACE.raised}>{` ${emptyLabel}`}</text>
         ) : (
           visibleSections.map((section, sectionIndex) => (
             <box key={sectionIndex} style={{ flexDirection: "column", flexShrink: 0 }}>
               {section.header === undefined ? null : (
                 <box style={{ flexDirection: "row", height: 1, flexShrink: 0, marginTop: sectionIndex === 0 ? 0 : 1 }}>
-                  <text fg={section.headerColor ?? COLOR.dim} bg={SURFACE.raised}>
-                    {section.header}
-                  </text>
+                  <text fg={section.headerColor ?? COLOR.bright} bg={SURFACE.raised} attributes={TextAttributes.BOLD} selectable={false}>{`${section.header} `}</text>
+                  <text fg={COLOR.faint} bg={SURFACE.raised} selectable={false}>{"─".repeat(Math.max(0, inner - section.header.length - 2))}</text>
                 </box>
               )}
               {section.rows.map((row) => {
@@ -199,8 +301,9 @@ export function PickerModal({
                 // goes to the meta; the highlighted row's meta auto-scrolls
                 // through the rest instead of sitting truncated or
                 // overflowing the row.
-                const labelText = truncate(`${row.selected === true ? "● " : "  "}${row.label}`, inner);
-                const metaBudget = inner - labelText.length - 1;
+                const labelText = truncate(`${row.selected === true ? "● " : "  "}${row.label}`, rowWidth);
+                const badgeText = row.badge === undefined ? "" : `${row.badge}${row.meta === undefined || row.meta.length === 0 ? "" : "  "}`;
+                const metaBudget = rowWidth - labelText.length - 1 - badgeText.length;
                 const metaText =
                   row.meta === undefined || row.meta.length === 0 || metaBudget < 6
                     ? null
@@ -210,7 +313,7 @@ export function PickerModal({
                 return (
                   <box
                     key={row.key}
-                    style={{ width: inner, flexDirection: "row", height: 1, flexShrink: 0, justifyContent: "space-between" }}
+                    style={{ width: rowWidth, flexDirection: "row", height: 1, flexShrink: 0, justifyContent: "space-between" }}
                     backgroundColor={rowBg}
                     {...(disabled ? {} : { onMouseDown: row.onPick })}
                     onMouseOver={() => setIndex(visible.findIndex((entry) => entry.key === row.key))}
@@ -218,9 +321,10 @@ export function PickerModal({
                     <text fg={labelFg} bg={rowBg} selectable={false}>
                       {labelText}
                     </text>
-                    {metaText === null ? null : (
-                      <text fg={active && !disabled ? PICK_FG : COLOR.faint} bg={rowBg} selectable={false}>{` ${metaText}`}</text>
-                    )}
+                    <box style={{ flexDirection: "row", flexShrink: 0 }} backgroundColor={rowBg}>
+                      {badgeText === "" ? null : <text fg={active && !disabled ? PICK_FG : COLOR.accent} bg={rowBg} selectable={false}>{` ${badgeText}`}</text>}
+                      {metaText === null ? null : <text fg={active && !disabled ? PICK_FG : COLOR.faint} bg={rowBg} selectable={false}>{badgeText === "" ? ` ${metaText}` : metaText}</text>}
+                    </box>
                   </box>
                 );
               })}

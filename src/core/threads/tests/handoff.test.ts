@@ -86,6 +86,29 @@ describe("buildHandoff", () => {
     expect(doc.trimEnd().endsWith("then finish what is left.")).toBe(true);
   });
 
+  it("does not say the work was unfinished when the last turn ran to completion", async () => {
+    const { store, threadId } = await thread();
+    const sent = await sendTurn(store, threadId, { prompt: "Rename the helper everywhere." });
+    await completeTurn(store, threadId, sent.turn.id, { text: "Renamed it in all 14 files; tests pass." });
+    const doc = await buildHandoff(store, threadId);
+    expect(doc).not.toContain("did not finish");
+    expect(doc).not.toContain("could not finish");
+    expect(doc).toContain("picking up a thread another session worked on.");
+    expect(doc).toContain("The work may already be done");
+    expect(doc).toContain("If the work is complete, say so");
+    expect(doc).not.toContain("then finish what is left.");
+  });
+
+  it("still treats a completed turn as unfinished work when something is open", async () => {
+    const { store, threadId } = await thread();
+    const sent = await sendTurn(store, threadId, { prompt: "Rename the helper everywhere." });
+    await completeTurn(store, threadId, sent.turn.id, { text: "Renamed it in half the files." });
+    await sendTurn(store, threadId, { prompt: "Then update the docs.", delivery: "queue" });
+    const doc = await buildHandoff(store, threadId);
+    expect(doc).toContain("another session worked on and did not finish");
+    expect(doc.trimEnd().endsWith("then finish what is left.")).toBe(true);
+  });
+
   it("shrinks older turns to one line each when the thread is long", async () => {
     const { store, threadId } = await thread();
     for (let index = 0; index < 20; index += 1) {

@@ -80,6 +80,7 @@ import {
 } from "./permissions.js";
 import { claudeModelName } from "./catalog.js";
 import { assertClaudeCodeVersion } from "./version.js";
+import { isOfferedClaudeCommand } from "./commands.js";
 import { isolationViolation, type WorktreeIsolation } from "../../threads/isolation.js";
 import {
   effectiveEffortChoice,
@@ -271,8 +272,10 @@ const REFUSAL_FALLBACK_DIALOG = "refusal_fallback_prompt";
  */
 const SIDE_QUESTION_INSTRUCTIONS = [
   "This is a side question asked while the main conversation continues elsewhere.",
-  "You have no tools here: do not write tool calls or pretend to run commands or read files.",
-  "Answer from what the conversation above already contains, briefly. If answering needs a file read or a command, say so plainly instead.",
+  "You have no tools in this reply, none: not Read, Bash, Grep, ToolSearch, Skill or any other, and calling one fails and ends the reply with nothing.",
+  "Do not call a tool or write a tool call, and do not plan to look anything up.",
+  "Answer now, in plain text, from what the conversation above already contains, briefly.",
+  "If the answer needs a file read or a command, say so plainly instead of attempting it.",
 ].join(" ");
 
 /** SDK messages remembered for retraction; far more than one turn's worth. */
@@ -454,13 +457,13 @@ export class ClaudeDriver implements ProviderAdapter<CliError> {
   }
 
   /**
-   * Session-scoped Claude Code settings: the ultracode flag the effort choice sets, and the user's auto-compact
-   * window (`providers.claude.autoCompactWindow`). One `settings` option holds both, so they are merged.
+   * Session-scoped Claude Code settings: the ultracode flag (an old effort choice, or `providers.claude.ultracode`), and the user's auto-compact
+   * window (`providers.claude.autoCompactWindow`), and Claude Code's own compaction switched off while Moxen does it (`providers.claude.autoCompact`). One `settings` option holds both, so they are merged.
    */
   private sessionSettings(session: ClaudeSession): { settings?: NonNullable<ClaudeQueryOptions["settings"]> } {
     const effort = spawnEffortOptions(session.effort).settings;
     const window = this.settings.autoCompactWindow;
-    const merged = { ...effort, ...(window !== null ? { autoCompactWindow: window } : {}) };
+    const merged = { ...effort, ...(this.settings.ultracode ? { ultracode: true } : {}), ...(window !== null ? { autoCompactWindow: window } : {}), ...(this.settings.autoCompact !== "claude" ? { autoCompactEnabled: false } : {}) };
     return Object.keys(merged).length > 0 ? { settings: merged as NonNullable<ClaudeQueryOptions["settings"]> } : {};
   }
 
@@ -521,7 +524,7 @@ export class ClaudeDriver implements ProviderAdapter<CliError> {
         model: input.modelSelection?.model ?? null,
         effort: sessionWideEffort(effectiveEffortChoice(input.modelSelection)),
         mcpServers: input.mcpServers && input.mcpServers.length > 0 ? input.mcpServers : null,
-        disallowedTools: [...(input.disabledMcpTools ?? []), ...(input.checklist === false ? CHECKLIST_TOOLS : [])],
+        disallowedTools: [...(input.disabledMcpTools ?? []), ...(input.disabledNativeTools ?? []), ...(input.checklist === false ? CHECKLIST_TOOLS : [])],
         instructions: input.instructions ?? null,
         isolation: input.isolation ?? null,
         sdkMessages: new Map(),
@@ -639,7 +642,7 @@ export class ClaudeDriver implements ProviderAdapter<CliError> {
       pathToClaudeCodeExecutable: resolveClaudeExecutable(this.settings.binaryPath, this.baseEnv),
     });
     try {
-      const entries = (await query.supportedCommands?.()) ?? [];
+      const entries = ((await query.supportedCommands?.()) ?? []).filter(isOfferedClaudeCommand);
       // "(user)" / "(project)" is the CLI's own scope suffix on custom entries.
       const describe = (text: string): string | null => text.replace(/\s*\((user|project|local)\)$/, "").trim() || null;
       return {
@@ -663,7 +666,7 @@ export class ClaudeDriver implements ProviderAdapter<CliError> {
    * `/btw`: one answer on a copy of the thread's session. `forkSession`
    * copies the conversation under a new id so the real session is never
    * written to; `persistSession: false` keeps the copy off disk; `tools: []`
-   * and `maxTurns: 1` make it a single tool-less reply. Its own process,
+   * and a small `maxTurns` make it a tool-less reply. Its own process,
    * so it runs while the thread's turn does.
    */
   readonly sideQuestion = async (input: SideQuestionInput): Promise<SideAnswer> => {
@@ -692,7 +695,8 @@ export class ClaudeDriver implements ProviderAdapter<CliError> {
       ...(input.cursor !== null ? { resume: input.cursor, forkSession: true } : {}),
       persistSession: false,
       tools: [],
-      maxTurns: 1,
+      // One reply, but a model that reaches for a tool it does not have spends a turn on the refusal.
+      maxTurns: 3,
       ...(input.model ? { model: input.model } : {}),
       systemPrompt: { type: "preset", preset: "claude_code", append: SIDE_QUESTION_INSTRUCTIONS },
       abortController: controller,
@@ -707,7 +711,7 @@ export class ClaudeDriver implements ProviderAdapter<CliError> {
           }
         } else if (message.type === "result") {
           if (message.subtype === "success" && typeof message.result === "string") result = message.result;
-          else if (message.subtype !== "success") {
+          else if (message.subtype !== "success" && !(message.subtype === "error_max_turns" && parts.length > 0)) {
             throw new CliError("SIDE_QUESTION_FAILED", `The side question did not get an answer (${message.subtype}).`);
           }
           break;

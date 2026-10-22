@@ -1,7 +1,10 @@
 import { driverKindOfInstance } from "../../core/types.js";
 import type { ProviderSummary } from "../../core/catalog/summary.js";
 import { updateState, versionNumber, type UpdatableProvider } from "../../core/catalog/update.js";
-import type { SettingDescriptor, SettingSection, SettingValue, SettingView } from "../../core/configschema.js";
+import type { SettingDescriptor, SettingEnds, SettingSection, SettingValue, SettingView } from "../../core/configschema.js";
+import { defaultEffortId, describeEffort } from "./display.js";
+import { numberLabel } from "./numberlabel.js";
+import { handoffModelsFromText, handoffModelsToText } from "./autohandoff.js";
 import type { QueryResult } from "../../server/api.js";
 
 /**
@@ -18,25 +21,132 @@ export interface SettingOption {
   readonly value: string;
   readonly label: string;
   readonly description?: string;
+  /** What applies when nothing is chosen (the model's own effort, a setting's default): a slider says so under it. */
+  readonly isDefault?: boolean;
+  /** A short tag beside the label, drawn in the accent ("default"). */
+  readonly badge?: string;
+  /** The heading a long list files it under (a model under its provider). */
+  readonly group?: string;
+  /** A shorter label for a slider, where the stops share one line ("2m" for "2 minutes"). */
+  readonly short?: string;
 }
 
 /** How a setting is edited on the page. */
 export type SettingControl =
   | { readonly kind: "toggle" }
-  | { readonly kind: "pick"; readonly options: readonly SettingOption[] }
+  | {
+      readonly kind: "pick";
+      readonly options: readonly SettingOption[];
+      /** `slider`: a few short values along a track, stepped with left and right. `list`: one per line. */
+      readonly layout: "slider" | "list";
+      /** What the slider's two ends mean. */
+      readonly ends?: SettingEnds;
+      /** `effort`: each stop gets its own colour along a cool-to-hot ramp. */
+      readonly scale?: "effort";
+      /** Long enough that typing narrows it. */
+      readonly searchable: boolean;
+    }
   | { readonly kind: "text"; readonly multiline: boolean }
   /** A key or token: typed into a masked input and kept in the OS keychain. */
   | { readonly kind: "secret" }
   /** A structured list (the harness profiles): opens its own editor. */
-  | { readonly kind: "list" };
+  | { readonly kind: "list" }
+  /** The MCP servers one provider gets: a checklist of every server, opened in its own editor. */
+  | { readonly kind: "servers"; readonly servers: readonly McpAccessEntry[]; readonly excluded: readonly string[] }
+  /** The provider's own tools: the same checklist, over the tools the provider ships with (the setting holds the ones switched OFF). */
+  | { readonly kind: "tools"; readonly tools: readonly McpAccessEntry[]; readonly excluded: readonly string[] }
+  /** The order a provider's model should try its web tools in: ranked rows first, then the rest. */
+  | { readonly kind: "order"; readonly rows: readonly WebOrderRow[] }
+  /** The models of one provider, each with its own hand-off size or none: opened in its own editor with a slider per model. */
+  | { readonly kind: "handoff"; readonly models: readonly HandoffModelEntry[] };
 
-const option = (value: string, label: string, description?: string): SettingOption =>
-  description === undefined ? { value, label } : { value, label, description };
-
-/** Big numbers with thousands separators (`200,000`), small ones as they are. */
-function numberLabel(value: number): string {
-  return value >= 10_000 ? value.toLocaleString("en-US") : String(value);
+/** One model as the per-model hand-off editor lists it. */
+export interface HandoffModelEntry {
+  readonly slug: string;
+  readonly name: string;
+  /** Tokens it is handed off at, or null when it follows the provider's setting. */
+  readonly tokens: number | null;
 }
+
+/** The sizes the per-model slider offers; the catalog has no window per model, so these span 100K to 1M. */
+export const HANDOFF_PRESETS: readonly number[] = [100_000, 128_000, 200_000, 256_000, 400_000, 500_000, 750_000, 1_000_000];
+
+/** A hand-off size as the editor writes it: `128K`, `1M`, `1.5M`; anything else with separators. */
+export function handoffTokensLabel(tokens: number): string {
+  if (tokens >= 1_000_000 && tokens % 100_000 === 0) return `${tokens / 1_000_000}M`;
+  if (tokens >= 1_000 && tokens % 1_000 === 0) return `${tokens / 1_000}K`;
+  return tokens.toLocaleString("en-US");
+}
+
+/** The slider's stops: the presets, plus the size already set when it is not one of them (a hand-edited 300k), in order. */
+export function handoffStops(current: number | null): number[] {
+  return current === null || HANDOFF_PRESETS.includes(current) ? [...HANDOFF_PRESETS] : [...HANDOFF_PRESETS, current].sort((a, b) => a - b);
+}
+
+/**
+ * The models a provider's hand-off editor lists: its catalog models (hidden
+ * ones left out, the default first), each with what the setting holds for it,
+ * then any model the setting names that the catalog does not, so a stale or
+ * hand-written override can still be seen and cleared.
+ */
+export function handoffModelEntries(providers: readonly ProviderSummary[] | null, kind: "claude" | "opencode" | "harness" | undefined, value: SettingValue): HandoffModelEntry[] {
+  const held = handoffModelsFromText(value === undefined ? "" : String(value));
+  const out: HandoffModelEntry[] = [];
+  const seen = new Set<string>();
+  for (const provider of providers ?? []) {
+    if (kind !== undefined && driverKindOfInstance(provider.instanceId) !== kind) continue;
+    for (const model of [...provider.models].sort((a, b) => Number(b.isDefault === true) - Number(a.isDefault === true))) {
+      if (model.isHidden || seen.has(model.slug)) continue;
+      seen.add(model.slug);
+      out.push({ slug: model.slug, name: model.name, tokens: held[model.slug] ?? null });
+    }
+  }
+  for (const [slug, tokens] of Object.entries(held)) if (!seen.has(slug)) out.push({ slug, name: slug, tokens });
+  return out;
+}
+
+/** The setting's text after `slug` is set to `tokens` (null removes its override); other models' overrides stay as they were. */
+export function withHandoffModel(value: SettingValue, slug: string, tokens: number | null): string {
+  const held = handoffModelsFromText(value === undefined ? "" : String(value));
+  if (tokens === null) delete held[slug];
+  else held[slug] = tokens;
+  return handoffModelsToText(held);
+}
+
+/** One web tool in a provider's order: its rank (1 is tried first), or null when it is not ranked. */
+export interface WebOrderRow {
+  readonly id: string;
+  readonly label: string;
+  readonly summary: string;
+  readonly locked: string | null;
+  readonly rank: number | null;
+}
+
+/** Ranked tools in the order the setting names them (an id the table lacks is kept, so it can be taken out), then the others. */
+export function webOrderRows(entries: readonly { readonly id: string; readonly label: string; readonly summary: string; readonly locked: string | null }[], value: SettingValue): WebOrderRow[] {
+  const order = [...new Set(String(value ?? "").split(",").map((id) => id.trim()).filter((id) => id !== ""))];
+  const ranked = order.map((id, at): WebOrderRow => {
+    const entry = entries.find((candidate) => candidate.id === id);
+    return { id, label: entry?.label ?? id, summary: entry?.summary ?? "not a tool Moxen knows", locked: entry?.locked ?? (entry ? null : "unknown"), rank: at + 1 };
+  });
+  return [...ranked, ...entries.filter((entry) => !order.includes(entry.id)).map((entry): WebOrderRow => ({ ...entry, rank: null }))];
+}
+
+/** One MCP server as a provider's checklist shows it. */
+export interface McpAccessEntry {
+  readonly name: string;
+  readonly summary: string;
+  /** Why this provider gets it no matter what is ticked here, or null. */
+  readonly locked: string | null;
+}
+
+const option = (value: string, label: string, description?: string, isDefault = false, short?: string): SettingOption => ({
+  value,
+  label,
+  ...(short === undefined ? {} : { short }),
+  ...(description === undefined ? {} : { description }),
+  ...(isDefault ? { isDefault } : {}),
+});
 
 function durationLabel(value: string): string {
   const match = /^(\d+)(ms|s|m|h)$/.exec(value);
@@ -46,15 +156,56 @@ function durationLabel(value: string): string {
   return `${count} ${unit}${count === 1 ? "" : "s"}`;
 }
 
+/** A preset, marked when it is the value a setting has unless told otherwise. */
+const presetOption = (value: string, label: string, defaultValue: SettingValue, short?: string): SettingOption =>
+  String(defaultValue) === value ? option(value, label, "The default", true, short) : option(value, label, undefined, false, short);
+
 /** The value a key holds on the page right now, as `settings.set` would take it. */
 function valueOf(settings: readonly SettingView[], key: string): string | undefined {
   const value = settings.find((view) => view.descriptor.key === key)?.value;
   return value === undefined || value === "" ? undefined : String(value);
 }
 
+/**
+ * The model a new thread on this provider starts with according to the
+ * settings: the provider's own Model, else the global one when it is not
+ * aimed at another provider. Undefined when neither is set, so the
+ * provider's catalog default applies.
+ */
+export function configuredDefaultModel(settings: readonly SettingView[], instanceId: string): string | undefined {
+  const kind = driverKindOfInstance(instanceId);
+  const own = kind === null ? undefined : valueOf(settings, `providers.${kind}.model`);
+  if (own !== undefined) return own;
+  const global = valueOf(settings, "model");
+  const aimed = valueOf(settings, "provider");
+  if (global === undefined) return undefined;
+  if (aimed !== undefined && aimed !== instanceId && (kind === null || driverKindOfInstance(aimed) !== kind)) return undefined;
+  return global;
+}
+
 /** The catalog providers worth offering: enabled ones. */
 function offered(providers: readonly ProviderSummary[]): readonly ProviderSummary[] {
   return providers.filter((provider) => provider.enabled);
+}
+
+/** The provider an MCP access setting (`providers.<kind>.mcpExclude`) belongs to. */
+function mcpAccessKind(key: string): "claude" | "opencode" | "harness" | null {
+  const kind = /^providers\.(claude|opencode|harness)\.mcpExclude$/.exec(key)?.[1];
+  return kind === "claude" || kind === "opencode" || kind === "harness" ? kind : null;
+}
+
+/** Every configured server with what keeps it from this provider besides the checklist, and the names switched off here. */
+function mcpAccessControl(descriptor: SettingDescriptor, value: SettingValue, settings: readonly SettingView[]): SettingControl {
+  const kind = mcpAccessKind(descriptor.key);
+  const items = settings.find((view) => view.descriptor.key === "mcpServers")?.items ?? [];
+  const servers = items.map((item): McpAccessEntry => {
+    const offered = String(item.fields.find((field) => field.path === "providers")?.value ?? "").split(",").map((word) => word.trim()).filter((word) => word !== "");
+    const off = item.fields.find((field) => field.path === "disabled")?.value === true;
+    const locked = off ? "switched off on its own entry" : kind !== null && offered.length > 0 && !offered.includes(kind) ? `only offered to ${offered.join(", ")}` : null;
+    return { name: item.id, summary: item.summary, locked };
+  });
+  const excluded = String(value ?? "").split(",").map((name) => name.trim()).filter((name) => name !== "");
+  return { kind: "servers", servers, excluded };
 }
 
 function catalogOptions(
@@ -74,20 +225,28 @@ function catalogOptions(
         : available.filter((provider) => provider.instanceId === providerId);
   if (source === "provider") {
     return [
-      option("", "Not set", "Each project's own default."),
-      ...available.map((provider) => option(provider.instanceId, provider.displayName ?? provider.instanceId, provider.instanceId)),
+      option("", "Each project's default", "Not overridden here: a project's own provider applies, else the first one available."),
+      ...available.map((provider) => option(provider.instanceId, provider.displayName ?? provider.instanceId)),
     ];
   }
   if (source === "model") {
     const out: SettingOption[] = [option("", "Provider's default")];
     const seen = new Set<string>();
     for (const provider of scoped) {
-      for (const model of provider.models) {
+      // Across providers each one's models sit under its own heading, the provider's default first.
+      const group = scoped.length > 1 ? (provider.displayName ?? provider.instanceId) : undefined;
+      const models = [...provider.models].sort((a, b) => Number(b.isDefault === true) - Number(a.isDefault === true));
+      for (const model of models) {
         if (model.isHidden || seen.has(model.slug)) continue;
         seen.add(model.slug);
-        // Across providers the provider name tells two same-named models apart.
-        const where = scoped.length > 1 ? `${provider.displayName ?? provider.instanceId} · ` : "";
-        out.push(option(model.slug, model.name, `${where}${model.slug}`));
+        // The name says which model it is and the slug stays searchable; what the row adds is the range of reasoning levels it takes.
+        const levels = model.efforts.flatMap((descriptor) => descriptor.choices.map((choice) => choice.id));
+        const range = levels.length === 0 ? undefined : levels.length === 1 ? levels[0] : `${levels[0]}–${levels[levels.length - 1]}`;
+        out.push({
+          ...option(model.slug, model.name, range),
+          ...(model.isDefault === true ? { badge: "default" } : {}),
+          ...(group === undefined ? {} : { group }),
+        });
       }
     }
     return out;
@@ -96,20 +255,42 @@ function catalogOptions(
   // offered models share a name for when no model is pinned.
   const modelSlug = valueOf(settings, providerKind === undefined ? "model" : `providers.${providerKind}.model`);
   const out: SettingOption[] = [option("", "Provider's default")];
-  const seen = new Set<string>();
+  const levels = new Map<string, { id: string; label: string; isDefault?: boolean | null | undefined }>();
   for (const provider of scoped) {
     for (const model of provider.models) {
       if (modelSlug !== undefined && model.slug !== modelSlug) continue;
       for (const descriptor of model.efforts) {
         for (const choice of descriptor.choices) {
-          if (seen.has(choice.id)) continue;
-          seen.add(choice.id);
-          out.push(option(choice.id, choice.label));
+          if (!levels.has(choice.id)) levels.set(choice.id, choice);
         }
       }
     }
   }
+  const fallback = defaultEffortId([...levels.values()]);
+  for (const choice of levels.values()) out.push(choice.id === fallback ? option(choice.id, choice.label, describeEffort(choice.id, true), true) : option(choice.id, choice.label, describeEffort(choice.id, false)));
+  if (out.length === 1) out[0] = option("", "Provider's default", "The model in force takes no effort setting, so there is nothing else to pick.");
   return out;
+}
+
+/**
+ * A permission mode none of the providers the setting governs can run: a
+ * provider reports the modes it takes, and offering one it would refuse only
+ * sets a value that does nothing. Without a report (null) nothing is hidden.
+ */
+function isUnsupportedMode(
+  descriptor: SettingDescriptor,
+  mode: string,
+  settings: readonly SettingView[],
+  providers: readonly ProviderSummary[] | null,
+): boolean {
+  if (!descriptor.key.endsWith("runtimeMode") || providers === null) return false;
+  const kindOfPage = descriptor.key.startsWith("providers.") ? (descriptor.key.split(".")[1] as "claude" | "opencode" | "harness") : undefined;
+  const providerId = valueOf(settings, "provider");
+  const governed = offered(providers).filter((provider) =>
+    kindOfPage !== undefined ? driverKindOfInstance(provider.instanceId) === kindOfPage : providerId === undefined || provider.instanceId === providerId,
+  );
+  if (governed.length === 0 || governed.some((provider) => provider.supportedRuntimeModes === null)) return false;
+  return !governed.some((provider) => provider.supportedRuntimeModes!.includes(mode as never));
 }
 
 /**
@@ -135,23 +316,32 @@ export function settingControl(
       return { kind: "toggle" };
     case "enum":
       options = [
-        ...(descriptor.defaultValue === undefined ? [option("", "Not set", "Whatever the provider does by default.")] : []),
-        ...kind.choices.map((choice) => option(choice.value, choice.label, choice.description)),
+        ...(descriptor.defaultValue === undefined ? [option("", "Default", "Not overridden here: the provider's own default applies.")] : []),
+        ...kind.choices
+          .filter((choice) => !isUnsupportedMode(descriptor, choice.value, settings, providers))
+          .map((choice) => option(choice.value, choice.label, choice.description)),
       ];
       break;
     case "integer":
       if (kind.presets === undefined) return { kind: "text", multiline: false };
       options = [
         // A key unset by default needs a way back to unset, which is also what it reads as at first.
-        ...(descriptor.defaultValue === undefined ? [option("", "Not set", "Left to the provider")] : []),
-        ...kind.presets.map((preset) => option(String(preset), `${numberLabel(preset)}${kind.unit ?? ""}`)),
+        ...(descriptor.defaultValue === undefined ? [option("", "Default", "Not overridden here: the provider's own default applies.")] : []),
+        ...kind.presets.map((preset) => presetOption(String(preset), `${numberLabel(preset, kind.binary)}${kind.unit ?? ""}`, descriptor.defaultValue)),
       ];
       break;
     case "duration":
       if (kind.presets === undefined) return { kind: "text", multiline: false };
-      options = kind.presets.map((preset) => option(preset, durationLabel(preset)));
+      options = kind.presets.map((preset) => presetOption(preset, durationLabel(preset), descriptor.defaultValue, preset));
       break;
     case "string":
+      if (kind.source === "mcp-server") return mcpAccessControl(descriptor, value, settings);
+      if (kind.source === "web-order") return { kind: "order", rows: webOrderRows(settings.find((view) => view.descriptor.key === descriptor.key)?.order ?? [], value) };
+      if (kind.source === "native-tools") {
+        const tools = (kind.tools ?? []).map((tool): McpAccessEntry => ({ name: tool.name, summary: tool.summary, locked: null }));
+        return { kind: "tools", tools, excluded: String(value ?? "").split(",").map((name) => name.trim()).filter((name) => name !== "") };
+      }
+      if (kind.source === "handoff-models") return { kind: "handoff", models: handoffModelEntries(providers, kind.providerKind, value) };
       if (kind.source === undefined) return { kind: "text", multiline: kind.multiline === true };
       // No catalog yet (still loading): the list would be empty, not wrong.
       options = catalogOptions(kind.source, settings, providers ?? [], kind.providerKind);
@@ -159,7 +349,13 @@ export function settingControl(
   }
   const current = value === undefined || value === "" ? "" : String(value);
   if (!options.some((entry) => entry.value === current)) options = [option(current, current, "Set in the config file"), ...options];
-  return { kind: "pick", options };
+  // A few short values read better side by side; names and long lists get a line each.
+  const stops = options.filter((entry) => entry.value !== "");
+  const slider =
+    (kind.type === "integer" || kind.type === "duration" || (kind.type === "string" && kind.source === "effort")) && stops.length >= 2 && stops.length <= 8 && stops.every((entry) => (entry.short ?? entry.label).length <= 20);
+  const ends: SettingEnds | undefined = kind.type === "string" ? { low: "Faster", high: "Smarter" } : kind.type === "integer" || kind.type === "duration" ? kind.ends : undefined;
+  return { kind: "pick", options, layout: slider ? "slider" : "list", ...(slider && ends !== undefined ? { ends } : {}),
+    ...(slider && kind.type === "string" && kind.source === "effort" ? { scale: "effort" as const } : {}), searchable: !slider && (options.length > 8 || (kind.type === "string" && kind.source === "model" && options.length > 6)) };
 }
 
 /** A setting's value as the page shows it. */
@@ -168,15 +364,36 @@ export function settingValueLabel(descriptor: SettingDescriptor, value: SettingV
     const noun = descriptor.kind.noun;
     return count === undefined || count === 0 ? `None yet` : `${count} ${noun}${count === 1 ? "" : "s"}`;
   }
+  if (control.kind === "servers") {
+    // Only the servers this provider could get count: one limited elsewhere is not the checklist's to say.
+    const open = control.servers.filter((server) => server.locked === null);
+    const total = open.length;
+    if (control.servers.length === 0) return "No servers yet";
+    if (total === 0) return "None";
+    const off = open.filter((server) => control.excluded.includes(server.name)).length;
+    return off === 0 ? (total === 1 ? "The server" : `All ${total} servers`) : off === total ? "None" : `${total - off} of ${total}`;
+  }
+  if (control.kind === "order") {
+    const ranked = control.rows.filter((row) => row.rank !== null);
+    return ranked.length === 0 ? "No preference" : ranked.map((row) => row.label).join(" → ");
+  }
+  if (control.kind === "tools") {
+    const off = control.excluded.length;
+    return off === 0 ? "All on" : `${off} off`;
+  }
+  if (control.kind === "handoff") {
+    const set = control.models.filter((model) => model.tokens !== null).length;
+    return set === 0 ? "None set" : `${set} model${set === 1 ? "" : "s"}`;
+  }
   if (descriptor.kind.type === "boolean") return value === true ? "On" : "Off";
-  if (descriptor.kind.type === "secret") return value === undefined || value === "" ? "Not set" : "Saved in the keychain";
+  if (descriptor.kind.type === "secret") return value === undefined || value === "" ? "No key saved" : "Saved in the keychain";
   if (control.kind === "pick") {
     const current = value === undefined || value === "" ? "" : String(value);
     const match = control.options.find((entry) => entry.value === current);
     if (match !== undefined) return match.label;
   }
-  if (value === undefined || value === "") return "Not set";
-  if (descriptor.kind.type === "integer") return `${typeof value === "number" ? numberLabel(value) : String(value)}${descriptor.kind.unit ?? ""}`;
+  if (value === undefined || value === "") return "Default";
+  if (descriptor.kind.type === "integer") return `${typeof value === "number" ? numberLabel(value, descriptor.kind.binary) : String(value)}${descriptor.kind.unit ?? ""}`;
   return String(value);
 }
 

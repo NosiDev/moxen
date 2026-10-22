@@ -17,6 +17,7 @@
  *   `server.getConfig` payload shape, so `extractProviders` (and the
  *   effort picker) works unmodified.
  */
+import { discoverModels } from "../core/providers/harness/discover.js";
 import { primeProfileKey } from "../core/providers/harness/profiles.js";
 import { exportProfileDocument, freeProfileId, parseProfileDocument } from "../core/providers/harness/profileio.js";
 import { testMcpServer } from "../core/mcptest.js";
@@ -24,6 +25,8 @@ import { searchThreadsView } from "../core/threads/search.js";
 import * as Effect from "effect/Effect";
 
 import { buildDirectProviders } from "../core/catalog/direct.js";
+import { fetchLiveModels } from "../core/providers/claude/livemodels.js";
+import { SdkTransport } from "../core/providers/claude/transport.js";
 import { diagnose } from "../core/diagnostics/doctor.js";
 import { updateProvider, type ProviderUpdate, type UpdatableProvider } from "../core/providers/update.js";
 import { latestVersions } from "../core/providers/latest.js";
@@ -52,10 +55,10 @@ import {
 } from "../core/forge/forge.js";
 import { toWsConfigPayload } from "./config-payload.js";
 import { MOXEN_MCP_SERVER_NAME, moxenMcpServerSpec } from "./mcp/main.js";
-import { MOXEN_CHECKLIST_ARG, MOXEN_CHECKLIST_QUERY } from "./mcp/stdio.js";
+import { MOXEN_CHECKLIST_ARG, MOXEN_CHECKLIST_QUERY, MOXEN_DELEGATED_ARG, MOXEN_DELEGATED_MCP_INSTRUCTIONS, MOXEN_DELEGATED_QUERY } from "./mcp/stdio.js";
 import { startMcpHttpServer, type McpHttpServer } from "./mcp/http.js";
 import { MOXEN_MCP_INSTRUCTIONS } from "./mcp/stdio.js";
-import { callMoxenTool, MOXEN_TOOLS } from "./mcp/tools.js";
+import { callMoxenTool, moxenToolsFor } from "./mcp/tools.js";
 import { noteMessageId } from "../core/threads/views.js";
 import type { McpServerSpec } from "../core/mcp.js";
 import { ensureStoredProject, listStoredProjects } from "../core/projects/projects.js";
@@ -99,6 +102,7 @@ import {
   readThreadView,
   resolveProjectView,
   retitleThread,
+  removeThreadWorktree,
   revertThread,
   runDueScheduledTurn,
   startTurn,
@@ -109,7 +113,8 @@ import { toThreadEnvelope } from "../core/threads/project.js";
 import { backfillNativeSubagents, subagentTranscript } from "../core/threads/subagents.js";
 import { openThreadStore, resolveStoreRoot, type ThreadStore } from "../core/threads/store.js";
 import type { ProviderRuntimeEvent } from "../core/providers/spi.js";
-import type { CheckpointFileStat, StoredCheckpoint, TurnStatus } from "../core/threads/types.js";
+import { pruneFinishedWorktrees } from "../core/threads/prune.js";
+import type { CheckpointFileStat, StoredCheckpoint, StoredThread, TurnStatus } from "../core/threads/types.js";
 import type { CliConfig, ForgeConfig, ProvidersConfig, ThreadEnvelope } from "../core/types.js";
 import { persistUsageLimits, usageLimitsSnapshot } from "../core/usage/limits.js";
 import type { ClientApi } from "./api.js";
@@ -133,6 +138,9 @@ import {
   type UserInputAnswers,
 } from "./protocol.js";
 
+/** How often finished worktree threads are tidied while the server runs. */
+const PRUNE_INTERVAL_MS = 6 * 3_600_000;
+
 export type { TurnDriverFactories } from "../core/threads/execute.js";
 
 export interface DirectConnectionOptions {
@@ -149,7 +157,7 @@ export interface DirectConnectionOptions {
   /** Which file `settings.set` writes; defaults to the resolved config path. */
   readonly configPath?: string;
   /** The `moxen` tools' MCP server per thread; defaults to `mcp/main.ts`. Null turns them off. */
-  readonly builtinMcpServers?: ((threadId: string) => readonly McpServerSpec[]) | null;
+  readonly builtinMcpServers?: ((threadId: string, options?: { readonly delegated: boolean }) => readonly McpServerSpec[]) | null;
   /** Runs a provider CLI's own updater (tests); defaults to the real one. */
   readonly updateProvider?: (provider: UpdatableProvider, binaryPath?: string) => Promise<ProviderUpdate>;
   /** Reads the newest provider versions (tests); defaults to the npm registry. */
@@ -169,7 +177,7 @@ export class DirectConnection implements ClientApi {
   private readonly readConfigFile: () => Promise<{ config: CliConfig; path: string; exists: boolean }>;
   /** The per-provider settings the last config read saw; see `driverFor`. */
   private lastProviders: ProvidersConfig | undefined;
-  private readonly builtinMcpServers: ((threadId: string) => readonly McpServerSpec[]) | null;
+  private readonly builtinMcpServers: ((threadId: string, options?: { readonly delegated: boolean }) => readonly McpServerSpec[]) | null;
   private readonly readLatestVersions: (claudeBinaryPath?: string) => Promise<Omit<LatestVersions, "enabled">>;
   private readonly runProviderUpdate: (provider: UpdatableProvider, binaryPath?: string) => Promise<ProviderUpdate>;
   private readonly harnessFetch: typeof fetch | undefined;
@@ -191,8 +199,12 @@ export class DirectConnection implements ClientApi {
     this.threadPollMs = options.threadPollMs ?? 750;
     this.providers = options.providers ?? (async () => {
       // A config that cannot be read must not hide the providers that need none of it.
-      const harness = await this.readConfigFile().then((read) => read.config.providers?.harness, () => undefined);
-      return await buildDirectProviders({ harness });
+      const providers = await this.readConfigFile().then((read) => read.config.providers, () => undefined);
+      const claudeBinary = providers?.claude?.binaryPath || "claude";
+      return await buildDirectProviders({
+        harness: providers?.harness,
+        fetchClaudeModels: () => fetchLiveModels({ transport: new SdkTransport(), binaryPath: claudeBinary }),
+      });
     });
     this.catalog = options.catalog ?? (async () => toWsConfigPayload(await this.providers()));
     // One reader, two shapes: operations want the config alone, while
@@ -212,7 +224,7 @@ export class DirectConnection implements ClientApi {
     this.readLatestVersions = options.latestVersions ?? ((claudeBinaryPath) => latestVersions(claudeBinaryPath === undefined ? {} : { claudeBinaryPath }));
     this.runProviderUpdate = options.updateProvider ?? ((provider, binaryPath) => updateProvider(provider, binaryPath === undefined ? {} : { binaryPath }));
     this.builtinMcpServers =
-      options.builtinMcpServers === undefined ? (threadId) => [this.moxenToolsFor(threadId)] : options.builtinMcpServers;
+      options.builtinMcpServers === undefined ? (threadId, serverOptions) => [this.moxenToolsFor(threadId, serverOptions?.delegated === true)] : options.builtinMcpServers;
   }
 
   /**
@@ -220,25 +232,27 @@ export class DirectConnection implements ClientApi {
    * config and server mode) outright: providers hand MCP servers a filtered
    * environment (some do), and the tools must reach the same threads.
    */
-  private moxenToolsFor(threadId: string): McpServerSpec {
+  private moxenToolsFor(threadId: string, delegated = false): McpServerSpec {
     // Hosted in this process: Claude calls the tools in-process, the other
     // providers over loopback HTTP served here — so a delegation always runs
     // in the process that owns its parent's session. Until the HTTP server
     // is up (or in a process that never starts it), the stdio child.
-    const fallback = this.mcpHttp
+    const base = this.mcpHttp
       ? { name: MOXEN_MCP_SERVER_NAME, type: "http" as const, ...this.mcpHttp.specFor(threadId), alwaysLoad: true }
       : { ...this.moxenStdioFor(threadId), alwaysLoad: true };
+    // A delegated task asks for the tools without the delegation ones; the server holds to it as well.
+    const fallback = !delegated ? base : base.type === "http" ? { ...base, url: `${base.url}?${MOXEN_DELEGATED_QUERY}` } : { ...base, args: [...base.args, MOXEN_DELEGATED_ARG] };
     // The same endpoint, also offering `todos`: for a provider with no checklist.
     const checklist =
       fallback.type === "http"
-        ? { ...fallback, url: `${fallback.url}?${MOXEN_CHECKLIST_QUERY}` }
+        ? { ...fallback, url: `${fallback.url}${fallback.url.includes("?") ? "&" : "?"}${MOXEN_CHECKLIST_QUERY}` }
         : { ...fallback, args: [...fallback.args, MOXEN_CHECKLIST_ARG] };
     return {
       name: MOXEN_MCP_SERVER_NAME,
       type: "in-process",
-      instructions: MOXEN_MCP_INSTRUCTIONS,
-      tools: MOXEN_TOOLS,
-      call: (tool, args) => callMoxenTool(this, threadId, tool, args),
+      instructions: delegated ? MOXEN_DELEGATED_MCP_INSTRUCTIONS : MOXEN_MCP_INSTRUCTIONS,
+      tools: moxenToolsFor({ delegated }),
+      call: (tool, args) => callMoxenTool(this, threadId, tool, args, { delegated }),
       fallback,
       checklist,
       // Delegation is what these tools are for: never behind a tool search.
@@ -254,6 +268,11 @@ export class DirectConnection implements ClientApi {
       if (value) env[name] = value;
     }
     return { ...spec, env };
+  }
+
+  /** Best-effort: a finished thread gives its worktree checkout back (the branch stays). */
+  private async freeWorktree(thread: StoredThread): Promise<void> {
+    await removeThreadWorktree(this.storeRoot, thread).catch(() => false);
   }
 
   /**
@@ -335,6 +354,10 @@ export class DirectConnection implements ClientApi {
     void this.context()
       .then((ctx) => armPendingScheduledTurns(ctx))
       .catch(() => undefined);
+    // Finished worktree threads give their checkouts and merged branches back: now, then every few hours.
+    void this.pruneFinished();
+    this.pruneTimer = setInterval(() => void this.pruneFinished(), PRUNE_INTERVAL_MS);
+    this.pruneTimer.unref?.();
     // The same long-lived owner serves the moxen tools over loopback HTTP
     // for providers that cannot host them in-process.
     if (this.builtinMcpServers !== null) {
@@ -344,6 +367,17 @@ export class DirectConnection implements ClientApi {
           else this.mcpHttp = server;
         })
         .catch(() => undefined);
+    }
+  }
+
+  private pruneTimer: ReturnType<typeof setInterval> | null = null;
+
+  private async pruneFinished(): Promise<void> {
+    try {
+      const ctx = await this.context();
+      await pruneFinishedWorktrees({ store: ctx.store, storeRoot: this.storeRoot, config: ctx.config });
+    } catch {
+      // Housekeeping only; the next round tries again.
     }
   }
 
@@ -655,10 +689,10 @@ export class DirectConnection implements ClientApi {
         await unsnoozeThread(await this.store(), command.threadId);
         return accepted;
       case "thread.archive":
-        await archiveThread(await this.store(), command.threadId);
+        await this.freeWorktree(await archiveThread(await this.store(), command.threadId));
         return accepted;
       case "thread.delete":
-        await deleteThread(await this.store(), command.threadId);
+        await this.freeWorktree(await deleteThread(await this.store(), command.threadId));
         return accepted;
       case "thread.meta.update":
         if (command.title !== undefined) await retitleThread(await this.context(), command.threadId, { title: command.title });
@@ -777,6 +811,8 @@ export class DirectConnection implements ClientApi {
         const { profile, model } = await this.harnessModel(command.profileId, command.model, false);
         return await testProfile({ profile, model, ...(this.harnessFetch ? { fetch: this.harnessFetch } : {}) });
       }
+      case "harness.models.discover":
+        return await discoverModels({ baseUrl: command.baseUrl, apiFormat: command.apiFormat, apiKeyEnv: command.apiKeyEnv, ...(this.harnessFetch ? { fetch: this.harnessFetch } : {}) });
       case "harness.profile.probe": {
         const { profile, model } = await this.harnessModel(command.profileId, command.model, true);
         if (this.probing.has(profile.id)) throw new CliError("PROBE_RUNNING", `A probe of "${profile.id}" is already running.`);
@@ -1277,6 +1313,8 @@ export class DirectConnection implements ClientApi {
 
   async close(): Promise<void> {
     this.closed = true;
+    if (this.pruneTimer !== null) clearInterval(this.pruneTimer);
+    this.pruneTimer = null;
     if (this.schedulingStarted) onScheduledTurnDue(null);
     await this.mcpHttp?.close().catch(() => undefined);
     this.mcpHttp = null;

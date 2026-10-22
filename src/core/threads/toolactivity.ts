@@ -21,6 +21,7 @@
  * folds started/updated/completed onto the first row's position by
  * `payload.toolCallId`, keeping the newest payload.
  */
+import { webToolKind } from "./views.js";
 import type { ProviderRuntimeEvent } from "../providers/spi.js";
 
 /** A `tool.execute.*` event — the only kind this module maps. */
@@ -183,10 +184,7 @@ function itemTypeForTool(tool: string): string {
   const short = tool.toLowerCase().split(/[^a-z]+/).filter((part) => part.length > 0).pop() ?? "";
   if (SHELL_TOOLS.has(short)) return "command_execution";
   if (short === "edit" || short === "write" || short === "multiedit" || short === "patch") return "file_change";
-  if (short === "websearch" || short === "webfetch" || short === "fetch") return "web_search";
-  // The harness's own `web_search` / `web_fetch` split at the underscore.
-  const flat = tool.toLowerCase().replace(/[^a-z]/g, "");
-  if (flat.endsWith("websearch") || flat.endsWith("webfetch")) return "web_search";
+  if (webToolKind(tool) !== null) return "web_search";
   return "dynamic_tool_call";
 }
 

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { KeyEvent, PasteEvent, TextareaRenderable } from "@opentui/core";
 import { decodePasteBytes, stripAnsiSequences } from "@opentui/core";
 
-import { COLOR, SURFACE, truncate } from "../../theme.js";
+import { COLOR, SURFACE } from "../../theme.js";
 
 const ONE_LINE_BINDINGS = [
   { name: "return", action: "submit" },
@@ -21,8 +21,8 @@ const MULTI_LINE_BINDINGS = [
  * The one text box every setting uses, on the page and in the list editor: it
  * wraps instead of scrolling sideways, grows with what is typed (a few rows for
  * prose, one for an address), takes a paste whole, and says under itself how to
- * save, how to clear it and what clearing falls back to. A secret is typed blind
- * and shown only as a count.
+ * save, how to clear it and what clearing falls back to. A secret is shown as asterisks
+ * in the box, and as a count.
  */
 export function TextField({
   id,
@@ -60,13 +60,24 @@ export function TextField({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [height]);
   const rows = multiline ? { minHeight: 4, maxHeight: 10 } : { minHeight: 1, maxHeight: 3 };
-  const keys = ["enter saves", ...(multiline ? ["shift+enter new line"] : []), "esc cancels", "ctrl+u clears"].join(" · ");
   const lines = text.split("\n").length;
-  const size = text.length === 0 ? "" : multiline ? `${text.length} characters · ${lines} line${lines === 1 ? "" : "s"}` : `${text.length} characters`;
+  const size = text.length === 0 ? "" : multiline ? `${text.length} chars · ${lines} line${lines === 1 ? "" : "s"}` : `${text.length} chars`;
+  // Each hint is a key and what it does, the key lit and the verb quiet.
+  const hints: ReadonlyArray<readonly [string, string]> = [
+    ["enter", "save"],
+    ...(multiline ? ([["shift+enter", "new line"]] as const) : []),
+    ["esc", "cancel"],
+    ["ctrl+u", "clear"],
+  ];
 
   return (
     <box {...(id === undefined ? {} : { id })} style={{ flexDirection: "column", flexShrink: 0, marginTop: 1 }} backgroundColor={SURFACE.raised}>
-      <box style={{ flexDirection: "column", flexShrink: 0, paddingLeft: 1, paddingRight: 1 }} backgroundColor={SURFACE.base}>
+      <box
+        style={{ flexDirection: "column", flexShrink: 0, paddingLeft: 1, paddingRight: 1, borderStyle: "rounded" }}
+        borderColor={COLOR.accent}
+        backgroundColor={SURFACE.base}
+      >
+        <box style={{ flexDirection: "column", flexShrink: 0 }} backgroundColor={SURFACE.base}>
         <textarea
           ref={ref}
           focused
@@ -97,14 +108,28 @@ export function TextField({
           }}
           onSubmit={() => onSubmit(clean(ref.current?.plainText ?? text))}
         />
+        {hidden && text !== "" ? (
+          // The text itself is drawn in the box's own colour; asterisks stand over it, one for each character, wrapping where it does.
+          <text style={{ position: "absolute", left: 0, top: 0, width: Math.max(10, width - 4) }} fg={COLOR.text} bg={SURFACE.base} wrapMode="char" selectable={false}>{"*".repeat(text.length)}</text>
+        ) : null}
+        </box>
       </box>
-      {hidden ? (
-        <text fg={COLOR.dim} bg={SURFACE.raised} selectable={false}>{text === "" ? "nothing typed yet" : `${"•".repeat(Math.min(text.length, 40))}${text.length > 40 ? "…" : ""}  (${text.length} characters, hidden)`}</text>
-      ) : size === "" ? null : (
-        <text fg={COLOR.faint} bg={SURFACE.raised} selectable={false}>{truncate(size, width)}</text>
+      <box style={{ flexDirection: "row", justifyContent: "space-between", flexShrink: 0, paddingLeft: 1, paddingRight: 1 }} backgroundColor={SURFACE.raised}>
+        <box style={{ flexDirection: "row", flexWrap: "wrap", flexShrink: 1 }} backgroundColor={SURFACE.raised}>
+          {hints.map(([keyName, verb]) => (
+            <box key={keyName} style={{ flexDirection: "row", flexShrink: 0, marginRight: 2 }} backgroundColor={SURFACE.raised}>
+              <text fg={COLOR.text} bg={SURFACE.raised} selectable={false}>{keyName}</text>
+              <text fg={COLOR.dim} bg={SURFACE.raised} selectable={false}>{` ${verb}`}</text>
+            </box>
+          ))}
+        </box>
+        <text fg={COLOR.faint} bg={SURFACE.raised} selectable={false}>
+          {hidden ? (text === "" ? "" : `${text.length} chars, hidden`) : size}
+        </text>
+      </box>
+      {fallback === undefined ? null : (
+        <text fg={COLOR.dim} bg={SURFACE.raised} wrapMode="word" selectable={false}>{` Left empty: ${fallback}`}</text>
       )}
-      <text fg={COLOR.faint} bg={SURFACE.raised} wrapMode="word" selectable={false}>{keys}</text>
-      {fallback === undefined ? null : <text fg={COLOR.faint} bg={SURFACE.raised} wrapMode="word" selectable={false}>{`Empty: ${fallback}`}</text>}
     </box>
   );
 }

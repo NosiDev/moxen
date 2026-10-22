@@ -37,6 +37,13 @@ afterEach(async () => {
   await Promise.all(cleanup.splice(0).map((run) => run()));
 });
 
+/** A turn as the provider receives it: the prompt, and the images sent with it. */
+export interface SentTurn {
+  readonly threadId: string;
+  readonly prompt: string;
+  readonly images?: ReadonlyArray<{ name: string; mimeType: string; data: string }>;
+}
+
 class HarnessDriver implements TurnDriver {
   private sessions = new Set<string>();
   private prompts = new Map<string, string>();
@@ -45,7 +52,7 @@ class HarnessDriver implements TurnDriver {
   constructor(
     private readonly behavior: "completing" | "pending" | "failing",
     private readonly onStartSession?: (input: Record<string, unknown>) => void,
-    private readonly onSendTurn?: (input: { threadId: string; prompt: string }) => void,
+    private readonly onSendTurn?: (input: SentTurn) => void,
     private readonly onUpdateMcpServers?: (threadId: string, servers: readonly McpServerSpec[]) => void,
   ) {}
 
@@ -66,11 +73,11 @@ class HarnessDriver implements TurnDriver {
     });
   }
 
-  sendTurn(input: { threadId: string; prompt: string }): Effect.Effect<{ threadId: string; turnId: string }, CliError> {
+  sendTurn(input: SentTurn): Effect.Effect<{ threadId: string; turnId: string }, CliError> {
     return Effect.tryPromise({
       try: async () => {
         if (this.behavior === "failing") throw new Error("harness driver cannot start turns");
-        this.onSendTurn?.({ threadId: input.threadId, prompt: input.prompt });
+        this.onSendTurn?.({ threadId: input.threadId, prompt: input.prompt, ...(input.images ? { images: input.images } : {}) });
         this.turn += 1;
         const turnId = `driver-turn-${this.turn}`;
         this.prompts.set(turnId, input.prompt);
@@ -134,7 +141,7 @@ export interface TestHarnessOptions {
   /** Sees every `startSession` input (instructions, MCP servers, working directory). */
   readonly onStartSession?: (input: Record<string, unknown>) => void;
   /** Sees every prompt as the provider receives it (instruction updates included). */
-  readonly onSendTurn?: (input: { threadId: string; prompt: string }) => void;
+  readonly onSendTurn?: (input: SentTurn) => void;
   /** Sees the MCP servers a live session is given at each send (`updateMcpServers`). */
   readonly onUpdateMcpServers?: (threadId: string, servers: readonly McpServerSpec[]) => void;
 }
