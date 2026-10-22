@@ -198,7 +198,8 @@ async function runSettings(): Promise<void> {
   const claudeRows = setup.captureCharFrame().split("\n");
   const modelRow = claudeRows.findIndex((row) => /│\s+Model\s/.test(row));
   if (modelRow < 0) fail("the Claude Code tab has no model row");
-  await act(async () => setup.mockMouse.click(claudeRows[modelRow]!.indexOf("Model") + 1, modelRow));
+  // The pane's "Model", not the sidebar's "Model servers" when they share a row.
+  await act(async () => setup.mockMouse.click(claudeRows[modelRow]!.lastIndexOf("Model") + 1, modelRow));
   await setup.flush();
   const models = setup.captureCharFrame();
   console.log("--- settings page, model choices ---");
