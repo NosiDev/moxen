@@ -40,7 +40,7 @@ export const DEFAULT_CONFIG: CliConfig = {
   threadEnvMode: "local",
   runtimeMode: "full-access",
   interactionMode: "default",
-  sessionTtl: "2m",
+  sessionTtl: "1h",
 };
 
 const projectPolicies = new Set<ProjectPolicy>(["create", "existing"]);
@@ -198,6 +198,11 @@ export function normalizeConfig(raw: unknown): CliConfig {
     if (value === null) throw new CliError("INVALID_CONFIG", "autoContinueAtUsageLimit must be true or false.");
     if (value) result.autoContinueAtUsageLimit = true;
   }
+  if (input.usageLimitContinues !== undefined) {
+    const value = Number(input.usageLimitContinues);
+    if (!Number.isInteger(value) || value < 1 || value > 5) throw new CliError("INVALID_CONFIG", "usageLimitContinues must be a whole number from 1 to 5.");
+    if (value !== 2) result.usageLimitContinues = value;
+  }
   if (input.branchPruneDays !== undefined) {
     const value = Number(input.branchPruneDays);
     if (!Number.isInteger(value) || value < 0 || value > 365) {
@@ -319,6 +324,9 @@ function normalizeProviders(raw: unknown): ProvidersConfig | undefined {
       "moxenTools",
       "orchestration",
       "moxenSkills",
+      "instructions",
+      "autoContinueAtUsageLimit",
+      "sessionTtl",
       "webFetch",
       "todos",
       "mcpExclude",
@@ -331,13 +339,13 @@ function normalizeProviders(raw: unknown): ProvidersConfig | undefined {
     if (claude || args || models) result.claude = { ...(claude ?? {}), ...(args ? { launchArgs: args } : {}), ...models };
   }
   if (input.opencode !== undefined) {
-    const opencode = normalizeSection<OpencodeProviderConfig>(input.opencode, "providers.opencode", ["binaryPath", "bundledSkills", "compaction", "compactAt", "handoff", "handoffAt", "autoCompact", "compactBuffer", "autoHandoff", "autoHandoffTokens", "autoHandoffPercent", "runtimeMode", "model", "thinkingEffort", "moxenTools", "orchestration", "moxenSkills", "webFetch", "todos", "mcpExclude", "disabledNativeTools", "webSearchOrder", "webFetchOrder", "moxenPrompt"]);
+    const opencode = normalizeSection<OpencodeProviderConfig>(input.opencode, "providers.opencode", ["binaryPath", "bundledSkills", "compaction", "compactAt", "handoff", "handoffAt", "autoCompact", "compactBuffer", "autoHandoff", "autoHandoffTokens", "autoHandoffPercent", "runtimeMode", "model", "thinkingEffort", "moxenTools", "orchestration", "moxenSkills", "instructions", "autoContinueAtUsageLimit", "sessionTtl", "webFetch", "todos", "mcpExclude", "disabledNativeTools", "webSearchOrder", "webFetchOrder", "moxenPrompt"]);
     const models = handoffModelsOf(input.opencode, "providers.opencode");
     if (opencode || models) result.opencode = { ...opencode, ...models };
   }
   if (input.harness !== undefined) {
     const withProfiles = normalizeHarnessConfig(input.harness);
-    const defaults = normalizeSection<HarnessProviderConfig>(input.harness, "providers.harness", ["runtimeMode", "model", "thinkingEffort", "moxenTools", "orchestration", "moxenSkills", "webFetch", "todos", "mcpExclude", "compaction", "compactAt", "handoff", "handoffAt", "autoHandoff", "autoHandoffTokens", "autoHandoffPercent", "slots", "autoCompact", "autoCompactPercent", "autoCompactTokens", "keepRecentTokens", "webSearch", "webSearchKey", "webSearchKeyEnv", "searxngUrl", "webBrowser", "webBrowserPath", "webPrivateNetwork"]);
+    const defaults = normalizeSection<HarnessProviderConfig>(input.harness, "providers.harness", ["runtimeMode", "model", "thinkingEffort", "moxenTools", "orchestration", "moxenSkills", "instructions", "autoContinueAtUsageLimit", "sessionTtl", "webFetch", "todos", "mcpExclude", "compaction", "compactAt", "handoff", "handoffAt", "autoHandoff", "autoHandoffTokens", "autoHandoffPercent", "slots", "autoCompact", "autoCompactPercent", "autoCompactTokens", "keepRecentTokens", "webSearch", "webSearchKey", "webSearchKeyEnv", "searxngUrl", "webBrowser", "webBrowserPath", "webPrivateNetwork"]);
     const models = handoffModelsOf(input.harness, "providers.harness");
     const section = asSection(input.harness, "providers.harness");
     const keys = normalizeSection<Partial<Record<KeyedSearchBackend, string>>>(section.webSearchKeys, "providers.harness.webSearchKeys", ["exa", "brave"]);

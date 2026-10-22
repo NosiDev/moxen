@@ -29,10 +29,12 @@ export interface CliConfig {
   instructions?: string;
   /**
    * When a plan usage limit stops a turn, schedule a "continue" for just
-   * after the limit resets (at most twice in a row). Off unless set: it runs
+   * after the limit resets (at most `usageLimitContinues` in a row). Off unless set: it runs
    * work while nobody is watching.
    */
   autoContinueAtUsageLimit?: boolean;
+  /** Automatic continues in a row before Moxen stops and waits (1 to 5). Unset: 2. */
+  usageLimitContinues?: number;
   /**
    * The older switch for copying moxen's own skills into a project. Read only
    * while `skills.moxen` is unset: false there means serve (`core/skills/delivery.ts`).
@@ -136,6 +138,12 @@ export interface HarnessProviderConfig {
   orchestration?: boolean;
   /** Moxen's own skills on this provider: false keeps them away, true serves them even with `skills.moxen` off. Unset: follows `skills.moxen`. */
   moxenSkills?: boolean;
+  /** Added after the global `instructions`, for this provider's sessions only. */
+  instructions?: string;
+  /** Continue after a usage limit on this provider. Unset: the global `autoContinueAtUsageLimit`. */
+  autoContinueAtUsageLimit?: boolean;
+  /** How long this provider's sessions stay warm with nothing happening (`45s`, `2m`, `1h`). Unset: the global `sessionTtl`. */
+  sessionTtl?: string;
   /** Moxen's `web_fetch`. Unset: `moxenTools`, else on. */
   webFetch?: boolean;
   /** MCP servers this provider does not get, as comma-separated names. Unset: it gets every server the server entry itself offers it. Settings key: `providers.<kind>.mcpExclude`. */
@@ -302,6 +310,12 @@ export interface OpencodeProviderConfig {
   orchestration?: boolean;
   /** Moxen's own skills on this provider: false keeps them away, true serves them even with `skills.moxen` off. Unset: follows `skills.moxen`. */
   moxenSkills?: boolean;
+  /** Added after the global `instructions`, for this provider's sessions only. */
+  instructions?: string;
+  /** Continue after a usage limit on this provider. Unset: the global `autoContinueAtUsageLimit`. */
+  autoContinueAtUsageLimit?: boolean;
+  /** How long this provider's sessions stay warm with nothing happening (`45s`, `2m`, `1h`). Unset: the global `sessionTtl`. */
+  sessionTtl?: string;
   /** Moxen's `web_fetch`. Unset: `moxenTools`, else on. */
   webFetch?: boolean;
   /** MCP servers this provider does not get, as comma-separated names. Unset: it gets every server the server entry itself offers it. Settings key: `providers.<kind>.mcpExclude`. */
@@ -354,6 +368,12 @@ export interface ClaudeProviderConfig {
   orchestration?: boolean;
   /** Moxen's own skills on this provider: false keeps them away, true serves them even with `skills.moxen` off. Unset: follows `skills.moxen`. */
   moxenSkills?: boolean;
+  /** Added after the global `instructions`, for this provider's sessions only. */
+  instructions?: string;
+  /** Continue after a usage limit on this provider. Unset: the global `autoContinueAtUsageLimit`. */
+  autoContinueAtUsageLimit?: boolean;
+  /** How long this provider's sessions stay warm with nothing happening (`45s`, `2m`, `1h`). Unset: the global `sessionTtl`. */
+  sessionTtl?: string;
   /** Moxen's `web_fetch`. Unset: `moxenTools`, else on. */
   webFetch?: boolean;
   /** MCP servers this provider does not get, as comma-separated names. Unset: it gets every server the server entry itself offers it. Settings key: `providers.<kind>.mcpExclude`. */

@@ -301,6 +301,9 @@ export interface SettingEffective {
 const choice = (value: string, label: string, description?: string): SettingChoice =>
   description === undefined ? { value, label } : { value, label, description };
 
+/** Idle lifetimes a page offers. */
+const DURATION_PRESETS = ["2m", "5m", "10m", "15m", "30m", "1h", "2h", "4h", "8h", "24h"] as const;
+
 /** Where a line can be put: shares of the window (they follow any model), then sizes from a small local model up. */
 const LINE_PRESETS = ["40%", "50%", "60%", "70%", "80%", "90%", "8K", "16K", "24K", "32K", "64K", "128K", "256K", "512K", "1M"] as const;
 
@@ -344,6 +347,48 @@ function moxenSkillsSetting(kind: "claude" | "opencode" | "harness"): SettingDes
     fallback: { resolver: "providerSkills" },
     appliesAt: "next-session",
   };
+}
+
+/**
+ * One Sessions group per provider, the Turns tab's own narrowed to it: instructions that only this
+ * provider's threads get, and whether a usage limit is waited out. Unset, each follows the Turns tab.
+ */
+function sessionSettings(kind: "claude" | "opencode" | "harness"): SettingDescriptor[] {
+  const name = { claude: "Claude Code", opencode: "OpenCode", harness: "Moxen Harness" }[kind];
+  const section = `provider:${kind}` as const;
+  return [
+    {
+      key: `providers.${kind}.instructions`,
+      label: "Provider instructions",
+      description: `Added to the system prompt of ${name} threads only, after 'Extra instructions' on the Turns tab and before a project's moxen.json instructions${kind === "harness" ? ", then a profile's own Profile instructions" : ""}. For guidance one model family needs and the others do not.`,
+      section,
+      group: "Sessions",
+      kind: { type: "string", placeholder: `Appended to ${name} sessions`, multiline: true },
+      defaultValue: undefined,
+      appliesAt: "next-session",
+    },
+    {
+      key: `providers.${kind}.sessionTtl`,
+      label: "Idle session lifetime",
+      description: `How long a ${name} session stays warm with nothing happening on it, before it is ended (the next message resumes it). ${{ claude: "Each is a Claude Code process.", opencode: "Sessions share one OpenCode server per folder.", harness: "A local server re-reads the whole prompt when a session comes back." }[kind]} Default follows the Turns tab.`,
+      section,
+      group: "Sessions",
+      kind: { type: "duration", presets: DURATION_PRESETS, ends: { low: "Shorter", high: "Longer" } },
+      defaultValue: undefined,
+      fallback: { key: "sessionTtl" },
+      appliesAt: "next-session",
+    },
+    {
+      key: `providers.${kind}.autoContinueAtUsageLimit`,
+      label: "Continue after a usage limit",
+      description: `When a plan limit stops a ${name} turn, schedule a continue for just after it resets. Limits are per account, so this can be on for a subscription and off for a metered key. Default follows the Turns tab.`,
+      section,
+      group: "Sessions",
+      kind: { type: "boolean" },
+      defaultValue: undefined,
+      fallback: { key: "autoContinueAtUsageLimit" },
+    },
+  ];
 }
 
 /**
@@ -545,21 +590,32 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "sessionTtl",
     label: "Idle session lifetime",
-    description: "How long a provider session stays warm after its last turn.",
+    description: "How long a provider session stays warm with nothing happening on it: no turn, no background task, nothing waiting on you. Past it the session is ended, and the next message resumes it, at the cost of a restart and reading the prompt cache afresh. A provider's tab can set its own.",
     section: "turns",
     group: "Sessions",
-    kind: { type: "duration", presets: ["15s", "30s", "1m", "2m", "3m", "5m", "10m", "15m", "30m", "1h"], ends: { low: "Shorter", high: "Longer" } },
-    defaultValue: "2m",
+    kind: { type: "duration", presets: DURATION_PRESETS, ends: { low: "Shorter", high: "Longer" } },
+    defaultValue: "1h",
+    appliesAt: "next-session",
   },
   {
     key: "autoContinueAtUsageLimit",
     label: "Continue after a usage limit",
     description:
-      "When a plan limit stops a turn, schedule a continue for just after it resets (at most twice in a row). Off by default: it runs work while nobody is watching.",
+      "When a plan limit stops a turn, schedule a continue for just after it resets, at most 'Continues in a row' times. Off by default: it runs work while nobody is watching. A provider's tab can say otherwise for it.",
     section: "turns",
     group: "Sessions",
     kind: { type: "boolean" },
     defaultValue: false,
+  },
+  {
+    key: "usageLimitContinues",
+    label: "Continues in a row",
+    description: "How many automatic continues may follow one another when each runs into the limit again; past it, a notice says it stopped and waits for you.",
+    section: "turns",
+    group: "Sessions",
+    kind: { type: "integer", min: 1, max: 5, presets: [1, 2, 3, 4, 5], ends: { low: "Fewer", high: "More" } },
+    defaultValue: 2,
+    visibleWhen: { key: "autoContinueAtUsageLimit", in: ["true"] },
   },
   {
     key: "branchPruneDays",
@@ -603,7 +659,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "instructions",
     label: "Extra instructions",
-    description: "Appended to every provider session's system prompt.",
+    description: "Appended to every provider session's system prompt. Each provider's tab can add its own after these (Sessions), and a project's moxen.json after that.",
     section: "turns",
     group: "Agent",
     kind: { type: "string", placeholder: "Appended to every session", multiline: true },
@@ -1103,6 +1159,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     appliesAt: "server-restart",
   },
 
+  ...sessionSettings("claude"),
   ...longThreadSettings("claude"),
 
   // -- OpenCode --------------------------------------------------------------
@@ -1287,6 +1344,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     appliesAt: "next-session",
   },
 
+  ...sessionSettings("opencode"),
   ...longThreadSettings("opencode"),
 
   // -- Moxen Harness ---------------------------------------------------------
@@ -1531,6 +1589,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     kind: { type: "boolean" },
     defaultValue: undefined,
   },
+  ...sessionSettings("harness"),
   ...longThreadSettings("harness"),
   HARNESS_PROFILES_SETTING,
 

@@ -18,6 +18,21 @@ between tool calls are kept as their own messages, so the transcript folds
 them between the calls they narrate. Completed thinking is stored whole;
 live thinking streams only.
 
+A provider session stays warm between turns until it has been idle for its
+lifetime (`sessionTtl`, 1h unless set; `providers.<kind>.sessionTtl` over it):
+no event, no open turn, no background task. Then it is ended (`core/threads/idle.ts`),
+and the next message resumes the provider's own session from the thread's
+cursor. A wake-up Claude Code schedules inside its own process further out
+than the lifetime is lost with it.
+
+When a plan limit stops a turn, a continue can be scheduled for just after
+the reset: `autoContinueAtUsageLimit`, or `providers.<kind>.autoContinueAtUsageLimit`
+for one provider, at most `usageLimitContinues` (default 2) in a row.
+
+Runtime instructions end with the user's own, in this order: the global
+`instructions`, the provider's `providers.<kind>.instructions`, the project's
+`moxen.json` `instructions`, then (on the Moxen Harness) the profile's.
+
 ## What a new thread starts with
 
 One rule, most specific first, the same for `moxen handover`, `moxen threads create` and a thread started from the TUI (`resolveModelSelection` in `core/catalog/selection.ts`; the TUI marks the same model as the default in its picker):

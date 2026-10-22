@@ -300,6 +300,21 @@ describe("session setup", () => {
     }
   });
 
+  it("puts a provider's own instructions between the global ones and the project's, for that provider only", async () => {
+    const { harness, connection, startOf } = await connected({ instructions: "Config rule.", providers: { claude: { instructions: "Claude rule." } } });
+    try {
+      await writeFile(path.join(harness.work, "moxen.json"), JSON.stringify({ instructions: "Project rule." }));
+      const claude = await connection.dispatch({ type: "thread.handover", cwd: harness.work, prompt: "Hi", wait: true, threadEnvMode: "local", provider: "claudeAgent", model: "claude-opus-5" });
+      expect(startOf(claude.threadId)?.instructions).toMatch(/\n\nConfig rule\.\n\nClaude rule\.\n\nProject rule\.$/);
+      // The harness's installation default is OpenCode: it gets the global and the project's, not Claude's.
+      const other = await connection.dispatch({ type: "thread.handover", cwd: harness.work, prompt: "Hi", wait: true, threadEnvMode: "local" });
+      expect(startOf(other.threadId)?.instructions).toMatch(/\n\nConfig rule\.\n\nProject rule\.$/);
+      expect(startOf(other.threadId)?.instructions).not.toContain("Claude rule.");
+    } finally {
+      await connection.close();
+    }
+  });
+
   it("delegates into the child's own worktree and tells the child it is a delegated task", async () => {
     const { harness, connection, startOf } = await connected();
     try {

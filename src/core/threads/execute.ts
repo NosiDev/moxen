@@ -56,6 +56,7 @@ import { adoptProviderTitle, completeTurn, failTurn, holdPromotedTurn, interrupt
 import { captureRuleBaseline, refreshRuleBaseline } from "./rulefiles.js";
 import { isolationInstructions, resolveIsolation } from "./isolation.js";
 import { recordNativeSubagent } from "./subagents.js";
+import { forgetSession, touchSession, trackSession } from "./idle.js";
 import { ThreadStore } from "./store.js";
 import { toolActivityRow, type ToolRuntimeEvent } from "./toolactivity.js";
 import { permissionActivityRow, userInputActivityRow, type UserInputRuntimeEvent } from "./requestactivity.js";
@@ -88,6 +89,8 @@ export interface TurnDriver extends ProviderSessionTitles {
   ): Promise<TurnOutcome>;
   readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;
   readonly stopAll?: () => Effect.Effect<void, CliError>;
+  /** Ends one thread's session (an idle one, `idle.ts`); the next turn resumes it from its cursor. All three drivers have it. */
+  stopSession?(threadId: string): Effect.Effect<void, CliError>;
   /** Optional only so a test double need not implement it; all four drivers do. */
   resumeCursor?(threadId: string): string | null;
   contextUsage?(threadId: string): Promise<ContextWindowUsage | null>;
@@ -532,6 +535,8 @@ export async function ensureDriverSession(
     readonly store?: ThreadStore;
     /** After a turn the provider starts itself settles (`ExecuteTurnArgs.afterSettle`). */
     readonly afterSettle?: () => Promise<void>;
+    /** End the session after this long with nothing happening on it (`idle.ts`); null or absent: never. */
+    readonly idleTtlMs?: number | null;
   } = {},
 ): Promise<void> {
   const hasSession = await Effect.runPromise(driver.hasSession(thread.id)).catch(() => false);
@@ -566,7 +571,7 @@ export async function ensureDriverSession(
   );
   // What a provider loaded when it started (or resumed) is what its rules were then: a later edit is news to it.
   await captureRuleBaseline(driver, thread.id, driverKey(selection.instanceId), cwd);
-  if (options.store) watchDriverSession(options.store, driver, thread.id, cwd, options.afterSettle);
+  if (options.store) watchDriverSession(options.store, driver, thread.id, cwd, options.afterSettle, options.idleTtlMs ?? null);
 }
 
 const watching = new WeakMap<TurnDriver, Map<string, () => void>>();
@@ -600,13 +605,18 @@ function subagentPayload(event: Extract<ProviderRuntimeEvent, { type: "subagent.
  * - background tasks starting and ending, and the live set of them, become
  *   activity rows the transcript and the tasks panel read.
  */
-export function watchDriverSession(store: ThreadStore, driver: TurnDriver, threadId: string, cwd: string, afterSettle?: () => Promise<void>): void {
+export function watchDriverSession(store: ThreadStore, driver: TurnDriver, threadId: string, cwd: string, afterSettle?: () => Promise<void>, idleTtlMs: number | null = null): void {
   let byThread = watching.get(driver);
   if (!byThread) {
     byThread = new Map();
     watching.set(driver, byThread);
   }
-  if (byThread.has(threadId)) return;
+  const already = byThread.get(threadId);
+  if (already) {
+    // A session started again under the same watcher: its idle clock restarts, with the lifetime of today's config.
+    trackSession(driver, threadId, { store, ttlMs: idleTtlMs, unwatch: already });
+    return;
+  }
   let lastTasks = "";
   let chain: Promise<void> = Promise.resolve();
   const latestTurnId = async (): Promise<string | null> => {
@@ -634,6 +644,7 @@ export function watchDriverSession(store: ThreadStore, driver: TurnDriver, threa
     });
   };
   const unsubscribe = subscribeDriverThread(driver, threadId, (event) => {
+    touchSession(driver, threadId, event.type === "background.tasks.changed" ? event.tasks.length : undefined);
     // A compaction makes the provider read its rule files again: what it holds now is what is on disk.
     if (event.type === "session.notice" && event.notice === "compacted") void refreshRuleBaseline(driver, threadId);
     if (event.type === "turn.started" && event.origin === "background") {
@@ -681,8 +692,10 @@ export function watchDriverSession(store: ThreadStore, driver: TurnDriver, threa
   const stop = (): void => {
     unsubscribe();
     byThread!.delete(threadId);
+    forgetSession(driver, threadId);
   };
   byThread.set(threadId, stop);
+  trackSession(driver, threadId, { store, ttlMs: idleTtlMs, unwatch: stop });
 }
 
 async function runBackgroundTurn(

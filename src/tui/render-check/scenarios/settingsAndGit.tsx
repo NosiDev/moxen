@@ -133,7 +133,7 @@ async function runSettings(): Promise<void> {
   await act(async () => setup.mockMouse.click(ttlRows[backRow]!.indexOf("← back") + 1, backRow));
   await setup.flush();
   const backed = setup.captureCharFrame();
-  if (backed.includes("● 2 minutes") || !backed.includes("Idle session lifetime")) fail("clicking back did not return to the settings list");
+  if (backed.includes("← back") || !backed.includes("Idle session lifetime")) fail("clicking back did not return to the settings list");
   const reopened = backed.split("\n");
   const reopenRow = reopened.findIndex((row) => row.includes("Idle session lifetime"));
   await act(async () => setup.mockMouse.click(reopened[reopenRow]!.indexOf("Idle") + 1, reopenRow));
@@ -141,7 +141,8 @@ async function runSettings(): Promise<void> {
   await act(async () => setup.mockInput.pressArrow("down"));
   await act(async () => setup.mockInput.pressEnter());
   await setup.flush();
-  if (written.at(-1)?.key !== "sessionTtl" || written.at(-1)?.value !== "3m") fail(`picking a preset wrote ${JSON.stringify(written)}`);
+  // The default is an hour; the next preset up is two.
+  if (written.at(-1)?.key !== "sessionTtl" || written.at(-1)?.value !== "2h") fail(`picking a preset wrote ${JSON.stringify(written)}`);
 
   // Free text: a box that wraps and grows, with its keys and what empty means said under it.
   // Idle session lifetime, continue at a limit, install skills, then extra instructions.

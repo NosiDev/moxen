@@ -17,6 +17,7 @@
  */
 import { locateBundledSkills } from "../providers/bundledskills.js";
 import { resolveSessionSkills, type SessionSkills } from "../skills/delivery.js";
+import { sessionTtlFor } from "./idle.js";
 import * as Effect from "effect/Effect";
 import { mkdir, readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -140,7 +141,7 @@ interface InstructionsUpdate {
 }
 
 /** The part of a session setup `ensureDriverSession` takes. */
-function sessionStart(setup: { mcpServers: McpServerSpec[]; disabledMcpTools: string[]; disabledNativeTools: string[]; moxenPrompt: boolean; checklist: boolean; instructions: string; store: ThreadStore; skills: SessionSkills; delegated: boolean }) {
+function sessionStart(setup: { mcpServers: McpServerSpec[]; disabledMcpTools: string[]; disabledNativeTools: string[]; moxenPrompt: boolean; checklist: boolean; instructions: string; store: ThreadStore; skills: SessionSkills; delegated: boolean; idleTtlMs: number | null }) {
   return {
     mcpServers: setup.mcpServers,
     disabledMcpTools: setup.disabledMcpTools,
@@ -153,6 +154,7 @@ function sessionStart(setup: { mcpServers: McpServerSpec[]; disabledMcpTools: st
     ...(setup.skills.folder ? { moxenSkillsFolder: setup.skills.folder } : {}),
     hiddenMoxenSkills: setup.skills.hidden,
     delegated: setup.delegated,
+    idleTtlMs: setup.idleTtlMs,
   };
 }
 
@@ -176,7 +178,7 @@ async function sessionSetup(
   ctx: OperationContext,
   thread: StoredThread,
   instanceId: string = thread.modelSelection.instanceId,
-): Promise<{ mcpServers: McpServerSpec[]; disabledMcpTools: string[]; disabledNativeTools: string[]; moxenPrompt: boolean; checklist: boolean; instructions: string; store: ThreadStore; instructionsUpdate: InstructionsUpdate | null; skills: SessionSkills; delegated: boolean }> {
+): Promise<{ mcpServers: McpServerSpec[]; disabledMcpTools: string[]; disabledNativeTools: string[]; moxenPrompt: boolean; checklist: boolean; instructions: string; store: ThreadStore; instructionsUpdate: InstructionsUpdate | null; skills: SessionSkills; delegated: boolean; idleTtlMs: number | null }> {
   const project = await projectById(ctx.storeRoot, thread.projectId);
   const workspaceRoot = project?.workspaceRoot ?? (thread.env.path.trim() || null);
   const delegation = await delegationOf(ctx.store, thread.id);
@@ -209,7 +211,8 @@ async function sessionSetup(
   // Only Claude Code and OpenCode ship tools to switch off or tips to give; the Harness has its own.
   const nativeKind = kind === "claude" || kind === "opencode" ? kind : null;
   const nativeConfig = nativeKind === null ? undefined : ctx.config.providers?.[nativeKind];
-  const user = [ctx.config.instructions, fromProject].filter((entry): entry is string => Boolean(entry));
+  // Global, then this provider's, then the project's (a Harness profile's own come after, in its driver).
+  const user = [ctx.config.instructions, providerConfig?.instructions, fromProject].filter((entry): entry is string => Boolean(entry?.trim()));
   const current = buildRuntimeInstructions({
     instanceId: thread.modelSelection.instanceId,
     env: thread.env,
@@ -253,6 +256,7 @@ async function sessionSetup(
       bundledDir: locateBundledSkills(),
     }),
     delegated: delegation !== null,
+    idleTtlMs: sessionTtlFor(ctx.config, kind),
     instructionsUpdate:
       plan.update === null
         ? null
@@ -320,7 +324,7 @@ async function runRecoveredTurn(ctx: OperationContext, threadId: string, turn: S
     ...(images.length > 0 ? { images } : {}),
     modelSelection: selection,
     workingDirectory: thread.env.path,
-    ...usageLimitHook(ctx, threadId),
+    ...usageLimitHook(ctx, threadId, selection.instanceId),
     ...longThreadHook(ctx, threadId),
   })
     // A delegated task resumed after a usage limit (or recovered after a crash)
@@ -355,15 +359,22 @@ export async function armPendingScheduledTurns(ctx: OperationContext): Promise<v
   }
 }
 
-/** Automatic continues in a row before moxen stops trying (Claude Code's own cap). */
+/** Automatic continues in a row before moxen stops trying, unless `usageLimitContinues` says otherwise (Claude Code's own cap). */
 export const MAX_USAGE_CONTINUES = 2;
 
-/** The runner hook that schedules a continue after a usage limit, when config asks for it. */
+/** Whether a usage limit on this instance's provider is waited out: its own switch, else the global one. */
+export function autoContinuesAt(config: OperationContext["config"], instanceId: string): boolean {
+  const kind = driverKindOfInstance(instanceId);
+  return (kind === null ? undefined : config.providers?.[kind]?.autoContinueAtUsageLimit) ?? config.autoContinueAtUsageLimit === true;
+}
+
+/** The runner hook that schedules a continue after a usage limit, when config asks for it on this turn's provider. */
 function usageLimitHook(
   ctx: OperationContext,
   threadId: string,
+  instanceId: string,
 ): { onUsageLimit?: (storeTurnId: string, resetsAt: string | null) => void } {
-  if (ctx.config.autoContinueAtUsageLimit !== true) return {};
+  if (!autoContinuesAt(ctx.config, instanceId)) return {};
   return {
     onUsageLimit: (storeTurnId, resetsAt) => void scheduleUsageContinue(ctx, threadId, storeTurnId, resetsAt).catch(() => undefined),
   };
@@ -371,7 +382,7 @@ function usageLimitHook(
 
 /**
  * Queue a "continue" for just after the limit resets. At most one pending,
- * and at most `MAX_USAGE_CONTINUES` in a row: a continue that hits the limit
+ * and at most `usageLimitContinues` in a row: a continue that hits the limit
  * again counts up, and past the cap a notice says it stopped.
  */
 export async function scheduleUsageContinue(
@@ -386,14 +397,15 @@ export async function scheduleUsageContinue(
   if (turns.some((turn) => turn.status === "queued" && turn.scheduleReason === "usage-reset")) return null;
   const stopped = turns.find((turn) => turn.id === storeTurnId);
   const attempt = stopped?.scheduleReason === "usage-reset" ? (stopped.continueAttempt ?? 1) + 1 : 1;
-  if (attempt > MAX_USAGE_CONTINUES) {
+  const cap = ctx.config.usageLimitContinues ?? MAX_USAGE_CONTINUES;
+  if (attempt > cap) {
     await store.appendLedger(threadId, "activity", {
       id: store.newId(),
       threadId,
       turnId: storeTurnId,
       kind: "notice",
       summary: "Automatic continue stopped after repeated usage-limit hits",
-      payload: { notice: "other", detail: `It tried ${MAX_USAGE_CONTINUES} times in a row. Send a message to pick the task up again.` },
+      payload: { notice: "other", detail: `It tried ${cap === 1 ? "once" : `${cap} times in a row`}. Send a message to pick the task up again.` },
       createdAt: store.nowIso(),
     });
     store.emit(threadId, "activity");
@@ -682,7 +694,7 @@ export async function startTurn(ctx: OperationContext, input: StartTurnInput): P
     modelSelection: turnModel,
     workingDirectory: sent.thread.env.path,
     ...(onEvent ? { onEvent } : {}),
-    ...usageLimitHook(ctx, thread.id),
+    ...usageLimitHook(ctx, thread.id, turnModel.instanceId),
     ...longThreadHook(ctx, thread.id),
   }).catch(() => undefined);
   return { ...sent, run };

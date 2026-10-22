@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { CliConfig } from "../../types.js";
-import { MAX_USAGE_CONTINUES, scheduleUsageContinue, type OperationContext } from "../operations.js";
+import { MAX_USAGE_CONTINUES, autoContinuesAt, scheduleUsageContinue, type OperationContext } from "../operations.js";
 import { toThreadEnvelope } from "../project.js";
 import { armScheduledTurn, armedScheduleCount, onScheduledTurnDue } from "../schedule.js";
 import { openThreadStore } from "../store.js";
@@ -169,11 +169,11 @@ describe("schedule timers", () => {
 });
 
 describe("continue after a usage limit", () => {
-  function context(store: Awaited<ReturnType<typeof setup>>["store"], root: string): OperationContext {
+  function context(store: Awaited<ReturnType<typeof setup>>["store"], root: string, config: Partial<CliConfig> = {}): OperationContext {
     return {
       store,
       storeRoot: root,
-      config: { autoContinueAtUsageLimit: true } as CliConfig,
+      config: { autoContinueAtUsageLimit: true, ...config } as CliConfig,
       driverFor: () => {
         throw new Error("no driver in this test");
       },
@@ -209,6 +209,26 @@ describe("continue after a usage limit", () => {
       kind: "notice",
       summary: "Automatic continue stopped after repeated usage-limit hits",
     });
+  });
+
+  it("stops at the configured cap, and says how many it tried", async () => {
+    const { store, thread, root } = await setup();
+    const ctx = context(store, root, { usageLimitContinues: 1 });
+    const stopped = await sendTurn(store, thread.id, { prompt: "big task" });
+    const resetsAt = new Date(Date.now() + 3_600_000).toISOString();
+    const first = await scheduleUsageContinue(ctx, thread.id, stopped.turn.id, resetsAt);
+    await store.updateTurn(thread.id, first!.id, { status: "failed", scheduledFor: null });
+    expect(await scheduleUsageContinue(ctx, thread.id, first!.id, resetsAt)).toBeNull();
+    expect((await store.readActivities(thread.id)).at(-1)).toMatchObject({ payload: { detail: "It tried once. Send a message to pick the task up again." } });
+  });
+
+  it("waits out a limit per provider: its own switch, else the global one", () => {
+    const config = { autoContinueAtUsageLimit: false, providers: { claude: { autoContinueAtUsageLimit: true }, harness: { autoContinueAtUsageLimit: false } } } as unknown as CliConfig;
+    expect(autoContinuesAt(config, "claudeAgent")).toBe(true);
+    expect(autoContinuesAt(config, "harness/local")).toBe(false);
+    expect(autoContinuesAt({ autoContinueAtUsageLimit: true } as CliConfig, "opencode/opencode")).toBe(true);
+    expect(autoContinuesAt({ autoContinueAtUsageLimit: true, providers: { opencode: { autoContinueAtUsageLimit: false } } } as unknown as CliConfig, "opencode/opencode")).toBe(false);
+    expect(autoContinuesAt({} as CliConfig, "claudeAgent")).toBe(false);
   });
 
   it("does nothing without a reset time", async () => {
