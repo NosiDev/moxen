@@ -116,7 +116,6 @@ import type { ProviderRuntimeEvent } from "../core/providers/spi.js";
 import { pruneFinishedWorktrees } from "../core/threads/prune.js";
 import type { CheckpointFileStat, StoredCheckpoint, StoredThread, TurnStatus } from "../core/threads/types.js";
 import type { CliConfig, ForgeConfig, ProvidersConfig, ThreadEnvelope, WebConfig } from "../core/types.js";
-import { webPolicy } from "../core/providers/harness/web/settings.js";
 import { persistUsageLimits, usageLimitsSnapshot } from "../core/usage/limits.js";
 import type { ClientApi } from "./api.js";
 import {
@@ -255,15 +254,7 @@ export class DirectConnection implements ClientApi {
       type: "in-process",
       instructions: delegated ? MOXEN_DELEGATED_MCP_INSTRUCTIONS : MOXEN_MCP_INSTRUCTIONS,
       tools: moxenToolsFor({ delegated }),
-      call: (tool, args) =>
-        callMoxenTool(this, threadId, tool, args, {
-          delegated,
-          // Read per call, like the Harness's own tools, so a change applies to the next fetch.
-          web: async () => {
-            const config = await this.loadConfig();
-            return webPolicy(config.web, config.providers?.harness, false);
-          },
-        }),
+      call: (tool, args) => callMoxenTool(this, threadId, tool, args, { delegated }),
       fallback,
       checklist,
       // Delegation is what these tools are for: never behind a tool search.

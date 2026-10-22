@@ -15,6 +15,8 @@ import { sendTurn } from "../../../core/threads/threads.js";
 import { serveMcp } from "../stdio.js";
 import { callMoxenTool, moxenToolsFor } from "../tools.js";
 import { webPolicy } from "../../../core/providers/harness/web/settings.js";
+import { normalizeConfig } from "../../../core/config.js";
+import { describeSettings } from "../../../core/configschema.js";
 
 async function setup(harnessOptions: Parameters<typeof testHarness>[0] = {}) {
   const starts: Array<Record<string, unknown>> = [];
@@ -321,6 +323,14 @@ describe("moxen web_fetch", () => {
     expect(rendered.text).toContain("No browser is available");
     // The Harness's older key says the same for every provider now.
     const legacy = await callMoxenTool(api, "t1", "web_fetch", { url: "https://example.com/", render: true }, { web: async () => webPolicy(undefined, { webBrowser: "off" }, false) });
+    expect(legacy.text).toContain("No browser is available");
+  });
+
+  it("reads the shared web settings through the server, as the HTTP and stdio paths do", async () => {
+    const served = (config: unknown) => ({ query: async () => ({ path: "", exists: true, settings: describeSettings(normalizeConfig(config)) }) }) as unknown as ClientApi;
+    const off = await callMoxenTool(served({ web: { browser: "off" } }), "t1", "web_fetch", { url: "https://example.com/", render: true });
+    expect(off.text).toContain("No browser is available");
+    const legacy = await callMoxenTool(served({ providers: { harness: { webBrowser: "off" } } }), "t1", "web_fetch", { url: "https://example.com/", render: true });
     expect(legacy.text).toContain("No browser is available");
   });
 

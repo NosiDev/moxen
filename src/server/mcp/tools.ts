@@ -15,6 +15,7 @@ import path from "node:path";
 import { CliError } from "../../core/errors.js";
 import { fetchPage } from "../../core/providers/harness/web/fetch.js";
 import { webPolicy, type WebPolicy } from "../../core/providers/harness/web/settings.js";
+import type { HarnessProviderConfig, WebConfig } from "../../core/types.js";
 import type { DelegatedTaskStatus } from "../../core/threads/views.js";
 import type { ClientApi } from "../api.js";
 
@@ -272,7 +273,7 @@ export async function callMoxenTool(
         return ok({ recorded: recorded.steps, ...(note === null ? {} : { note }) });
       }
       case "web_fetch":
-        return await webFetchTool(args, (await options.web?.()) ?? webPolicy(undefined, undefined, false));
+        return await webFetchTool(args, await (options.web ?? (() => currentWebPolicy(api)))());
       case "task_cancel": {
         const taskId = argString(args, "taskId", true)!;
         const cancelled = await api.dispatch({ type: "thread.task.cancel", parentThreadId, taskId });
@@ -309,6 +310,33 @@ async function webFetchTool(args: Record<string, unknown>, policy: WebPolicy): P
     },
   );
   return { text: result.content, isError: result.isError === true };
+}
+
+/**
+ * The shared web settings as the server holds them now: read per call through
+ * `ClientApi`, so every way a provider reaches these tools (in-process, the
+ * loopback HTTP server, the stdio child) follows the same page. If they cannot
+ * be read, no browser is started and the local network stays shut.
+ */
+async function currentWebPolicy(api: ClientApi): Promise<WebPolicy> {
+  try {
+    const { settings } = await api.query({ type: "settings.read" });
+    const value = (key: string) => settings.find((view) => view.descriptor.key === key)?.value;
+    const text = (key: string) => (typeof value(key) === "string" && value(key) !== "" ? (value(key) as string) : undefined);
+    const flag = (key: string) => (typeof value(key) === "boolean" ? (value(key) as boolean) : undefined);
+    const web: WebConfig = {
+      ...(text("web.browser") === "off" || text("web.browser") === "auto" ? { browser: text("web.browser") as "auto" | "off" } : {}),
+      ...(text("web.browserPath") ? { browserPath: text("web.browserPath")! } : {}),
+      ...(flag("web.privateNetwork") !== undefined ? { privateNetwork: flag("web.privateNetwork")! } : {}),
+    };
+    const harness: HarnessProviderConfig = {
+      ...(text("providers.harness.webBrowser") ? { webBrowser: text("providers.harness.webBrowser")! } : {}),
+      ...(text("providers.harness.webBrowserPath") ? { webBrowserPath: text("providers.harness.webBrowserPath")! } : {}),
+    };
+    return webPolicy(web, harness, false);
+  } catch {
+    return { browser: { mode: "off" }, allowPrivate: false };
+  }
 }
 
 function ok(value: unknown): ToolResult {
