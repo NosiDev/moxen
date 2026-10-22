@@ -83,7 +83,7 @@ export async function runHandoffModels(): Promise<void> {
     // A row another one switches off is not on the page to step over.
     .filter((view, _at, all) => {
       const when = view.descriptor.visibleWhen;
-      return when === undefined || when.in.includes(String(all.find((other) => other.descriptor.key === when.key)?.value));
+      return when === undefined || when.in.includes(String(all.find((other) => other.descriptor.key === when.key)?.value ?? ""));
     });
   const place = page.findIndex((view) => view.descriptor.key === "providers.claude.autoHandoffModels");
   if (place < 0) fail("Claude Code's page has no per-model hand-off setting");
@@ -108,7 +108,7 @@ export async function runHandoffModels(): Promise<void> {
   const slider = setup.captureCharFrame();
   console.log("--- hand off slider ---");
   console.log(slider);
-  for (const expected of ["Claude Sonnet 5", "100K", "128K", "256K", "750K", "1M", "◆", "Nothing chosen here"]) {
+  for (const expected of ["Claude Sonnet 5", "16K", "128K", "256K", "750K", "1M", "◆", "Nothing chosen here"]) {
     if (!slider.includes(expected)) fail(`the size slider is missing "${expected}"`);
   }
   await act(async () => setup.mockInput.pressArrow("right"));

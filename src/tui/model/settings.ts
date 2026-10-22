@@ -76,8 +76,8 @@ export interface HandoffModelEntry {
   readonly tokens: number | null;
 }
 
-/** The sizes the per-model slider offers; the catalog has no window per model, so these span 100K to 1M. */
-export const HANDOFF_PRESETS: readonly number[] = [100_000, 128_000, 200_000, 256_000, 400_000, 500_000, 750_000, 1_000_000];
+/** The sizes the per-model slider offers; the catalog has no window per model, so these span a small local model (16K) to 1M. */
+export const HANDOFF_PRESETS: readonly number[] = [16_000, 32_000, 64_000, 128_000, 200_000, 256_000, 400_000, 500_000, 750_000, 1_000_000];
 
 /** A hand-off size as the editor writes it: `128K`, `1M`, `1.5M`; anything else with separators. */
 export function handoffTokensLabel(tokens: number): string {
@@ -361,6 +361,14 @@ export function settingControl(
         ...kind.presets.map((preset) => presetOption(String(preset), `${numberLabel(preset, kind.binary)}${kind.unit ?? ""}`, applies)),
       ];
       break;
+    case "line":
+      if (kind.presets === undefined) return { kind: "text", multiline: false };
+      // Shares first (they follow any window), then sizes from small local models up.
+      options = [
+        ...(descriptor.defaultValue === undefined ? [defaultOption(effective)] : []),
+        ...kind.presets.map((preset) => presetOption(preset, preset.endsWith("%") ? `${preset} of the window` : `${preset} tokens`, applies, preset)),
+      ];
+      break;
     case "duration":
       if (kind.presets === undefined) return { kind: "text", multiline: false };
       options = kind.presets.map((preset) => presetOption(preset, durationLabel(preset), descriptor.defaultValue, preset));
@@ -394,7 +402,7 @@ export function settingControl(
   // A few short values read better side by side; names and long lists get a line each.
   const stops = options.filter((entry) => entry.value !== "");
   const slider =
-    (kind.type === "integer" || kind.type === "duration" || (kind.type === "string" && kind.source === "effort")) && stops.length >= 2 && stops.length <= 8 && stops.every((entry) => (entry.short ?? entry.label).length <= 20);
+    (kind.type === "integer" || kind.type === "duration" || (kind.type === "string" && kind.source === "effort")) && stops.length >= 2 && stops.length <= 12 && stops.every((entry) => (entry.short ?? entry.label).length <= 20);
   const ends: SettingEnds | undefined = kind.type === "string" ? { low: "Faster", high: "Smarter" } : kind.type === "integer" || kind.type === "duration" ? kind.ends : undefined;
   return { kind: "pick", options, layout: slider ? "slider" : "list", ...(slider && ends !== undefined ? { ends } : {}),
     ...(slider && kind.type === "string" && kind.source === "effort" ? { scale: "effort" as const } : {}), searchable: !slider && (options.length > 8 || (kind.type === "string" && kind.source === "model" && options.length > 6)),

@@ -133,11 +133,11 @@ export async function runHarnessProfiles(): Promise<void> {
     return setup.captureCharFrame();
   };
   const longThreads = await openHeading("Long threads");
-  for (const expected of ["Compact at", "Hand off long threads"]) if (!longThreads.includes(expected)) fail(`Long threads is missing "${expected}"`);
+  for (const expected of ["Compact at", "Hand off at"]) if (!longThreads.includes(expected)) fail(`Long threads is missing "${expected}"`);
   if (longThreads.includes("Permissions")) fail("Long threads still shows other headings' settings");
   const web = await openHeading("Web");
   if (!web.includes("Web search") && !web.includes("Web tools")) fail("the Web heading shows none of the web settings");
-  if (web.includes("Permissions") || web.includes("Compact automatically")) fail("the Web heading still shows other headings' settings");
+  if (web.includes("Permissions") || web.includes("Compaction")) fail("the Web heading still shows other headings' settings");
   for (const name of ["Tools", "Concurrency"]) {
     if (!(await openHeading(name)).includes(name)) fail(`the ${name} heading shows nothing of its own`);
   }

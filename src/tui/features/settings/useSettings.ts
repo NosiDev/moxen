@@ -1,4 +1,4 @@
-import { handoffModelsFromText, type ClaudeCompact, type HandoffOverrides, type ProviderHandoff } from "../../model/autohandoff.js";
+import { handoffModelsFromText, type LongThreadConfig } from "../../model/autohandoff.js";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -252,9 +252,6 @@ export function uiFromSnapshot(snapshot: SettingsSnapshot | null): UiConfig | nu
   const side = value("ui.defaultSidePanel");
   const context = value("ui.contextRefreshSeconds");
   const usage = value("ui.usageRefreshSeconds");
-  const handoff = value("ui.autoHandoff");
-  const handoffPercent = value("ui.autoHandoffPercent");
-  const handoffTokens = value("ui.autoHandoffTokens");
   return {
     ...(backdrop === "animated" || backdrop === "static" || backdrop === "off" ? { backdrop } : {}),
     ...(typeof modelScenes === "boolean" ? { modelScenes } : {}),
@@ -262,36 +259,26 @@ export function uiFromSnapshot(snapshot: SettingsSnapshot | null): UiConfig | nu
     ...(side === "context" || side === "git" || side === "agents" || side === "background" ? { defaultSidePanel: side } : {}),
     ...(typeof context === "number" ? { contextRefreshSeconds: context } : {}),
     ...(typeof usage === "number" ? { usageRefreshSeconds: usage } : {}),
-    ...(handoff === "off" || handoff === "ask" || handoff === "auto" ? { autoHandoff: handoff } : {}),
-    ...(typeof handoffPercent === "number" ? { autoHandoffPercent: handoffPercent } : {}),
-    ...(typeof handoffTokens === "number" ? { autoHandoffTokens: handoffTokens } : {}),
   };
 }
 
-/** Claude Code's compaction settings from a snapshot (see `resolveCompact`); null before one exists. */
-export function compactFromSnapshot(snapshot: SettingsSnapshot | null): ClaudeCompact | null {
+/**
+ * The keys the long-thread rule reads (`longThreadPolicy`, core), rebuilt from
+ * a snapshot into the shape of the config, older keys included, so the card
+ * on screen follows the same precedence as the server. Null before a snapshot exists.
+ */
+export function longThreadConfigFromSnapshot(snapshot: SettingsSnapshot | null): LongThreadConfig | null {
   if (snapshot === null) return null;
-  const mode = snapshot.settings.find((view) => view.descriptor.key === "providers.claude.autoCompact")?.value;
-  const percent = snapshot.settings.find((view) => view.descriptor.key === "providers.claude.autoCompactPercent")?.value;
-  return { ...(mode === "claude" || mode === "ask" || mode === "auto" ? { mode } : {}), ...(typeof percent === "number" ? { percent } : {}) };
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const view of snapshot.settings) {
+    if (!view.explicit || !LONG_THREAD_KEY.test(view.descriptor.key) || view.value === undefined || view.value === "") continue;
+    const path = view.descriptor.key.split(".");
+    const leaf = path.pop()!;
+    let cursor: Record<string, unknown> = out;
+    for (const segment of path) cursor = (cursor[segment] ??= {}) as Record<string, unknown>;
+    cursor[leaf] = leaf === "autoHandoffModels" && typeof view.value === "string" ? handoffModelsFromText(view.value) : view.value;
+  }
+  return out as LongThreadConfig;
 }
 
-/** The providers' own hand-off settings from a snapshot (see `resolveHandoff`); null before one exists. */
-export function handoffOverridesFromSnapshot(snapshot: SettingsSnapshot | null): HandoffOverrides | null {
-  if (snapshot === null) return null;
-  const out: HandoffOverrides = {};
-  for (const kind of ["claude", "opencode", "harness"] as const) {
-    const mode = snapshot.settings.find((view) => view.descriptor.key === `providers.${kind}.autoHandoff`)?.value;
-    const tokens = snapshot.settings.find((view) => view.descriptor.key === `providers.${kind}.autoHandoffTokens`)?.value;
-    const percent = snapshot.settings.find((view) => view.descriptor.key === `providers.${kind}.autoHandoffPercent`)?.value;
-    const models = snapshot.settings.find((view) => view.descriptor.key === `providers.${kind}.autoHandoffModels`)?.value;
-    const entry: ProviderHandoff = {
-      ...(mode === "off" || mode === "ask" || mode === "auto" ? { mode } : {}),
-      ...(typeof tokens === "number" ? { tokens } : {}),
-      ...(typeof percent === "number" ? { percent } : {}),
-      ...(typeof models === "string" && models !== "" ? { models: handoffModelsFromText(models) } : {}),
-    };
-    if (Object.keys(entry).length > 0) out[kind] = entry;
-  }
-  return out;
-}
+const LONG_THREAD_KEY = /^(longThreads\.\w+|ui\.autoHandoff\w*|providers\.(claude|opencode|harness)\.(handoff|handoffAt|compaction|compactAt|autoHandoff\w*|autoCompact\w*))$/;

@@ -170,23 +170,24 @@ describe("provider updates on the settings page", () => {
   });
 });
 
-describe("an integer setting that is unset by default", () => {
-  const descriptor = settingDescriptor("providers.claude.autoCompactWindow")!;
-  const control = (value: number | undefined) => settingControl(descriptor, value, describeSettings(DEFAULT_CONFIG), null);
+describe("a line setting that is unset by default", () => {
+  const descriptor = settingDescriptor("providers.claude.handoffAt")!;
+  const control = (value: string | undefined) => settingControl(descriptor, value, describeSettings(DEFAULT_CONFIG), null);
 
-  it("offers the default first, so it can be cleared, and counts token windows in powers of two", () => {
+  it("offers the default first, so it can be cleared, then shares, then sizes from a small model up", () => {
     const picked = control(undefined);
     expect(picked.kind).toBe("pick");
     if (picked.kind !== "pick") return;
-    expect(picked.options.map((entry) => entry.label)).toEqual(["Default", "128K", "256K", "512K", "1M"]);
-    expect(picked.options[0]!.value).toBe("");
-    expect(settingValueLabel(descriptor, undefined, picked)).toBe("Default (Tuned per model)");
-    expect(picked.layout).toBe("slider");
+    expect(picked.options.map((entry) => entry.value)).toEqual(["", "40%", "50%", "60%", "70%", "80%", "90%", "8K", "16K", "24K", "32K", "64K", "128K", "256K", "512K", "1M"]);
+    expect(picked.options[2]!.label).toBe("50% of the window");
+    expect(picked.options[10]!.label).toBe("32K tokens");
+    expect(settingValueLabel(descriptor, undefined, picked)).toBe("Default (50% of the window)");
+    expect(picked.layout).toBe("list");
   });
 
-  it("reads a chosen window back the same way", () => {
-    const picked = control(262_144);
-    expect(settingValueLabel(descriptor, 262_144, picked)).toBe("256K");
+  it("reads a chosen line back the same way", () => {
+    expect(settingValueLabel(descriptor, "256K", control("256K"))).toBe("256K tokens");
+    expect(settingValueLabel(descriptor, "70%", control("70%"))).toBe("70% of the window");
   });
 });
 
@@ -301,7 +302,7 @@ describe("per-model hand-off sizes on a provider's page", () => {
 
   it("labels sizes and keeps a hand-set size among the stops", () => {
     expect([100_000, 128_000, 1_000_000, 1_500_000, 300_500].map(handoffTokensLabel)).toEqual(["100K", "128K", "1M", "1.5M", "300,500"]);
-    expect(handoffStops(null)).toHaveLength(8);
+    expect(handoffStops(null)).toHaveLength(10);
     expect(handoffStops(300_000)).toContain(300_000);
     expect(handoffStops(300_000)).toEqual([...handoffStops(300_000)].sort((a, b) => a - b));
   });
@@ -316,10 +317,10 @@ describe("per-model hand-off sizes on a provider's page", () => {
 });
 
 describe("a yes/no setting with no default of its own", () => {
-  const key = "providers.opencode.autoCompact";
+  const key = "providers.opencode.orchestration";
   const descriptor = settingDescriptor(key)!;
   const at = (value: boolean | undefined) => {
-    const config = value === undefined ? DEFAULT_CONFIG : normalizeConfig({ providers: { opencode: { autoCompact: value } } });
+    const config = value === undefined ? DEFAULT_CONFIG : normalizeConfig({ providers: { opencode: { orchestration: value } } });
     const settings = describeSettings(config);
     const view = settings.find((entry) => entry.descriptor.key === key)!;
     return { view, control: settingControl(descriptor, view.value, settings, null) };
@@ -354,17 +355,17 @@ describe("what Default names", () => {
     expect(settingValueLabel(settingDescriptor("providers.claude.runtimeMode")!, undefined, pick)).toBe("Default (Full access)");
   });
 
-  it("works out a fixed hand-off size the way the server does", () => {
-    expect(effective("ui.autoHandoffTokens")?.label).toBe("50% of the window");
-    expect(effective("providers.claude.autoHandoffTokens")).toMatchObject({ label: "50% of the window", origin: "from 'Hand off at' on the Turns tab" });
-    expect(effective("providers.claude.autoHandoffTokens", normalizeConfig({ ui: { autoHandoffTokens: 131_072 } }))).toMatchObject({ value: 131_072, label: "128K" });
-    // A provider's own share wins over the global fixed size.
-    expect(effective("providers.claude.autoHandoffTokens", normalizeConfig({ ui: { autoHandoffTokens: 131_072 }, providers: { claude: { autoHandoffPercent: 40 } } }))).toMatchObject({ value: undefined, label: "40% of the window", origin: "from 'Hand off at'" });
+  it("works out a hand-off line the way the server does, whatever its unit", () => {
+    expect(effective("longThreads.handoffAt")).toEqual({ value: "50%", label: "50% of the window" });
+    expect(effective("providers.claude.handoffAt", normalizeConfig({ longThreads: { handoffAt: "40%" } }))).toMatchObject({ label: "40% of the window", origin: "from 'Hand off at' on the Turns tab" });
+    expect(effective("providers.claude.handoffAt", normalizeConfig({ ui: { autoHandoffTokens: 131_072 } }))).toMatchObject({ value: "128K", label: "128K tokens" });
+    // A provider's own (older) share wins over the global size.
+    expect(effective("providers.claude.handoffAt", normalizeConfig({ ui: { autoHandoffTokens: 131_072 }, providers: { claude: { autoHandoffPercent: 40 } } }))).toMatchObject({ value: "40%", label: "40% of the window" });
   });
 
   it("marks the preset a fallback lands on, so a slider opens there", () => {
-    const share = control("providers.claude.autoHandoffPercent");
-    expect(share.kind === "pick" && share.options.find((entry) => entry.isDefault === true)?.value).toBe("50");
+    const share = control("providers.claude.handoffAt");
+    expect(share.kind === "pick" && share.options.find((entry) => entry.isDefault === true)?.value).toBe("50%");
   });
 
   it("names something for every unset enum, number and switch a page offers", () => {

@@ -25,6 +25,21 @@ import { webOrderEntries, webOrderUnavailable, type WebOrderEntry, type WebRole 
 import { CLAUDE_NATIVE_TOOLS, OPENCODE_NATIVE_TOOLS, type NativeTool } from "./nativetools.js";
 import { formatHandoffModels } from "./handoffmodels.js";
 import { numberLabel } from "./configformat.js";
+import {
+  COMPACTION_MODES,
+  DEFAULT_COMPACT_LINE,
+  LINE_PERCENT_MAX,
+  LINE_PERCENT_MIN,
+  compactionModeFor,
+  compactLineFor,
+  handoffLineFor,
+  handoffModeFor,
+  lineLabel,
+  lineText,
+  parseLine,
+  type CompactionMode,
+  type LongThreadKind,
+} from "./threads/longthreads.js";
 import { isSecretRef } from "./secrets.js";
 import { MCP_RUNNER_SETTING, MCP_SERVERS_SETTING } from "./mcpschema.js";
 import { describeMcpServers } from "./mcpview.js";
@@ -104,6 +119,12 @@ export type SettingKind =
   | { readonly type: "integer"; readonly min: number; readonly max: number; readonly unit?: string; readonly presets?: readonly number[]; readonly binary?: boolean; readonly ends?: SettingEnds }
   /** A duration string the session layer parses (`"2m"`, `"45s"`); `presets` as for integers. */
   | { readonly type: "duration"; readonly presets?: readonly string[]; readonly ends?: SettingEnds }
+  /**
+   * Where a long thread is handed off or compacted: a share of the window
+   * (`70%`) or a size (`32K`, or a token count), kept as that text
+   * (`core/threads/longthreads.ts` `parseLine`). `presets` as for durations.
+   */
+  | { readonly type: "line"; readonly presets?: readonly string[] }
   | ListKind;
 
 /**
@@ -257,7 +278,7 @@ export type SettingFallback =
   | { readonly text: string }
   | { readonly resolver: FallbackResolver };
 
-export type FallbackResolver = "handoffTokens" | "providerModel" | "webBrowser" | "privateNetwork" | "searchKey" | "searchKeyEnv" | "moxenTools";
+export type FallbackResolver = "handoffMode" | "handoffLine" | "compactionMode" | "compactLine" | "providerModel" | "webBrowser" | "privateNetwork" | "searchKey" | "searchKeyEnv" | "moxenTools";
 
 /** What is in force for an unset setting, worked out in core so a client only draws it. */
 export interface SettingEffective {
@@ -272,49 +293,126 @@ export interface SettingEffective {
 const choice = (value: string, label: string, description?: string): SettingChoice =>
   description === undefined ? { value, label } : { value, label, description };
 
-/** Hand-off settings a provider's own page carries; each overrides the global pair on Turns. */
-function handoffSettings(kind: "claude" | "opencode" | "harness"): SettingDescriptor[] {
+/** Where a line can be put: shares of the window (they follow any model), then sizes from a small local model up. */
+const LINE_PRESETS = ["40%", "50%", "60%", "70%", "80%", "90%", "8K", "16K", "24K", "32K", "64K", "128K", "256K", "512K", "1M"] as const;
+
+const COMPACTION_TEXT: Readonly<Record<LongThreadKind, { readonly own: string; readonly description: string }>> = {
+  claude: {
+    own: "Claude Code",
+    description:
+      "Who compacts a thread as it fills. Claude Code: it decides, and a size under 'Compact at' becomes its auto-compact window (100K to 1M). Moxen: Claude Code's own is switched off and Moxen compacts past 'Compact at', open or not; asking offers a card, but a delegated task, or a thread halfway from the line to full, is compacted unasked. Off: nobody compacts.",
+  },
+  opencode: {
+    own: "OpenCode",
+    description:
+      "Who compacts a thread as it fills. OpenCode: the OpenCode servers Moxen starts do it near the model's limit, as their config says. Moxen: their own is switched off and Moxen compacts past 'Compact at', open or not; asking offers a card, but a delegated task, or a thread halfway from the line to full, is compacted unasked. Off: nobody compacts.",
+  },
+  harness: {
+    own: "Automatic",
+    description:
+      "Summarise the conversation on its own past 'Compact at', between turns and in the middle of a long one, and when the server refuses a prompt as too long. Off leaves /compact and the rescue for a refused prompt.",
+  },
+};
+
+const COMPACTION_CHOICE_LABEL: Readonly<Record<Exclude<CompactionMode, "provider">, string>> = { ask: "Moxen asks", auto: "Moxen does it", off: "Off" };
+
+/** The sentence every Long threads group ends on, so the two lines are never read apart. */
+const LINES_INTERACT = "Hand-off is offered first when its line is lower than compaction's; past both, the lower one acts first.";
+
+/**
+ * One Long threads group per provider, the same rows on every tab: who
+ * compacts and where, then whether and where to hand off. Each line is a share
+ * or a size and falls back, whatever its unit, to the Turns tab (`core/threads/longthreads.ts`).
+ */
+function longThreadSettings(kind: LongThreadKind): SettingDescriptor[] {
   const section = `provider:${kind}` as const;
+  const group = "Long threads";
+  const modes = COMPACTION_MODES[kind];
+  const compactionKey = `providers.${kind}.compaction`;
   return [
     {
-      key: `providers.${kind}.autoHandoff`,
-      label: "Hand off long threads",
-      description: "What to do when a thread here fills its window: ask with a card, hand off by itself, or never.",
+      key: compactionKey,
+      label: "Compaction",
+      description: COMPACTION_TEXT[kind].description,
       section,
-      group: "Long threads",
+      group,
+      kind: {
+        type: "enum",
+        choices: modes.map((mode) =>
+          kind === "harness" ? choice(mode, mode === "auto" ? "Automatic" : "Off") : choice(mode, mode === "provider" ? COMPACTION_TEXT[kind].own : COMPACTION_CHOICE_LABEL[mode]),
+        ),
+      },
+      defaultValue: undefined,
+      fallback: { resolver: "compactionMode" },
+      ...(kind === "harness" ? {} : { appliesAt: "server-restart" as const }),
+    },
+    {
+      key: `providers.${kind}.compactAt`,
+      label: "Compact at",
+      description: `Where a thread here is compacted: a share of the model's window or a size, whichever suits its models. ${kind === "harness" ? "At least 16K tokens are always left free, and a share needs the model's contextWindow in its profile. " : ""}${LINES_INTERACT}`,
+      section,
+      group,
+      kind: { type: "line", presets: LINE_PRESETS },
+      defaultValue: undefined,
+      fallback: { resolver: "compactLine" },
+      visibleWhen: { key: compactionKey, in: kind === "claude" ? ["", "provider", "ask", "auto"] : kind === "opencode" ? ["ask", "auto"] : ["", "auto"] },
+    },
+    ...(kind === "harness"
+      ? [
+          {
+            key: "providers.harness.keepRecentTokens",
+            label: "Kept word for word",
+            description: "How much of the newest conversation stays as it was when older history is summarised, in tokens.",
+            section,
+            group,
+            kind: { type: "integer", min: 2_000, max: 100_000, presets: [4_096, 8_192, 12_288, 16_384, 24_576, 32_768, 49_152, 65_536] },
+            defaultValue: 16_384,
+            visibleWhen: { key: compactionKey, in: ["", "auto"] },
+          } satisfies SettingDescriptor,
+        ]
+      : []),
+    {
+      key: `providers.${kind}.handoff`,
+      label: "Hand off",
+      description: "What to do when a thread here passes 'Hand off at': ask with a card, hand off by itself, or never.",
+      section,
+      group,
       kind: { type: "enum", choices: [choice("ask", "Ask"), choice("auto", "Automatic"), choice("off", "Off")] },
       defaultValue: undefined,
-      fallback: { key: "ui.autoHandoff" },
+      fallback: { resolver: "handoffMode" },
     },
     {
-      key: `providers.${kind}.autoHandoffPercent`,
+      key: `providers.${kind}.handoffAt`,
       label: "Hand off at",
-      description: "Share of the model's window at which a thread here is handed off, so a bigger window hands off later.",
+      description: `Where a thread here is handed off: a share of the model's window or a size. A model below can have its own. ${LINES_INTERACT}`,
       section,
-      group: "Long threads",
-      kind: { type: "integer", min: 10, max: 90, unit: "%", presets: [25, 50, 75], ends: { low: "Earlier", high: "Later" } },
+      group,
+      kind: { type: "line", presets: LINE_PRESETS },
       defaultValue: undefined,
-      fallback: { key: "ui.autoHandoffPercent" },
-    },
-    {
-      key: `providers.${kind}.autoHandoffTokens`,
-      label: "Hand off at a fixed size",
-      description: "Tokens of context at which a thread here is handed off, whatever the model's window. Wins over the share above.",
-      section,
-      group: "Long threads",
-      kind: { type: "integer", min: 8_192, max: 2_000_000, binary: true, presets: [32_768, 65_536, 131_072, 262_144, 524_288], ends: { low: "Earlier", high: "Later" } },
-      defaultValue: undefined,
-      fallback: { resolver: "handoffTokens" },
+      fallback: { resolver: "handoffLine" },
+      visibleWhen: { key: `providers.${kind}.handoff`, in: ["", "ask", "auto"] },
     },
     {
       key: `providers.${kind}.autoHandoffModels`,
       label: "Hand off at, per model",
       description: "Token counts for particular models of this provider. Wins over the settings above for those models; other models follow them. Stored as model=tokens pairs (claude-opus-4-5=500k, gpt-5=1m) for the config file and `moxen config set`.",
       section,
-      group: "Long threads",
+      group,
       kind: { type: "string", placeholder: "model=500k", multiline: true, source: "handoff-models", providerKind: kind },
       defaultValue: undefined,
     },
+    ...legacyHandoffSettings(kind),
+  ];
+}
+
+/** The older per-provider hand-off keys: still read where the new ones are unset (`handoffModeFor`, `handoffLineFor`), and `config set` on them writes the new key too. */
+function legacyHandoffSettings(kind: LongThreadKind): SettingDescriptor[] {
+  const section = `provider:${kind}` as const;
+  const legacy = { section, group: "Long threads", hidden: true, defaultValue: undefined } as const;
+  return [
+    { ...legacy, key: `providers.${kind}.autoHandoff`, label: "Hand off long threads", description: "Kept so older configs still load: 'Hand off' before it took its place.", kind: { type: "enum", choices: [choice("ask", "Ask"), choice("auto", "Automatic"), choice("off", "Off")] } },
+    { ...legacy, key: `providers.${kind}.autoHandoffPercent`, label: "Hand off at (share)", description: "Kept so older configs still load: 'Hand off at' as a share of the window.", kind: { type: "integer", min: 10, max: 90, unit: "%", presets: [20, 30, 40, 50, 60, 70, 80] } },
+    { ...legacy, key: `providers.${kind}.autoHandoffTokens`, label: "Hand off at a fixed size", description: "Kept so older configs still load: 'Hand off at' as a size; it beat the share beside it.", kind: { type: "integer", min: 8_192, max: 2_000_000, binary: true } },
   ];
 }
 
@@ -423,7 +521,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     description: "How long a provider session stays warm after its last turn.",
     section: "turns",
     group: "Sessions",
-    kind: { type: "duration", presets: ["30s", "1m", "2m", "5m", "10m", "30m", "1h"], ends: { low: "Shorter", high: "Longer" } },
+    kind: { type: "duration", presets: ["15s", "30s", "1m", "2m", "3m", "5m", "10m", "15m", "30m", "1h"], ends: { low: "Shorter", high: "Longer" } },
     defaultValue: "2m",
   },
   {
@@ -442,7 +540,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     description:
       "Days after a thread is archived or deleted before its `moxen/…` branch is deleted, here and on origin if it was pushed. Only a branch already merged into the project's branch goes, so no work is lost; a branch with commits that were never merged is kept. 0 keeps every branch.",
     section: "general",
-    kind: { type: "integer", min: 0, max: 365, unit: "d", presets: [0, 7, 14, 30, 90], ends: { low: "Sooner", high: "Later" } },
+    kind: { type: "integer", min: 0, max: 365, unit: "d", presets: [0, 1, 3, 7, 14, 30, 60, 90, 180], ends: { low: "Sooner", high: "Later" } },
     defaultValue: 14,
   },
   {
@@ -562,7 +660,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "Context refresh",
     description: "How often an open Context tab re-reads the live breakdown.",
     section: "interface",
-    kind: { type: "integer", min: 1, max: 600, unit: "s", presets: [1, 2, 5, 10, 30, 60], ends: { low: "More often", high: "Less often" } },
+    kind: { type: "integer", min: 1, max: 600, unit: "s", presets: [1, 2, 3, 5, 10, 15, 30, 60, 120], ends: { low: "More often", high: "Less often" } },
     defaultValue: 5,
   },
   {
@@ -570,37 +668,69 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "Usage refresh",
     description: "How often plan usage windows are re-read.",
     section: "interface",
-    kind: { type: "integer", min: 5, max: 3600, unit: "s", presets: [10, 20, 60, 300, 900], ends: { low: "More often", high: "Less often" } },
+    kind: { type: "integer", min: 5, max: 3600, unit: "s", presets: [5, 10, 20, 30, 60, 120, 300, 600, 900], ends: { low: "More often", high: "Less often" } },
     defaultValue: 20,
+  },
+  {
+    key: "longThreads.handoff",
+    label: "Hand off",
+    description:
+      "Models make more tool-call mistakes as the window fills, so a thread past 'Hand off at' moves to a fresh one opened with a handoff of the work so far. Ask shows a card with the action; Automatic does it by itself once no turn, subthread or background task is running; until then the card stays with a button to hand off by hand. Each provider's tab can change it.",
+    section: "turns",
+    group: "Long threads",
+    kind: { type: "enum", choices: [choice("ask", "Ask"), choice("auto", "Automatic"), choice("off", "Off")] },
+    defaultValue: undefined,
+    fallback: { resolver: "handoffMode" },
+  },
+  {
+    key: "longThreads.handoffAt",
+    label: "Hand off at",
+    description: `Where a thread is handed off: a share of the model's window (a bigger window hands off later) or a size, the same for every model. A provider's tab, or a model on it, can set its own; the most specific one applies, whatever its unit. ${LINES_INTERACT}`,
+    section: "turns",
+    group: "Long threads",
+    kind: { type: "line", presets: LINE_PRESETS },
+    defaultValue: undefined,
+    fallback: { resolver: "handoffLine" },
+  },
+  {
+    key: "longThreads.compactAt",
+    label: "Compact at",
+    description: `Where a thread is compacted when Moxen does it: Claude Code and OpenCode while their Compaction is Moxen's, and the Moxen Harness. A share of the window or a size; each provider's tab can set its own. ${LINES_INTERACT}`,
+    section: "turns",
+    group: "Long threads",
+    kind: { type: "line", presets: LINE_PRESETS },
+    defaultValue: undefined,
+    fallback: { resolver: "compactLine" },
   },
   {
     key: "ui.autoHandoff",
     label: "Hand off long threads",
-    description:
-      "Models make more tool-call mistakes as the window fills, so a thread past 'Hand off at' moves to a fresh one opened with a handoff of the work so far. Ask shows a card with the action; Automatic does it by itself once no turn, subthread or background task is running; until then the card stays with a button to hand off by hand.",
+    description: "Kept so older configs still load: 'Hand off' before it moved out of the interface settings.",
     section: "turns",
     group: "Long threads",
+    hidden: true,
     kind: { type: "enum", choices: [choice("ask", "Ask"), choice("auto", "Automatic"), choice("off", "Off")] },
     defaultValue: "ask",
   },
   {
     key: "ui.autoHandoffPercent",
-    label: "Hand off at",
-    description: "Share of the model's window at which a thread is handed off, so a model with a bigger window hands off later. Each provider's page can change it, and 'Hand off at a fixed size' wins when it is set.",
+    label: "Hand off at (share)",
+    description: "Kept so older configs still load: 'Hand off at' as a share of the window.",
     section: "turns",
     group: "Long threads",
-    kind: { type: "integer", min: 10, max: 90, unit: "%", presets: [25, 50, 75], ends: { low: "Earlier", high: "Later" } },
+    hidden: true,
+    kind: { type: "integer", min: 10, max: 90, unit: "%", presets: [20, 30, 40, 50, 60, 70, 80] },
     defaultValue: 50,
   },
   {
     key: "ui.autoHandoffTokens",
     label: "Hand off at a fixed size",
-    description: "Tokens of context at which a thread is handed off, whatever the model's window. Needs the provider to report how much context a thread uses.",
+    description: "Kept so older configs still load: 'Hand off at' as a size; it beat the share beside it.",
     section: "turns",
     group: "Long threads",
-    kind: { type: "integer", min: 8_192, max: 2_000_000, binary: true, presets: [32_768, 65_536, 131_072, 262_144, 524_288], ends: { low: "Earlier", high: "Later" } },
+    hidden: true,
+    kind: { type: "integer", min: 8_192, max: 2_000_000, binary: true },
     defaultValue: undefined,
-    fallback: { resolver: "handoffTokens" },
   },
 
   // -- web tools (shared by every provider) ----------------------------------
@@ -652,7 +782,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     label: "Commits to load",
     description: "How many commits the Git panel reads per branch.",
     section: "git",
-    kind: { type: "integer", min: 10, max: 1000, presets: [50, 100, 200, 500, 1000], ends: { low: "Fewer", high: "More" } },
+    kind: { type: "integer", min: 10, max: 1000, presets: [25, 50, 100, 150, 200, 300, 500, 750, 1000], ends: { low: "Fewer", high: "More" } },
     defaultValue: 50,
   },
   {
@@ -896,39 +1026,37 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.claude.autoCompact",
     label: "Compact long threads",
-    description:
-      "Who compacts a thread as it fills. Ask or Automatic: Moxen turns Claude Code's own compaction off and compacts past the share below, open or not. Ask offers a card, but a delegated task, or a thread halfway to full, is compacted unasked. Claude Code: it decides.",
+    description: "Kept so older configs still load: 'Compaction' before it took its place (claude is Claude Code's own).",
     section: "provider:claude",
     group: "Long threads",
-    kind: { type: "enum", choices: [choice("ask", "Ask"), choice("auto", "Automatic"), choice("claude", "Claude Code")] },
+    hidden: true,
+    kind: { type: "enum", choices: [choice("ask", "Ask"), choice("auto", "Automatic"), choice("claude", "Claude Code"), choice("off", "Off")] },
     defaultValue: "ask",
     appliesAt: "server-restart",
   },
   {
     key: "providers.claude.autoCompactPercent",
-    label: "Compact at",
-    description: "The share of the model's window past which Moxen compacts a thread. Hand-off has its own line, and a thread that passes the lower one first is offered that first.",
+    label: "Compact at (share)",
+    description: "Kept so older configs still load: 'Compact at' as a share, while Moxen compacts.",
     section: "provider:claude",
     group: "Long threads",
-    kind: { type: "integer", min: 10, max: 95, unit: "%", presets: [50, 65, 80, 90], ends: { low: "Earlier", high: "Later" } },
+    hidden: true,
+    kind: { type: "integer", min: 10, max: 95, unit: "%", presets: [40, 50, 60, 65, 70, 75, 80, 85, 90] },
     defaultValue: 80,
-    visibleWhen: { key: "providers.claude.autoCompact", in: ["ask", "auto"] },
   },
   {
     key: "providers.claude.autoCompactWindow",
     label: "Auto-compact window",
-    visibleWhen: { key: "providers.claude.autoCompact", in: ["claude"] },
-    description:
-      "Tokens of context at which Claude Code compacts the conversation on its own, from 100K to 1M. A lower window compacts earlier and keeps long sessions cheaper and sharper.",
+    description: "Kept so older configs still load: 'Compact at' as a size, while Claude Code compacts on its own.",
     section: "provider:claude",
     group: "Long threads",
-    kind: { type: "integer", min: 100_000, max: 1_000_000, binary: true, presets: [131_072, 262_144, 524_288, 1_000_000], ends: { low: "Earlier", high: "Later" } },
+    hidden: true,
+    kind: { type: "integer", min: 100_000, max: 1_000_000, binary: true },
     defaultValue: undefined,
-    fallback: { text: "Tuned per model" },
     appliesAt: "server-restart",
   },
 
-  ...handoffSettings("claude"),
+  ...longThreadSettings("claude"),
 
   // -- OpenCode --------------------------------------------------------------
   {
@@ -1079,25 +1207,24 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
   {
     key: "providers.opencode.autoCompact",
     label: "Compact automatically",
-    description:
-      "Whether the OpenCode servers Moxen starts summarise the conversation on their own when it nears the model's context limit. Compacting by hand always works.",
+    description: "Kept so older configs still load: 'Compaction' before it took its place (off is Off, on is OpenCode's own).",
     section: "provider:opencode",
     group: "Long threads",
+    hidden: true,
     kind: { type: "boolean" },
     defaultValue: undefined,
-    fallback: { value: true, text: "unless OpenCode's own config turns it off" },
     appliesAt: "server-restart",
   },
   {
     key: "providers.opencode.compactBuffer",
     label: "Compact when this much is left",
     description:
-      "Tokens kept free below the model's limit: automatic compaction starts once the conversation is within this of it, so a larger value compacts earlier.",
+      "OpenCode's own compaction line, kept as it was: tokens kept free below the model's limit, so a larger value compacts earlier. A per-model window cannot be written as one share or size, so 'Compact at' applies to Moxen's compaction only. Config file and `moxen config set` only.",
     section: "provider:opencode",
     group: "Long threads",
-    kind: { type: "integer", min: 0, max: 1_000_000, binary: true, presets: [8_192, 16_384, 32_768, 65_536, 131_072], ends: { low: "Later", high: "Earlier" } },
+    hidden: true,
+    kind: { type: "integer", min: 0, max: 1_000_000, binary: true },
     defaultValue: undefined,
-    fallback: { text: "OpenCode's own 10% of the window" },
     appliesAt: "server-restart",
   },
   {
@@ -1112,7 +1239,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     appliesAt: "server-restart",
   },
 
-  ...handoffSettings("opencode"),
+  ...longThreadSettings("opencode"),
 
   // -- Moxen Harness ---------------------------------------------------------
   {
@@ -1214,50 +1341,39 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     description: "How many requests a model server takes at the same time, for profiles that do not say (a profile's own 'Server slots' wins). Subagents, summaries and titles queue behind it. A single-GPU llama.cpp server is usually 1; /btw is refused while a turn runs on a server with one slot.",
     section: "provider:harness",
     group: "Concurrency",
-    kind: { type: "integer", min: 1, max: 64, presets: [1, 2, 4, 8], ends: { low: "Fewer", high: "More" } },
+    kind: { type: "integer", min: 1, max: 64, presets: [1, 2, 3, 4, 6, 8, 12, 16], ends: { low: "Fewer", high: "More" } },
     defaultValue: undefined,
     fallback: { text: "No limit" },
   },
   {
     key: "providers.harness.autoCompact",
     label: "Compact automatically",
-    description:
-      "Summarise the conversation on its own when it nears the model's context window, between turns and in the middle of a long one, and when the server refuses a prompt as too long. Off leaves /compact and the rescue for a refused prompt.",
+    description: "Kept so older configs still load: 'Compaction' before it took its place.",
     section: "provider:harness",
     group: "Long threads",
+    hidden: true,
     kind: { type: "boolean" },
     defaultValue: true,
   },
   {
     key: "providers.harness.autoCompactPercent",
     label: "Compact at (share of window)",
-    description: "Kept so older configs still load: the share of the context window at which to compact. 'Compact at' (in tokens) wins when it is set.",
+    description: "Kept so older configs still load: 'Compact at' as a share. The size beside it wins when both are set.",
     section: "provider:harness",
     group: "Long threads",
     hidden: true,
-    kind: { type: "integer", min: 30, max: 95, unit: "%", presets: [50, 60, 70, 80, 90] },
+    kind: { type: "integer", min: 30, max: 95, unit: "%" },
     defaultValue: undefined,
-    fallback: { text: "'Compact at' in tokens" },
   },
   {
     key: "providers.harness.autoCompactTokens",
-    label: "Compact at",
-    description:
-      "Tokens of context at which to compact. At least 16K tokens are always left free. Needs the model's contextWindow in its profile.",
+    label: "Compact at (size)",
+    description: "Kept so older configs still load: 'Compact at' as a size.",
     section: "provider:harness",
     group: "Long threads",
-    kind: { type: "integer", min: 8_192, max: 2_000_000, binary: true, presets: [32_768, 65_536, 131_072, 262_144, 524_288], ends: { low: "Earlier", high: "Later" } },
+    hidden: true,
+    kind: { type: "integer", min: 8_192, max: 2_000_000, binary: true },
     defaultValue: undefined,
-    fallback: { text: "70% of the window (60% under 128K)" },
-  },
-  {
-    key: "providers.harness.keepRecentTokens",
-    label: "Kept word for word",
-    description: "How much of the newest conversation stays as it was when older history is summarised, in tokens.",
-    section: "provider:harness",
-    group: "Long threads",
-    kind: { type: "integer", min: 2_000, max: 100_000, presets: [8_192, 16_384, 32_768, 65_536] },
-    defaultValue: 16_384,
   },
   {
     key: "providers.harness.webSearch",
@@ -1366,7 +1482,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     kind: { type: "boolean" },
     defaultValue: undefined,
   },
-  ...handoffSettings("harness"),
+  ...longThreadSettings("harness"),
   HARNESS_PROFILES_SETTING,
 
   // -- MCP servers -----------------------------------------------------------
@@ -1516,6 +1632,16 @@ export function parseSettingValue(descriptor: SettingDescriptor, raw: string): S
       }
       return value;
     }
+    case "line": {
+      const line = parseLine(text);
+      if (line === null) {
+        throw new CliError(
+          "INVALID_CONFIG",
+          `${descriptor.key} must be a share of the window from ${LINE_PERCENT_MIN}% to ${LINE_PERCENT_MAX}% (70%) or a size from 4K to 2M tokens (32K, 256K, 1M).`,
+        );
+      }
+      return lineText(line);
+    }
     case "duration": {
       if (!/^\d+(?:ms|s|m|h)$/.test(text)) {
         throw new CliError("INVALID_CONFIG", `${descriptor.key} must be a duration such as 45s, 2m or 1h.`);
@@ -1539,7 +1665,45 @@ export function parseSettingValue(descriptor: SettingDescriptor, raw: string): S
  */
 export function writeSetting(config: CliConfig, key: string, value: SettingValue): CliConfig {
   const written = writeSettingValue(config, key, value);
-  return key === "providers.harness.webSearch" ? fileLegacySearchKey(config, written) : written;
+  if (key === "providers.harness.webSearch") return fileLegacySearchKey(config, written);
+  const alias = LONG_THREAD_ALIASES[key];
+  return alias === undefined ? written : writeLongThreadAlias(config, written, key, value, alias);
+}
+
+/**
+ * The older long-thread keys and what each now writes (MXN-99). `config set`
+ * on one still writes it, for an older build sharing the file, and writes
+ * the key that took its place too, which a newer build reads first; clearing
+ * it clears that key as well when it still says the same thing.
+ */
+const LONG_THREAD_ALIASES: Readonly<Record<string, { readonly key: string; readonly map: (value: SettingValue) => string }>> = (() => {
+  const out: Record<string, { key: string; map: (value: SettingValue) => string }> = {};
+  const share = (value: SettingValue): string => `${String(value)}%`;
+  const size = (value: SettingValue): string => lineText({ tokens: Number(value) });
+  const same = (value: SettingValue): string => String(value);
+  out["ui.autoHandoff"] = { key: "longThreads.handoff", map: same };
+  out["ui.autoHandoffPercent"] = { key: "longThreads.handoffAt", map: share };
+  out["ui.autoHandoffTokens"] = { key: "longThreads.handoffAt", map: size };
+  for (const kind of ["claude", "opencode", "harness"] as const) {
+    out[`providers.${kind}.autoHandoff`] = { key: `providers.${kind}.handoff`, map: same };
+    out[`providers.${kind}.autoHandoffPercent`] = { key: `providers.${kind}.handoffAt`, map: share };
+    out[`providers.${kind}.autoHandoffTokens`] = { key: `providers.${kind}.handoffAt`, map: size };
+  }
+  out["providers.claude.autoCompact"] = { key: "providers.claude.compaction", map: (value) => (value === "claude" ? "provider" : String(value)) };
+  out["providers.claude.autoCompactPercent"] = { key: "providers.claude.compactAt", map: share };
+  out["providers.claude.autoCompactWindow"] = { key: "providers.claude.compactAt", map: size };
+  out["providers.opencode.autoCompact"] = { key: "providers.opencode.compaction", map: (value) => (value === true ? "provider" : "off") };
+  out["providers.harness.autoCompact"] = { key: "providers.harness.compaction", map: (value) => (value === true ? "auto" : "off") };
+  out["providers.harness.autoCompactPercent"] = { key: "providers.harness.compactAt", map: share };
+  out["providers.harness.autoCompactTokens"] = { key: "providers.harness.compactAt", map: size };
+  return out;
+})();
+
+function writeLongThreadAlias(before: CliConfig, written: CliConfig, key: string, value: SettingValue, alias: { readonly key: string; readonly map: (value: SettingValue) => string }): CliConfig {
+  if (value !== "" && value !== undefined) return writeSettingValue(written, alias.key, parseSettingValue(BY_KEY.get(alias.key)!, alias.map(value)));
+  const previous = readSetting(before, key);
+  const stillSame = previous !== undefined && previous !== "" && readSetting(written, alias.key) === parseSettingValue(BY_KEY.get(alias.key)!, alias.map(previous));
+  return stillSame ? writeSettingValue(written, alias.key, "") : written;
 }
 
 /**
@@ -1609,6 +1773,10 @@ export function formatSettingValue(descriptor: SettingDescriptor, value: Setting
   if (kind.type === "boolean" || typeof value === "boolean") return value === true ? "On" : "Off";
   if (kind.type === "secret") return "Saved in the keychain";
   if (kind.type === "integer" && typeof value === "number") return `${numberLabel(value, kind.binary)}${kind.unit ?? ""}`;
+  if (kind.type === "line") {
+    const line = parseLine(value);
+    if (line !== null) return lineLabel(line);
+  }
   return String(value);
 }
 
@@ -1618,8 +1786,16 @@ function settingPlace(from: SettingDescriptor, to: SettingDescriptor): string {
   return from.section === to.section ? `from '${to.label}'` : `from '${to.label}' on the ${SECTION_LABEL[to.section]} tab`;
 }
 
-/** A share of the window, as a hand-off line reads when it is not a fixed size. */
-const shareLabel = (percent: SettingValue): string => `${String(percent)}% of the window`;
+/** The provider a Long threads row is on; undefined on the Turns tab. */
+const longThreadKindOf = (descriptor: SettingDescriptor): LongThreadKind | undefined =>
+  /^providers\.(claude|opencode|harness)\./.exec(descriptor.key)?.[1] as LongThreadKind | undefined;
+
+/** What a long-thread rule found, said on `descriptor`'s page: the value as that page writes it, and where it is set (nothing for the built-in default). */
+function sourcedEffective(descriptor: SettingDescriptor, value: string, key: string | null): SettingEffective {
+  const label = formatSettingValue(descriptor, value);
+  const from = key === null ? undefined : BY_KEY.get(key);
+  return from === undefined || from.key === descriptor.key ? { value, label } : { value, label, origin: settingPlace(descriptor, from) };
+}
 
 /** The search service a per-service key row is for, from its key. */
 const searchBackendOf = (descriptor: SettingDescriptor): "exa" | "brave" | undefined => /\.(exa|brave)$/.exec(descriptor.key)?.[1] as "exa" | "brave" | undefined;
@@ -1673,23 +1849,36 @@ const FALLBACK_RESOLVERS: Readonly<Record<FallbackResolver, (config: CliConfig, 
     // Nothing more to say than the picker's own "Provider's default".
     return undefined;
   },
-  /**
-   * A fixed hand-off size, unset: the same precedence `resolveHandoff` applies
-   * (`core/threads/longthreads.ts`). A provider's own share wins over the global
-   * size, which wins over the global share.
-   */
-  handoffTokens(config, descriptor) {
-    const global = BY_KEY.get("ui.autoHandoffTokens")!;
-    const globalShare = BY_KEY.get("ui.autoHandoffPercent")!;
-    const kind = /^providers\.(claude|opencode|harness)\.autoHandoffTokens$/.exec(descriptor.key)?.[1];
-    if (kind !== undefined) {
-      const ownShare = BY_KEY.get(`providers.${kind}.autoHandoffPercent`)!;
-      const share = readSetting(config, ownShare.key);
-      if (share !== undefined) return { value: undefined, label: shareLabel(share), origin: settingPlace(descriptor, ownShare) };
-      const size = readSetting(config, global.key);
-      if (size !== undefined && size !== "") return { value: size, label: formatSettingValue(global, size), origin: settingPlace(descriptor, global) };
-    }
-    return { value: undefined, label: shareLabel(readSetting(config, globalShare.key)), origin: settingPlace(descriptor, globalShare) };
+  /** Hand off, unset: the older key beside it, then the Turns tab, then Ask (`handoffModeFor`). */
+  handoffMode(config, descriptor) {
+    const found = handoffModeFor(config, longThreadKindOf(descriptor));
+    return sourcedEffective(descriptor, found.value, found.key);
+  },
+  /** Hand off at, unset: the older keys beside it, then the Turns tab, then half the window, whatever the unit (`handoffLineFor`). */
+  handoffLine(config, descriptor) {
+    const found = handoffLineFor(config, longThreadKindOf(descriptor));
+    return sourcedEffective(descriptor, lineText(found.value), found.key);
+  },
+  compactionMode(config, descriptor) {
+    const kind = longThreadKindOf(descriptor);
+    if (kind === undefined) return undefined;
+    const found = compactionModeFor(config, kind);
+    return sourcedEffective(descriptor, found.value, found.key);
+  },
+  /** Compact at, unset: the older keys beside it, then the Turns tab, then 80%; or the provider's own line, which is not one Moxen draws. */
+  compactLine(config, descriptor) {
+    const kind = longThreadKindOf(descriptor);
+    if (kind === undefined) return { value: lineText(DEFAULT_COMPACT_LINE), label: `${lineLabel(DEFAULT_COMPACT_LINE)} (Moxen Harness: 70%, 60% under 128K)` };
+    const mode = compactionModeFor(config, kind).value;
+    const found = compactLineFor(config, kind);
+    if (found !== null) return sourcedEffective(descriptor, lineText(found.value), found.key);
+    if (mode === "off") return undefined;
+    if (kind === "harness") return { value: undefined, label: "70% of the window (60% under 128K)" };
+    const buffer = kind === "opencode" ? config.providers?.opencode?.compactBuffer : undefined;
+    return {
+      value: undefined,
+      label: kind === "claude" ? "Claude Code's own, tuned per model" : buffer !== undefined ? `OpenCode's own, ${numberLabel(buffer, true)} before the limit` : "OpenCode's own, 10% before the limit",
+    };
   },
 };
 

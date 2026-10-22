@@ -9,17 +9,18 @@ export {
   DEFAULT_AUTO_HANDOFF_MODE,
   DEFAULT_AUTO_HANDOFF_PERCENT,
   autoHandoffState,
-  compactFromConfig,
-  handoffOverridesFromConfig,
-  resolveCompact,
-  resolveHandoff,
+  compactsFirst,
+  lineInput,
+  longThreadPolicy,
   type AutoHandoffInput,
   type AutoHandoffMode,
   type AutoHandoffState,
-  type ClaudeCompact,
-  type HandoffOverrides,
-  type ProviderHandoff,
+  type LongThreadPolicy,
 } from "../../core/threads/longthreads.js";
+import type { CliConfig } from "../../core/types.js";
+
+/** What `longThreadPolicy` reads: the launch config, or the same keys rebuilt from a settings snapshot. */
+export type LongThreadConfig = Pick<CliConfig, "ui" | "providers" | "longThreads">;
 
 /** The per-model setting as a snapshot carries it (`slug=tokens, …`, tokens plain numbers; core has already validated it). */
 export function handoffModelsFromText(text: string): Record<string, number> {

@@ -172,8 +172,9 @@ server's last count, estimated (and flagged) when there is none yet.
 Compaction needs the model's `contextWindow` in its profile to run on its own.
 It clears old tool output, then summarises on the same conversation, and trims
 if the summary cannot be had. `/compact`
-and `/compact <focus>` run it by hand. Settings: `providers.harness.autoCompact`,
-`autoCompactPercent` and `keepRecentTokens` for every profile (`moxen config`),
+and `/compact <focus>` run it by hand. Settings: the Long threads group on
+the Moxen Harness tab (`providers.harness.compaction`, `compactAt`, falling back
+to `longThreads.compactAt`, and `keepRecentTokens`; see [threads](threads.md)) for every profile,
 and a profile's own `compaction` fields (`auto`, `fraction`, `tokens`,
 `keepRecentTokens`, `effort`) over them; the profile editor shows which value is in
 force and where it comes from. Turns before a compaction can be read

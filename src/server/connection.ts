@@ -59,6 +59,7 @@ import { startMcpHttpServer, type McpHttpServer } from "./mcp/http.js";
 import { MOXEN_MCP_INSTRUCTIONS } from "./mcp/stdio.js";
 import { callMoxenTool, moxenToolsFor } from "./mcp/tools.js";
 import { noteMessageId } from "../core/threads/views.js";
+import { driverProviders } from "../core/threads/longthreads.js";
 import type { McpServerSpec } from "../core/mcp.js";
 import { ensureStoredProject, listStoredProjects } from "../core/projects/projects.js";
 import { diffCheckpointRange, diffCheckpointStat } from "../core/checkpoints/git.js";
@@ -218,7 +219,8 @@ export class DirectConnection implements ClientApi {
       : async () => await loadConfig(options.configPath);
     this.loadConfig = async () => {
       const { config } = await this.readConfigFile();
-      this.lastProviders = config.providers;
+      // What the drivers read, with the long-thread lines already resolved (global ones included).
+      this.lastProviders = driverProviders(config);
       this.lastWeb = config.web;
       return config;
     };

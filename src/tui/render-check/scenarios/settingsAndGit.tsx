@@ -141,7 +141,7 @@ async function runSettings(): Promise<void> {
   await act(async () => setup.mockInput.pressArrow("down"));
   await act(async () => setup.mockInput.pressEnter());
   await setup.flush();
-  if (written.at(-1)?.key !== "sessionTtl" || written.at(-1)?.value !== "5m") fail(`picking a preset wrote ${JSON.stringify(written)}`);
+  if (written.at(-1)?.key !== "sessionTtl" || written.at(-1)?.value !== "3m") fail(`picking a preset wrote ${JSON.stringify(written)}`);
 
   // Free text: a box that wraps and grows, with its keys and what empty means said under it.
   // Idle session lifetime, continue at a limit, install skills, then extra instructions.
@@ -215,10 +215,11 @@ async function runSettings(): Promise<void> {
   const seenOn = (text: string) => claudeFrames.findIndex((frame) => frame.includes(text));
   console.log("--- settings page, Claude Code tab, last row ---");
   console.log(claudeFrames.at(-1));
-  for (const expected of ["Claude executable", "next server start", "Compact long threads", "Hand off long threads", "Long threads", "Setup"]) {
+  for (const expected of ["Claude executable", "next server start", "Compaction", "Hand off at", "Long threads", "Setup"]) {
     if (seenOn(expected) < 0) fail(`the Claude Code tab never shows "${expected}"`);
   }
-  if (!claudeFrames.some((frame) => frame.includes("Compact long threads") && frame.includes("Compact at") && frame.includes("80%"))) fail("the Claude Code tab does not offer who compacts, and at what share");
+  if (!claudeFrames.some((frame) => frame.split("\n").some((row) => row.includes("Compaction") && row.includes("Default (Moxen asks)")))) fail("the Claude Code tab does not say who compacts");
+  if (!claudeFrames.some((frame) => frame.split("\n").some((row) => row.includes("Compact at") && row.includes("Default (80% of the window)")))) fail("the Claude Code tab does not say where it compacts");
   // Under the same headings, in the same order, as the other providers: Long threads before Setup.
   if (!(seenOn("Long threads") <= seenOn("Setup"))) fail("the Claude Code tab files Setup before Long threads");
 
@@ -234,7 +235,7 @@ async function runSettings(): Promise<void> {
   if (!opencode.includes("2.0.24 is available")) fail("the OpenCode tab does not say a newer version is available");
   if (!opencode.includes("[ Update to 2.0.24 ]")) fail("the OpenCode update button does not name the version it updates to");
   let sawExecutable = false;
-  // A switch with no default of its own reads as what applies (OpenCode compacts unless told not to), never as Off.
+  // A choice with no default of its own reads as what applies (OpenCode compacts by itself unless told otherwise).
   let sawDefaultOn = false;
   for (let step = 0; step < 24 && !sawExecutable; step += 1) {
     await act(async () => setup.mockInput.pressArrow("down"));
@@ -242,10 +243,10 @@ async function runSettings(): Promise<void> {
     await setup.flush();
     const frame = setup.captureCharFrame();
     sawExecutable = frame.includes("OpenCode executable");
-    sawDefaultOn ||= frame.split("\n").some((row) => row.includes("Compact automatically") && row.includes("Default (On)"));
+    sawDefaultOn ||= frame.split("\n").some((row) => row.includes("Compaction") && row.includes("Default (OpenCode)"));
   }
   if (!sawExecutable) fail("the OpenCode tab does not show its executable");
-  if (!sawDefaultOn) fail("the OpenCode tab does not read an unset 'Compact automatically' as Default (On)");
+  if (!sawDefaultOn) fail("the OpenCode tab does not read an unset 'Compaction' as Default (OpenCode)");
   await act(async () => setup.mockInput.pressTab({ shift: true }));
   await setup.flush();
   await act(async () => setup.mockInput.pressTab({ shift: true }));

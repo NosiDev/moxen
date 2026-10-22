@@ -7,6 +7,7 @@
 import { cachedSecret, isSecretRef, primeSecret } from "../../secrets.js";
 import { CliError } from "../../errors.js";
 import type { HarnessModelConfig, HarnessProbedConfig, HarnessProfileConfig, HarnessProviderConfig } from "../../types.js";
+import { parseLine } from "../../threads/longthreads.js";
 import { DEFAULT_COMPACTION, type CompactionSettings } from "./compactsettings.js";
 import { parseQuirkOverrides, resolveQuirks, type ModelQuirks, type ResolveQuirksInput } from "./quirks.js";
 
@@ -208,17 +209,30 @@ function parseProfile(raw: unknown, label: string): HarnessProfileConfig {
   return profile;
 }
 
-/** The compaction settings in force for a profile: its own, over the config-wide defaults, over ours. */
+/**
+ * The compaction settings in force for a profile, most specific first: the
+ * profile's own, then the Harness tab (`compaction`, `compactAt`, which
+ * `driverProviders` fills from the global line too), then its older keys,
+ * then ours. Within a level a size beats a share, as it always has.
+ */
 export function resolveCompactionSettings(config: HarnessProviderConfig | undefined, profile: HarnessProfileConfig): CompactionSettings {
   const own = profile.compaction;
+  const line = own?.tokens !== undefined ? { tokens: own.tokens } : own?.fraction !== undefined ? { fraction: own.fraction } : tabLine(config);
   return {
-    auto: own?.auto ?? config?.autoCompact ?? DEFAULT_COMPACTION.auto,
-    // A profile's own share beats the config-wide tokens, and its own tokens beat everything; otherwise tokens beat the config-wide share.
-    fraction: own?.fraction ?? (config?.autoCompactPercent !== undefined ? Math.min(0.95, Math.max(0.3, config.autoCompactPercent / 100)) : null),
-    tokens: own?.tokens ?? (own?.fraction === undefined ? (config?.autoCompactTokens ?? null) : null),
+    auto: own?.auto ?? (config?.compaction !== undefined ? config.compaction === "auto" : config?.autoCompact) ?? DEFAULT_COMPACTION.auto,
+    fraction: line !== null && "fraction" in line ? line.fraction : null,
+    tokens: line !== null && "tokens" in line ? line.tokens : null,
     keepRecentTokens: own?.keepRecentTokens ?? config?.keepRecentTokens ?? DEFAULT_COMPACTION.keepRecentTokens,
     effort: own?.effort ?? DEFAULT_COMPACTION.effort,
   };
+}
+
+function tabLine(config: HarnessProviderConfig | undefined): { tokens: number } | { fraction: number } | null {
+  const set = config?.compactAt === undefined ? null : parseLine(config.compactAt);
+  if (set !== null) return "tokens" in set ? set : { fraction: set.percent / 100 };
+  if (config?.autoCompactTokens !== undefined) return { tokens: config.autoCompactTokens };
+  if (config?.autoCompactPercent !== undefined) return { fraction: Math.min(0.95, Math.max(0.3, config.autoCompactPercent / 100)) };
+  return null;
 }
 
 /** Validate `providers.harness` from the config file. Undefined when it holds no profiles. */

@@ -21,8 +21,8 @@ export interface ClaudeSettings {
   readonly homePath: string;
   readonly launchArgs: readonly string[];
   readonly autoCompactWindow: number | null;
-  /** Who compacts: Claude Code itself, or Moxen (which turns Claude Code's off). */
-  readonly autoCompact: "claude" | "ask" | "auto";
+  /** Who compacts: Claude Code itself, Moxen (which turns Claude Code's off), or nobody ("off"). */
+  readonly autoCompact: "claude" | "ask" | "auto" | "off";
   /** Turn on Ultracode for every session: extended workflow orchestration, on at any effort level. */
   readonly ultracode: boolean;
   /**
@@ -59,7 +59,7 @@ export function normalizeClaudeSettings(raw: Partial<ClaudeSettings> = {}): Clau
     homePath: raw.homePath?.trim() ?? "",
     launchArgs: raw.launchArgs ?? [],
     autoCompactWindow: raw.autoCompactWindow ?? null,
-    autoCompact: raw.autoCompact === "claude" || raw.autoCompact === "auto" ? raw.autoCompact : "ask",
+    autoCompact: raw.autoCompact === "claude" || raw.autoCompact === "auto" || raw.autoCompact === "off" ? raw.autoCompact : "ask",
     ultracode: raw.ultracode ?? false,
     thinkingDisplay: raw.thinkingDisplay === "omitted" ? "omitted" : "summarized",
     promptSuggestions: raw.promptSuggestions ?? true,

@@ -26,6 +26,7 @@ import type {
   SpeedMode,
   ThreadEnvMode,
   UpdatesConfig,
+  LongThreadsConfig,
   UiConfig,
   WebConfig,
   WorkspaceMode,
@@ -219,6 +220,8 @@ export function normalizeConfig(raw: unknown): CliConfig {
   }
   const web = normalizeSection<WebConfig>(input.web, "web", ["browser", "browserPath", "privateNetwork"]);
   if (web) result.web = web;
+  const longThreads = normalizeSection<LongThreadsConfig>(input.longThreads, "longThreads", ["handoff", "handoffAt", "compactAt"]);
+  if (longThreads) result.longThreads = longThreads;
   const ui = normalizeSection<UiConfig>(input.ui, "ui", ["backdrop", "modelScenes", "hideBinaryDiffs", "defaultSidePanel", "contextRefreshSeconds", "usageRefreshSeconds", "autoHandoff", "autoHandoffPercent", "autoHandoffTokens"]);
   if (ui) result.ui = ui;
   const git = normalizeSection<GitConfig>(input.git, "git", ["historyLimit", "autoFetch"]);
@@ -255,7 +258,8 @@ function normalizeSection<T>(raw: unknown, prefix: string, fields: readonly stri
     if (value === undefined || value === null) continue;
     const descriptor = settingDescriptor(`${prefix}.${field}`);
     if (!descriptor) continue;
-    out[field] = typeof value === "string" ? parseSettingValue(descriptor, value) : checkTyped(descriptor.kind.type, value, `${prefix}.${field}`);
+    // A line (`compactAt`) may be a bare token count in the file; it is read as the same text `config set` takes.
+    out[field] = typeof value === "string" || (descriptor.kind.type === "line" && typeof value === "number") ? parseSettingValue(descriptor, String(value)) : checkTyped(descriptor.kind.type, value, `${prefix}.${field}`);
   }
   return Object.keys(out).length > 0 ? (out as T) : undefined;
 }
@@ -295,6 +299,10 @@ function normalizeProviders(raw: unknown): ProvidersConfig | undefined {
       "promptSuggestions",
       "partialMessages",
       "agentSkills",
+      "compaction",
+      "compactAt",
+      "handoff",
+      "handoffAt",
       "autoCompactWindow",
       "autoCompact",
       "autoCompactPercent",
@@ -319,13 +327,13 @@ function normalizeProviders(raw: unknown): ProvidersConfig | undefined {
     if (claude || args || models) result.claude = { ...(claude ?? {}), ...(args ? { launchArgs: args } : {}), ...models };
   }
   if (input.opencode !== undefined) {
-    const opencode = normalizeSection<OpencodeProviderConfig>(input.opencode, "providers.opencode", ["binaryPath", "bundledSkills", "autoCompact", "compactBuffer", "autoHandoff", "autoHandoffTokens", "autoHandoffPercent", "runtimeMode", "model", "thinkingEffort", "moxenTools", "orchestration", "webFetch", "todos", "mcpExclude", "disabledNativeTools", "webSearchOrder", "webFetchOrder", "moxenPrompt"]);
+    const opencode = normalizeSection<OpencodeProviderConfig>(input.opencode, "providers.opencode", ["binaryPath", "bundledSkills", "compaction", "compactAt", "handoff", "handoffAt", "autoCompact", "compactBuffer", "autoHandoff", "autoHandoffTokens", "autoHandoffPercent", "runtimeMode", "model", "thinkingEffort", "moxenTools", "orchestration", "webFetch", "todos", "mcpExclude", "disabledNativeTools", "webSearchOrder", "webFetchOrder", "moxenPrompt"]);
     const models = handoffModelsOf(input.opencode, "providers.opencode");
     if (opencode || models) result.opencode = { ...opencode, ...models };
   }
   if (input.harness !== undefined) {
     const withProfiles = normalizeHarnessConfig(input.harness);
-    const defaults = normalizeSection<HarnessProviderConfig>(input.harness, "providers.harness", ["runtimeMode", "model", "thinkingEffort", "moxenTools", "orchestration", "webFetch", "todos", "mcpExclude", "autoHandoff", "autoHandoffTokens", "autoHandoffPercent", "slots", "autoCompact", "autoCompactPercent", "autoCompactTokens", "keepRecentTokens", "webSearch", "webSearchKey", "webSearchKeyEnv", "searxngUrl", "webBrowser", "webBrowserPath", "webPrivateNetwork"]);
+    const defaults = normalizeSection<HarnessProviderConfig>(input.harness, "providers.harness", ["runtimeMode", "model", "thinkingEffort", "moxenTools", "orchestration", "webFetch", "todos", "mcpExclude", "compaction", "compactAt", "handoff", "handoffAt", "autoHandoff", "autoHandoffTokens", "autoHandoffPercent", "slots", "autoCompact", "autoCompactPercent", "autoCompactTokens", "keepRecentTokens", "webSearch", "webSearchKey", "webSearchKeyEnv", "searxngUrl", "webBrowser", "webBrowserPath", "webPrivateNetwork"]);
     const models = handoffModelsOf(input.harness, "providers.harness");
     const section = asSection(input.harness, "providers.harness");
     const keys = normalizeSection<Partial<Record<KeyedSearchBackend, string>>>(section.webSearchKeys, "providers.harness.webSearchKeys", ["exa", "brave"]);

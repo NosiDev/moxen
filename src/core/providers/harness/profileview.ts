@@ -6,6 +6,7 @@
  */
 import type { ListEffective, ListFieldView, ListItemView, ListResolvedRow } from "../../configschema.js";
 import type { CliConfig, HarnessModelConfig, HarnessProfileConfig, HarnessProviderConfig } from "../../types.js";
+import { compactLineFor, compactionModeFor, driverProviders } from "../../threads/longthreads.js";
 import { resolveCompactionSettings, quirkInputs } from "./profiles.js";
 import { HARNESS_PROFILE_FIELDS } from "./profileschema.js";
 import { detectQuirkFamily, isQuirkFamily, quirkOrigins, resolveQuirks, type ModelQuirks, type QuirkOrigin } from "./quirks.js";
@@ -77,16 +78,19 @@ function fieldViews(fields: readonly (typeof HARNESS_PROFILE_FIELDS)[number][], 
   });
 }
 
-function compactionEffective(config: HarnessProviderConfig | undefined, profile: HarnessProfileConfig): Record<string, ListEffective> {
+/** Where each compaction value in force comes from: this profile, the Harness tab, the Turns tab or the default (`core/threads/longthreads.ts`). */
+function compactionEffective(config: CliConfig, profile: HarnessProfileConfig): Record<string, ListEffective> {
   const own = profile.compaction;
-  const settings = resolveCompactionSettings(config, profile);
+  const harness = config.providers?.harness;
+  const settings = resolveCompactionSettings(driverProviders(config)?.harness, profile);
   const out: Record<string, ListEffective> = {};
-  const from = (ownValue: unknown, globalValue: unknown): string => (ownValue !== undefined ? "this profile" : globalValue !== undefined ? "the Moxen Harness setting" : "the default");
-  out["compaction.auto"] = { value: settings.auto, origin: from(own?.auto, config?.autoCompact) };
-  if (settings.fraction !== null) out["compaction.fraction"] = { value: settings.fraction, origin: from(own?.fraction, config?.autoCompactPercent) };
-  if (settings.tokens !== null) out["compaction.tokens"] = { value: settings.tokens, origin: own?.tokens !== undefined ? "this profile" : "the Moxen Harness setting" };
-  out["compaction.keepRecentTokens"] = { value: settings.keepRecentTokens, origin: from(own?.keepRecentTokens, config?.keepRecentTokens) };
-  out["compaction.effort"] = { value: settings.effort, origin: from(own?.effort, undefined) };
+  const place = (key: string | null | undefined): string => (key === null || key === undefined ? "the default" : key.startsWith("longThreads.") ? "the Turns tab" : "the Moxen Harness setting");
+  const lineOrigin = own?.tokens !== undefined || own?.fraction !== undefined ? "this profile" : place(compactLineFor(config, "harness")?.key);
+  out["compaction.auto"] = { value: settings.auto, origin: own?.auto !== undefined ? "this profile" : place(compactionModeFor(config, "harness").key) };
+  if (settings.fraction !== null) out["compaction.fraction"] = { value: settings.fraction, origin: lineOrigin };
+  if (settings.tokens !== null) out["compaction.tokens"] = { value: settings.tokens, origin: lineOrigin };
+  out["compaction.keepRecentTokens"] = { value: settings.keepRecentTokens, origin: own?.keepRecentTokens !== undefined ? "this profile" : harness?.keepRecentTokens !== undefined ? "the Moxen Harness setting" : "the default" };
+  out["compaction.effort"] = { value: settings.effort, origin: own?.effort !== undefined ? "this profile" : "the default" };
   return out;
 }
 
@@ -108,7 +112,7 @@ function modelView(profile: HarnessProfileConfig, model: HarnessModelConfig): Li
   };
 }
 
-function profileView(config: HarnessProviderConfig | undefined, profile: HarnessProfileConfig, env: NodeJS.ProcessEnv): ListItemView {
+function profileView(config: CliConfig, profile: HarnessProfileConfig, env: NodeJS.ProcessEnv): ListItemView {
   const keyName = profile.apiKeyEnv;
   const keyMissing = profile.apiKey === undefined && keyName !== undefined && (env[keyName] ?? "").trim() === "";
   const models = profile.models.map((model) => modelView(profile, model));
@@ -123,6 +127,5 @@ function profileView(config: HarnessProviderConfig | undefined, profile: Harness
 }
 
 export function describeHarnessProfiles(config: CliConfig, env: NodeJS.ProcessEnv = process.env): readonly ListItemView[] {
-  const harness = config.providers?.harness;
-  return (harness?.profiles ?? []).map((profile) => profileView(harness, profile, env));
+  return (config.providers?.harness?.profiles ?? []).map((profile) => profileView(config, profile, env));
 }

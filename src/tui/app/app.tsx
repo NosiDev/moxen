@@ -19,7 +19,7 @@ import { describeScheduled } from "../model/schedule.js";
 import { subagentRun, subagentState, subagentTitle, useSubagentView } from "../features/subagentview/useSubagentView.js";
 import { useGitPanel } from "../features/gitpanel/useGitPanel.js";
 import { useProviderVersions } from "../features/settings/useProviderVersions.js";
-import { compactFromSnapshot, handoffOverridesFromSnapshot, uiFromSnapshot, useSettings } from "../features/settings/useSettings.js";
+import { longThreadConfigFromSnapshot, uiFromSnapshot, useSettings } from "../features/settings/useSettings.js";
 import { PickerModal, type PickerBody, type PickerSlider } from "../features/pickers/pickermodal.js";
 import { useThreadSearch } from "../features/search/useThreadSearch.js";
 import { DateTimeModal } from "../ui/datetimemodal.js";
@@ -29,7 +29,7 @@ import { AnswerPanel } from "../features/answerpanel/answerpanel.js";
 import { PermissionPanel } from "../features/permissionpanel/permissionpanel.js";
 import { usePermissionFlow } from "../features/permissionpanel/usePermissionFlow.js";
 import { dispatchErrorMessage } from "../../core/errors.js";
-import type { ModelSelection, ProvidersConfig, RuntimeMode, UiConfig } from "../../core/types.js";
+import type { LongThreadsConfig, ModelSelection, ProvidersConfig, RuntimeMode, UiConfig } from "../../core/types.js";
 import { compatibleRuntimeMode } from "../../core/catalog/permissions.js";
 import { offerableModels, offerableProviders } from "../../core/catalog/summary.js";
 import {
@@ -56,7 +56,7 @@ import { bootLoadingStage, isBootReady } from "../model/readiness.js";
 import { HoverButton } from "../ui/hoverbutton.js";
 import { openExternal } from "../../core/infra/platformOpen.js";
 import { formatDuration } from "../model/turns.js";
-import { autoHandoffState, compactFromConfig, handoffOverridesFromConfig, resolveCompact, resolveHandoff, type HandoffOverrides } from "../model/autohandoff.js";
+import { autoHandoffState, compactsFirst, lineInput, longThreadPolicy, type LongThreadConfig } from "../model/autohandoff.js";
 import { handOffTarget, openRequestPrompt, requestNoun } from "../model/gitpanel.js";
 import { renderMessage } from "../model/message.js";
 import { copiedAttachments, copiedToast, copyPrompt, matchCopy, uniqueName } from "../model/copystash.js";
@@ -136,6 +136,7 @@ export function App({
   setTerminalTitle,
   ui: launchUi,
   providers: launchProviders,
+  longThreads: launchLongThreads,
 }: {
   client: ClientApi;
   onQuit: () => void;
@@ -155,8 +156,10 @@ export function App({
    * config they are not re-read per operation — a restart applies them.
    */
   ui?: UiConfig;
-  /** The providers' own settings at launch: only their hand-off overrides are read, until the settings page loads a fresher snapshot. */
+  /** The providers' own settings at launch: only their long-thread keys are read, until the settings page loads a fresher snapshot. */
   providers?: ProvidersConfig;
+  /** The global hand-off and compaction lines at launch, read the same way. */
+  longThreads?: LongThreadsConfig;
 }) {
   const { width, height } = useTerminalDimensions();
   const [shell, setShell] = useState<ShellState>(emptyShellState);
@@ -220,8 +223,11 @@ export function App({
   const providerVersions = useProviderVersions(client, picker === "settings");
   const providerUpdates = useProviderUpdates(client, toasts.push, providerVersions.reload);
   const ui = uiFromSnapshot(settings.snapshot) ?? launchUi;
-  const handoffOverrides: HandoffOverrides = handoffOverridesFromSnapshot(settings.snapshot) ?? handoffOverridesFromConfig(launchProviders);
-  const compactSettings = compactFromSnapshot(settings.snapshot) ?? compactFromConfig(launchProviders);
+  const longThreadConfig: LongThreadConfig = longThreadConfigFromSnapshot(settings.snapshot) ?? {
+    ...(launchUi ? { ui: launchUi } : {}),
+    ...(launchProviders ? { providers: launchProviders } : {}),
+    ...(launchLongThreads ? { longThreads: launchLongThreads } : {}),
+  };
   const [pickerFilter, setPickerFilter] = useState("");
   /** Where esc/backdrop returns focus after the command palette closes. */
   const [paletteReturnFocus, setPaletteReturnFocus] = useState<"chat" | "composer" | "diff">("chat");
@@ -1243,15 +1249,14 @@ export function App({
     !shouldOfferResumeCompaction(threadState, effectiveModelSelection?.instanceId, now)
       ? null
       : { key: resumeKey, usedTokens: threadState.contextUsage?.usedTokens ?? 0 };
-  /** Past `ui.autoHandoffPercent` of the window the thread should move to a fresh one (MXN-22). */
-  const { mode: handoffMode, percent: handoffPercent, tokens: handoffTokens } = resolveHandoff(ui, handoffOverrides, effectiveModelSelection?.instanceId, effectiveModelSelection?.model);
+  /** Past its hand-off line the thread should move to a fresh one (MXN-22); the same rule the server acts on (`longThreadPolicy`). */
+  const longThread = longThreadPolicy(longThreadConfig, effectiveModelSelection?.instanceId, effectiveModelSelection?.model);
   const handoffState =
     creating || openThreadId === null
       ? null
       : autoHandoffState({
-          mode: handoffMode,
-          percent: handoffPercent,
-          tokens: handoffTokens,
+          mode: longThread.handoff.mode,
+          ...lineInput(longThread.handoff.line),
           usedTokens: threadState.contextUsage?.usedTokens ?? null,
           maxTokens: threadState.contextUsage?.maxTokens ?? null,
           hasReply: lastAssistantMessage !== null,
@@ -1261,14 +1266,14 @@ export function App({
           queuedMessages: queued.items.length,
         });
   const handoffReady = handoffState !== null && handoffState.blockers.length === 0;
-  /** Claude Code's own compaction is off: past the share, Moxen asks, or sends /compact itself. */
-  const compact = resolveCompact(compactSettings, effectiveModelSelection?.instanceId);
+  /** The provider's own compaction is off: past the line, Moxen asks, or sends /compact itself. */
+  const compact = longThread.compact;
   const compactState =
     creating || openThreadId === null || compact === null
       ? null
       : autoHandoffState({
           mode: compact.mode,
-          percent: compact.percent,
+          ...lineInput(compact.line),
           usedTokens: threadState.contextUsage?.usedTokens ?? null,
           maxTokens: threadState.contextUsage?.maxTokens ?? null,
           hasReply: lastAssistantMessage !== null,
@@ -1354,7 +1359,7 @@ export function App({
       ],
     });
   }
-  if (handoffState !== null && handoffKey !== null && handoffKey !== dismissedHandoffKey && !(handoffMode === "auto" && handoffReady)) {
+  if (handoffState !== null && handoffKey !== null && handoffKey !== dismissedHandoffKey && !(longThread.handoff.mode === "auto" && handoffReady)) {
     notices.push({
       key: handoffKey,
       glyph: "◈",
@@ -1364,7 +1369,7 @@ export function App({
         <text fg={COLOR.dim} selectable={false}>
           {handoffState.blockers.length === 0
             ? "  Tool calls get less reliable as it fills: continue in a fresh thread"
-            : `  ${handoffMode === "auto" ? "Handing off once" : "Waiting for"}: ${handoffState.blockers.join(", ")}`}
+            : `  ${longThread.handoff.mode === "auto" ? "Handing off once" : "Waiting for"}: ${handoffState.blockers.join(", ")}`}
         </text>
       ),
       actions: [
@@ -1389,6 +1394,12 @@ export function App({
         { label: "Not now", fg: COLOR.dim, hoverFg: COLOR.text, onClick: () => setDismissedCompactKey(compactKey) },
       ],
     });
+  }
+  // The lower line is offered first: a compaction set below the hand-off line goes ahead of the hand-off card.
+  if (compactsFirst(longThread, threadState.contextUsage?.maxTokens ?? null)) {
+    const at = notices.findIndex((notice) => notice.key === handoffKey);
+    const card = notices.findIndex((notice) => notice.key === compactKey);
+    if (at >= 0 && card > at) notices.splice(at, 0, ...notices.splice(card, 1));
   }
   const noticePager = useNoticePager(notices.map((notice) => notice.key));
 

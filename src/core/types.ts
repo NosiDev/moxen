@@ -45,6 +45,8 @@ export interface CliConfig {
    * merged, so no unique work is lost. Unset: 14. 0: never.
    */
   branchPruneDays?: number;
+  /** Defaults for every provider's Long threads group (`core/threads/longthreads.ts`). */
+  longThreads?: LongThreadsConfig;
   /** TUI presentation; ignored by the CLI, which has no panels. */
   ui?: UiConfig;
   web?: WebConfig;
@@ -78,6 +80,14 @@ export interface UiConfig {
   autoHandoffTokens?: number;
 }
 
+/** The global hand-off and compaction lines; each provider's tab can override them. The older `ui.autoHandoff*` keys are read where these are unset. */
+export interface LongThreadsConfig {
+  handoff?: "off" | "ask" | "auto";
+  /** A share (`"50%"`) or a size (`"256K"`). */
+  handoffAt?: string;
+  compactAt?: string;
+}
+
 export interface GitConfig {
   historyLimit?: number;
   /** Fetch before reading history; off by default because it hits the network. */
@@ -103,7 +113,15 @@ export interface ProvidersConfig {
 
 /** Moxen Harness: our own agent loop against endpoints the user configures. */
 export interface HarnessProviderConfig {
-  /** Hand off long threads on this provider: ask, on its own, or never. Unset: the global `ui.autoHandoff`. */
+  /** Whether the Harness compacts on its own. Unset: `autoCompact`, else on. */
+  compaction?: "auto" | "off";
+  /** Hand off long threads on this provider: ask, on its own, or never. Unset: `autoHandoff` here, else the global one (`core/threads/longthreads.ts`). */
+  handoff?: "off" | "ask" | "auto";
+  /** Where this provider's threads are handed off: a share (`"50%"`) or a size (`"256K"`). Unset: the older keys here, else the global line. */
+  handoffAt?: string;
+  /** Where Moxen compacts this provider's threads, as `handoffAt`. Unset: the older keys here, else `longThreads.compactAt`. */
+  compactAt?: string;
+  /** Older form of `handoff`. */
   autoHandoff?: "off" | "ask" | "auto";
   /** Tokens of context at which this provider's threads are handed off. Unset: this provider's share, else the global setting. */
   autoHandoffTokens?: number;
@@ -254,7 +272,15 @@ export interface HarnessProfileConfig {
 
 /** What the user may set for OpenCode. Its external-server URL and password are not offered yet (see `configschema.ts`). */
 export interface OpencodeProviderConfig {
-  /** Hand off long threads on this provider: ask, on its own, or never. Unset: the global `ui.autoHandoff`. */
+  /** Who compacts: OpenCode itself, Moxen (asking first, or on its own), or nobody. Unset: `autoCompact` (off when false), else OpenCode. */
+  compaction?: "provider" | "ask" | "auto" | "off";
+  /** Hand off long threads on this provider: ask, on its own, or never. Unset: `autoHandoff` here, else the global one (`core/threads/longthreads.ts`). */
+  handoff?: "off" | "ask" | "auto";
+  /** Where this provider's threads are handed off: a share (`"50%"`) or a size (`"256K"`). Unset: the older keys here, else the global line. */
+  handoffAt?: string;
+  /** Where Moxen compacts this provider's threads, as `handoffAt`. Unset: the older keys here, else `longThreads.compactAt`. */
+  compactAt?: string;
+  /** Older form of `handoff`. */
   autoHandoff?: "off" | "ask" | "auto";
   /** Tokens of context at which this provider's threads are handed off. Unset: this provider's share, else the global setting. */
   autoHandoffTokens?: number;
@@ -296,7 +322,15 @@ export interface OpencodeProviderConfig {
 }
 
 export interface ClaudeProviderConfig {
-  /** Hand off long threads on this provider: ask, on its own, or never. Unset: the global `ui.autoHandoff`. */
+  /** Who compacts: Claude Code itself, Moxen (asking first, or on its own), or nobody. Unset: `autoCompact`, else Moxen asking. */
+  compaction?: "provider" | "ask" | "auto" | "off";
+  /** Hand off long threads on this provider: ask, on its own, or never. Unset: `autoHandoff` here, else the global one (`core/threads/longthreads.ts`). */
+  handoff?: "off" | "ask" | "auto";
+  /** Where this provider's threads are handed off: a share (`"50%"`) or a size (`"256K"`). Unset: the older keys here, else the global line. */
+  handoffAt?: string;
+  /** Where Moxen compacts this provider's threads, as `handoffAt`. Unset: the older keys here, else `longThreads.compactAt`. */
+  compactAt?: string;
+  /** Older form of `handoff`. */
   autoHandoff?: "off" | "ask" | "auto";
   /** Tokens of context at which this provider's threads are handed off. Unset: this provider's share, else the global setting. */
   autoHandoffTokens?: number;
@@ -337,7 +371,7 @@ export interface ClaudeProviderConfig {
   /** Tokens at which Claude Code auto-compacts (100000 to 1000000); unset leaves its own default for the model. */
   autoCompactWindow?: number;
   /** Who compacts a long thread: Claude Code itself ("claude"), or Moxen, which turns Claude Code's off and sends `/compact` past `autoCompactPercent` of the window: asking first ("ask") or on its own ("auto"). Unset: ask. */
-  autoCompact?: "claude" | "ask" | "auto";
+  autoCompact?: "claude" | "ask" | "auto" | "off";
   /** With Moxen compacting: the share of the window, 10 to 95, past which a thread is compacted. Unset: 80. */
   autoCompactPercent?: number;
   /** Run every Claude Code session with Ultracode (workflow orchestration) on. Unset: off. */

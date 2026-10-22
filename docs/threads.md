@@ -62,55 +62,78 @@ The instructions a conversation began with are kept, not rewritten. What
 changes since — edited rule files (sent as a patch, never the whole file),
 MCP server sets, skills — rides ahead of the next prompt.
 
-## Handing off a long thread
+## Long threads: compaction and hand-off
 
-Models make more tool-call mistakes as their window fills, so past
-a share of the model's window (`ui.autoHandoffPercent`, 50 by default; the Hand off at slider offers 25, 50 and 75) a thread should move to a fresh one. Because it is a share, a model with a bigger window hands off later. `ui.autoHandoffTokens` ("Hand off at a fixed size") states it in tokens instead and wins over the share at the same level.
-The rules are in core (`core/threads/longthreads.ts`), and the server applies
-them after every turn settles, background turns included (`actOnLongThread` in
-`core/threads/operations.ts`), so a thread no client has open is looked after
-too. With `ui.autoHandoff` set to `ask` (the default) a client draws a card over
-the composer with **Hand off** and **Not now**; with `auto` the server continues
-the thread itself (the same handoff document as "Continue in a new thread", and
-a `thread.continued` note marked `automatic`, which the TUI follows to the new
-thread) as soon as nothing is running that the new thread would lose track of:
-no turn, no subthread, no background task and no queued message. Until then the
-card names what it waits for and the button hands off by hand. It is Moxen that
-decides, not the model, and it fires at most once per thread. A delegated task is
-never handed off, because its parent waits on that thread; it is compacted
-instead when it can be. `off` turns the card and the automatic hand-off off.
+Models make more tool-call mistakes as their window fills, so a long thread is
+either compacted (its history summarised in place) or handed off (continued in
+a fresh thread opened with a handoff document). Every provider's settings page
+has the same "Long threads" group, and the Turns tab holds the defaults:
 
-Each provider can override all of it for its own threads: `providers.claude`,
-`providers.opencode` and `providers.harness` take `autoHandoff`,
-`autoHandoffPercent` and `autoHandoffTokens`, on that provider's settings page
-under "Long threads". They also take `autoHandoffModels`, an object of model
-slug to tokens for particular models (`{"claude-opus-4-5": 500000}`; `config set
-providers.claude.autoHandoffModels "claude-opus-4-5=500k"` takes one
-`model=tokens` pair per line or comma, `k` and `m` meaning thousands and
-millions, and an empty value clears them all). On the settings page it is the
-"Hand off at, per model" row: it lists the provider's models, enter on one picks
-a size from 100K to 1M, and `d` removes that model's override. The line for a thread is the
-first that is set: its model's tokens, the provider's tokens, the provider's
-share, the global tokens, the global share, then half the window.
+| Row | Key | Values |
+| -- | -- | -- |
+| Compaction | `providers.<kind>.compaction` | `provider`, `ask`, `auto`, `off` (the Moxen Harness: `auto`, `off`) |
+| Compact at | `providers.<kind>.compactAt`, default `longThreads.compactAt` | a line |
+| Kept word for word | `providers.harness.keepRecentTokens` | tokens (Harness only) |
+| Hand off | `providers.<kind>.handoff`, default `longThreads.handoff` | `ask`, `auto`, `off` |
+| Hand off at | `providers.<kind>.handoffAt`, default `longThreads.handoffAt` | a line |
+| Hand off at, per model | `providers.<kind>.autoHandoffModels` | `model=tokens` pairs |
 
-## Compacting a long thread (Claude Code)
+A **line** is a share of the model's window (`70%`, 10 to 95) or a size
+(`32K`, `256K`, `1M`, or a plain token count; K and M count in powers of
+two), with the same meaning on every tab. A share follows the window, so a
+bigger model hands off later; a size suits a small local model. The page
+offers shares from 40% and sizes from 8K.
 
-By default Moxen, not Claude Code, compacts a Claude Code thread. It starts
-every session with Claude Code's own auto-compaction off
-(`autoCompactEnabled: false`) and the server watches the same context reading as
-the hand-off, past `providers.claude.autoCompactPercent` of the window (80 by
-default; the Compact at slider offers 50, 65, 80 and 90). `providers.claude.autoCompact`
-says what happens then: `ask` (the default) shows a card with **Compact** and
-**Not now**; `auto` sends `/compact` itself, the same as "Compact now", once no
-turn is running and nothing is queued. Because Claude Code's own compaction is
-off, `ask` does not wait for an answer forever: a delegated task (no one to ask)
-is compacted at the line, and any thread halfway from the line to a full window
-(90% with the defaults) is compacted unasked, with a notice saying why. Either
-way it happens at most once until the thread drops below the line again; `claude`
-leaves it all to Claude Code, whose own window (`autoCompactWindow`) then applies.
-A hand-off card can show at the same time: with the defaults it comes first, at 50%.
-OpenCode and the Moxen Harness have their own compaction settings and are not
-affected.
+**Precedence is specificity only**: the model's own size, then the
+provider's tab, then the Turns tab, then the built-in default (hand off at
+50%, compact at 80%; the Harness compacts at 70% of the window, 60% under
+128K), whatever unit each level is written in. The rules are in core
+(`core/threads/longthreads.ts`: `longThreadPolicy`, `handoffLineFor`,
+`compactLineFor`), and the server applies them after every turn settles,
+background turns included (`actOnLongThread` in `core/threads/operations.ts`),
+so a thread no client has open is looked after too.
+
+**Hand off.** `ask` (the default) draws a card over the composer with **Hand
+off** and **Not now**; `auto` has the server continue the thread itself (the
+same handoff document as "Continue in a new thread", and a `thread.continued`
+note marked `automatic`, which the TUI follows) once nothing is running that
+the new thread would lose track of: no turn, no subthread, no background task
+and no queued message. Until then the card names what it waits for. It fires at
+most once per thread, and never for a delegated task, whose parent waits on that
+thread; that one is compacted instead when it can be. "Hand off at, per model"
+lists the provider's models; enter on one picks a size from 16K to 1M, and `d`
+removes it (`config set providers.claude.autoHandoffModels "claude-opus-4-5=500k"`
+takes one `model=tokens` pair per line or comma, `k` and `m` meaning
+thousands and millions).
+
+**Compaction.** `provider` leaves it to the provider: Claude Code's own, which
+takes a size under Compact at as its auto-compact window (100K to 1M), or
+OpenCode's own, near the model's limit (its buffer, `compactBuffer`, is still
+read from the file). `ask` and `auto` are Moxen's: it switches the
+provider's own compaction off (Claude Code's `autoCompactEnabled: false`,
+OpenCode's `compaction.auto`) and, past Compact at, shows a card or sends
+`/compact` itself once no turn is running and nothing is queued. Because the
+provider's own is off, `ask` does not wait forever: a delegated task is
+compacted at the line, and any thread halfway from the line to a full window is
+compacted unasked, with a notice saying why. A compaction that left the thread
+past its line is not repeated until it has dropped below it once. `off`: nobody
+compacts. The Moxen Harness compacts inside its own loop, so it only has
+`auto` and `off` (see [providers](providers.md)).
+
+**Both lines.** Hand-off is offered first when its line is lower than
+compaction's. Past both, the lower line acts first: compaction set below the
+hand-off line runs even with hand-off on Automatic, and the thread is handed
+off if compacting did not bring it back below.
+
+**Older keys** still load and mean what they did: `ui.autoHandoff`,
+`ui.autoHandoffPercent`, `ui.autoHandoffTokens`, `providers.<kind>.autoHandoff`,
+`autoHandoffPercent`, `autoHandoffTokens`, `providers.claude.autoCompact`
+(`claude` is `provider`), `autoCompactPercent`, `autoCompactWindow`,
+`providers.opencode.autoCompact` and `providers.harness.autoCompact`,
+`autoCompactPercent`, `autoCompactTokens`. Each sits at its own level, just
+below the key that replaced it, and the page's Default names it when it
+applies. `moxen config set` on one still writes it, for an older build sharing
+the file, and writes its replacement too.
 
 ## Revert
 

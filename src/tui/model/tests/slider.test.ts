@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import { effortTones, nearestStop, sliderLayout, stopTones } from "../slider.js";
 import { sliderChoices } from "../listeditor.js";
-import { compactFromConfig, handoffOverridesFromConfig, resolveCompact, resolveHandoff } from "../autohandoff.js";
 
 describe("sliderLayout", () => {
   it("puts the first label flush left, the last flush right and the rest by position", () => {
@@ -55,30 +54,6 @@ describe("sliderChoices", () => {
   });
 });
 
-describe("resolveHandoff", () => {
-  it("takes the provider's own tokens, then the global ones, then falls back to the share", () => {
-    const overrides = handoffOverridesFromConfig({ opencode: { autoHandoff: "auto", autoHandoffTokens: 131_072 } });
-    expect(resolveHandoff({ autoHandoff: "off", autoHandoffTokens: 65_536 }, overrides, "opencode/opencode")).toEqual({ mode: "auto", percent: 50, tokens: 131_072 });
-    expect(resolveHandoff({ autoHandoff: "off", autoHandoffTokens: 65_536 }, overrides, "claudeAgent")).toEqual({ mode: "off", percent: 50, tokens: 65_536 });
-    expect(resolveHandoff({ autoHandoffPercent: 70 }, {}, "claudeAgent")).toEqual({ mode: "ask", percent: 70, tokens: null });
-    expect(resolveHandoff(undefined, {}, "claudeAgent")).toEqual({ mode: "ask", percent: 50, tokens: null });
-  });
-
-  it("goes model tokens, provider tokens, provider share, global tokens, global share, half", () => {
-    const overrides = handoffOverridesFromConfig({
-      claude: { autoHandoffModels: { "claude-opus": 500_000 }, autoHandoffTokens: 100_000 },
-      opencode: { autoHandoffPercent: 75 },
-    });
-    const ui = { autoHandoffTokens: 65_536, autoHandoffPercent: 25 };
-    expect(resolveHandoff(ui, overrides, "claudeAgent", "claude-opus").tokens).toBe(500_000);
-    expect(resolveHandoff(ui, overrides, "claudeAgent", "claude-haiku").tokens).toBe(100_000);
-    // A provider's share beats the global tokens: the line is a share of the window, not the global count.
-    expect(resolveHandoff(ui, overrides, "opencode/opencode", "gpt")).toEqual({ mode: "ask", percent: 75, tokens: null });
-    expect(resolveHandoff(ui, {}, "claudeAgent", "claude-opus")).toEqual({ mode: "ask", percent: 25, tokens: 65_536 });
-    expect(resolveHandoff({ autoHandoffPercent: 25 }, {}, "claudeAgent", "x")).toEqual({ mode: "ask", percent: 25, tokens: null });
-  });
-});
-
 describe("effortTones", () => {
   it("colours the named levels cool to hot, each its own", () => {
     const tones = effortTones(["low", "medium", "high", "xhigh", "max"]);
@@ -100,19 +75,5 @@ describe("stopTones", () => {
       expect(new Set(tones).size).toBe(count);
       expect(tones.every((tone) => /^#[0-9a-f]{6}$/.test(tone))).toBe(true);
     }
-  });
-});
-
-describe("resolveCompact", () => {
-  it("is Moxen's job on Claude Code threads only, asking at 80% unless set", () => {
-    expect(resolveCompact(undefined, "claudeAgent")).toEqual({ mode: "ask", percent: 80 });
-    expect(resolveCompact({ mode: "auto", percent: 65 }, "claudeAgent")).toEqual({ mode: "auto", percent: 65 });
-    expect(resolveCompact(compactFromConfig({ claude: { autoCompact: "auto", autoCompactPercent: 70 } }), "claudeAgent")).toEqual({ mode: "auto", percent: 70 });
-  });
-
-  it("leaves it to Claude Code when asked to, and to other providers' own compaction", () => {
-    expect(resolveCompact({ mode: "claude" }, "claudeAgent")).toBeNull();
-    expect(resolveCompact(undefined, "opencode/opencode")).toBeNull();
-    expect(resolveCompact(undefined, undefined)).toBeNull();
   });
 });
