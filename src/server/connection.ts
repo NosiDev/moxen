@@ -54,7 +54,7 @@ import {
 } from "../core/forge/forge.js";
 import { toWsConfigPayload } from "./config-payload.js";
 import { MOXEN_MCP_SERVER_NAME, moxenMcpServerSpec } from "./mcp/main.js";
-import { MOXEN_CHECKLIST_ARG, MOXEN_CHECKLIST_QUERY, MOXEN_DELEGATED_ARG, MOXEN_DELEGATED_MCP_INSTRUCTIONS, MOXEN_DELEGATED_QUERY } from "./mcp/stdio.js";
+import { MOXEN_CHECKLIST_ARG, MOXEN_CHECKLIST_QUERY, MOXEN_DELEGATED_ARG, MOXEN_DELEGATED_QUERY, MOXEN_NO_WEB_FETCH_ARG, MOXEN_NO_WEB_FETCH_QUERY, moxenInstructions } from "./mcp/stdio.js";
 import { startMcpHttpServer, type McpHttpServer } from "./mcp/http.js";
 import { MOXEN_MCP_INSTRUCTIONS } from "./mcp/stdio.js";
 import { callMoxenTool, moxenToolsFor } from "./mcp/tools.js";
@@ -157,7 +157,7 @@ export interface DirectConnectionOptions {
   /** Which file `settings.set` writes; defaults to the resolved config path. */
   readonly configPath?: string;
   /** The `moxen` tools' MCP server per thread; defaults to `mcp/main.ts`. Null turns them off. */
-  readonly builtinMcpServers?: ((threadId: string, options?: { readonly delegated: boolean }) => readonly McpServerSpec[]) | null;
+  readonly builtinMcpServers?: ((threadId: string, options?: { readonly delegated: boolean; readonly webFetch?: boolean }) => readonly McpServerSpec[]) | null;
   /** Runs a provider CLI's own updater (tests); defaults to the real one. */
   readonly updateProvider?: (provider: UpdatableProvider, binaryPath?: string) => Promise<ProviderUpdate>;
   /** Reads the newest provider versions (tests); defaults to the npm registry. */
@@ -178,7 +178,7 @@ export class DirectConnection implements ClientApi {
   /** The per-provider settings the last config read saw; see `driverFor`. */
   private lastProviders: ProvidersConfig | undefined;
   private lastWeb: WebConfig | undefined;
-  private readonly builtinMcpServers: ((threadId: string, options?: { readonly delegated: boolean }) => readonly McpServerSpec[]) | null;
+  private readonly builtinMcpServers: ((threadId: string, options?: { readonly delegated: boolean; readonly webFetch?: boolean }) => readonly McpServerSpec[]) | null;
   private readonly readLatestVersions: (claudeBinaryPath?: string) => Promise<Omit<LatestVersions, "enabled">>;
   private readonly runProviderUpdate: (provider: UpdatableProvider, binaryPath?: string) => Promise<ProviderUpdate>;
   private readonly harnessFetch: typeof fetch | undefined;
@@ -226,7 +226,7 @@ export class DirectConnection implements ClientApi {
     this.readLatestVersions = options.latestVersions ?? ((claudeBinaryPath) => latestVersions(claudeBinaryPath === undefined ? {} : { claudeBinaryPath }));
     this.runProviderUpdate = options.updateProvider ?? ((provider, binaryPath) => updateProvider(provider, binaryPath === undefined ? {} : { binaryPath }));
     this.builtinMcpServers =
-      options.builtinMcpServers === undefined ? (threadId, serverOptions) => [this.moxenToolsFor(threadId, serverOptions?.delegated === true)] : options.builtinMcpServers;
+      options.builtinMcpServers === undefined ? (threadId, serverOptions) => [this.moxenToolsFor(threadId, serverOptions?.delegated === true, serverOptions?.webFetch !== false)] : options.builtinMcpServers;
   }
 
   /**
@@ -234,7 +234,7 @@ export class DirectConnection implements ClientApi {
    * config and server mode) outright: providers hand MCP servers a filtered
    * environment (some do), and the tools must reach the same threads.
    */
-  private moxenToolsFor(threadId: string, delegated = false): McpServerSpec {
+  private moxenToolsFor(threadId: string, delegated = false, webFetch = true): McpServerSpec {
     // Hosted in this process: Claude calls the tools in-process, the other
     // providers over loopback HTTP served here — so a delegation always runs
     // in the process that owns its parent's session. Until the HTTP server
@@ -243,7 +243,9 @@ export class DirectConnection implements ClientApi {
       ? { name: MOXEN_MCP_SERVER_NAME, type: "http" as const, ...this.mcpHttp.specFor(threadId), alwaysLoad: true }
       : { ...this.moxenStdioFor(threadId), alwaysLoad: true };
     // A delegated task asks for the tools without the delegation ones; the server holds to it as well.
-    const fallback = !delegated ? base : base.type === "http" ? { ...base, url: `${base.url}?${MOXEN_DELEGATED_QUERY}` } : { ...base, args: [...base.args, MOXEN_DELEGATED_ARG] };
+    const flags = [...(delegated ? [{ query: MOXEN_DELEGATED_QUERY, arg: MOXEN_DELEGATED_ARG }] : []), ...(webFetch ? [] : [{ query: MOXEN_NO_WEB_FETCH_QUERY, arg: MOXEN_NO_WEB_FETCH_ARG }])];
+    const fallback =
+      flags.length === 0 ? base : base.type === "http" ? { ...base, url: `${base.url}?${flags.map((flag) => flag.query).join("&")}` } : { ...base, args: [...base.args, ...flags.map((flag) => flag.arg)] };
     // The same endpoint, also offering `todos`: for a provider with no checklist.
     const checklist =
       fallback.type === "http"
@@ -252,9 +254,9 @@ export class DirectConnection implements ClientApi {
     return {
       name: MOXEN_MCP_SERVER_NAME,
       type: "in-process",
-      instructions: delegated ? MOXEN_DELEGATED_MCP_INSTRUCTIONS : MOXEN_MCP_INSTRUCTIONS,
-      tools: moxenToolsFor({ delegated }),
-      call: (tool, args) => callMoxenTool(this, threadId, tool, args, { delegated }),
+      instructions: moxenInstructions({ delegated, webFetch }),
+      tools: moxenToolsFor({ delegated, webFetch }),
+      call: (tool, args) => callMoxenTool(this, threadId, tool, args, { delegated, webFetch }),
       fallback,
       checklist,
       // Delegation is what these tools are for: never behind a tool search.

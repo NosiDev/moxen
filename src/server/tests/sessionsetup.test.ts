@@ -47,6 +47,33 @@ describe("MCP servers changed while a session lives", () => {
   });
 });
 
+describe("Moxen's own tools, switched per provider", () => {
+  const moxenTools = async (providerConfig: Record<string, unknown>) => {
+    // The harness's installation default is OpenCode, so its section is the one in force.
+    const { harness, connection, startOf } = await connected({ providers: { opencode: providerConfig } });
+    try {
+      const created = await connection.dispatch({ type: "thread.handover", cwd: harness.work, prompt: "one", wait: true, threadEnvMode: "local" });
+      const servers = (startOf(created.threadId)?.mcpServers ?? []) as Array<{ name: string; tools?: Array<{ name: string }> }>;
+      const moxen = servers.find((server) => server.name === "moxen");
+      return moxen === undefined ? null : (moxen.tools ?? []).map((tool) => tool.name).sort();
+    } finally {
+      await connection.close();
+    }
+  };
+
+  it("keeps web_fetch with orchestration off, and the delegation tools with web_fetch off", async () => {
+    expect(await moxenTools({})).toEqual(["delegate", "models", "task_cancel", "task_status", "web_fetch"]);
+    expect(await moxenTools({ orchestration: false })).toEqual(["web_fetch"]);
+    expect(await moxenTools({ webFetch: false })).toEqual(["delegate", "models", "task_cancel", "task_status"]);
+  });
+
+  it("drops the server with both off, and reads the older all-at-once switch as both", async () => {
+    expect(await moxenTools({ orchestration: false, webFetch: false })).toBeNull();
+    expect(await moxenTools({ moxenTools: false })).toBeNull();
+    expect(await moxenTools({ moxenTools: false, webFetch: true })).toEqual(["web_fetch"]);
+  });
+});
+
 describe("project rule files edited while a Claude session lives", () => {
   const UPDATE = "<moxen-context-update>";
 

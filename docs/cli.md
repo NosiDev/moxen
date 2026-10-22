@@ -224,9 +224,18 @@ Claude's WebSearch on anything recent, `freshness` for Brave, that Exa's fetch c
 is said about a tool that is switched off or not attached.
 
 `web_fetch` is Moxen's own page reader (the one the Moxen Harness uses, minus its web search): plain request
-first, a browser when the site turns it away or builds the page with scripts. It is on the `moxen` MCP server, so
-`moxenTools` switches it off with the rest. A delegated task keeps it (and the checklist) but gets none of the
-tools that delegate. It never reaches cloud metadata or the local network.
+first, a browser when the site turns it away or builds the page with scripts. It follows the shared Web tools
+settings (`web.browser`, `web.privateNetwork`) on every provider, and never reaches cloud metadata. It is on the
+`moxen` MCP server with the delegation tools, but each is switched on its own per provider:
+`providers.<kind>.orchestration` (delegate, task status, models, cancel) and `providers.<kind>.webFetch`. The
+older `moxenTools: false` still turns both off while they are unset. A delegated task keeps `web_fetch` (and the
+checklist) but gets none of the tools that delegate. A configured server named `moxen` replaces Moxen's tools,
+and the MCP tab says so.
+
+Which provider gets a server is decided in two places only: the server's own switch, and the MCP servers
+checklist on each provider's tab. The MCP tab shows the answer per provider for each server. A server's older
+`providers` list ("offered to") is read once, as that checklist (a provider it left out has the server switched
+off there), and decides nothing on its own; a project's `moxen.json` may still carry one.
 
 ## Commands
 

@@ -63,7 +63,8 @@ export type SettingControl =
   /** The provider's own tools: the same checklist, over the tools the provider ships with (the setting holds the ones switched OFF). */
   | { readonly kind: "tools"; readonly tools: readonly McpAccessEntry[]; readonly excluded: readonly string[] }
   /** The order a provider's model should try its web tools in: ranked rows first, then the rest. */
-  | { readonly kind: "order"; readonly rows: readonly WebOrderRow[] }
+  /** `warning`: what the ranked tools still need (a server to add, a switch that is off), said on the closed row too. */
+  | { readonly kind: "order"; readonly rows: readonly WebOrderRow[]; readonly warning?: string }
   /** The models of one provider, each with its own hand-off size or none: opened in its own editor with a slider per model. */
   | { readonly kind: "handoff"; readonly models: readonly HandoffModelEntry[] };
 
@@ -366,7 +367,11 @@ export function settingControl(
       break;
     case "string":
       if (kind.source === "mcp-server") return mcpAccessControl(descriptor, value, settings);
-      if (kind.source === "web-order") return { kind: "order", rows: webOrderRows(settings.find((view) => view.descriptor.key === descriptor.key)?.order ?? [], value) };
+      if (kind.source === "web-order") {
+        const rows = webOrderRows(settings.find((view) => view.descriptor.key === descriptor.key)?.order ?? [], value);
+        const blocked = rows.filter((row) => row.rank !== null && row.locked !== null && row.locked !== "unknown");
+        return blocked.length === 0 ? { kind: "order", rows } : { kind: "order", rows, warning: `Ranked but unavailable: ${blocked.map((row) => `${row.label} (${row.locked})`).join("; ")}.` };
+      }
       if (kind.source === "native-tools") {
         const tools = (kind.tools ?? []).map((tool): McpAccessEntry => ({ name: tool.name, summary: tool.summary, locked: null }));
         return { kind: "tools", tools, excluded: String(value ?? "").split(",").map((name) => name.trim()).filter((name) => name !== "") };

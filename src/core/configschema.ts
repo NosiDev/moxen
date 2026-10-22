@@ -257,7 +257,7 @@ export type SettingFallback =
   | { readonly text: string }
   | { readonly resolver: FallbackResolver };
 
-export type FallbackResolver = "handoffTokens" | "providerModel" | "webBrowser" | "privateNetwork" | "searchKey" | "searchKeyEnv";
+export type FallbackResolver = "handoffTokens" | "providerModel" | "webBrowser" | "privateNetwork" | "searchKey" | "searchKeyEnv" | "moxenTools";
 
 /** What is in force for an unset setting, worked out in core so a client only draws it. */
 export interface SettingEffective {
@@ -730,14 +730,37 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     fallback: { key: "thinkingEffort" },
   },
   {
-    key: "providers.claude.moxenTools",
-    label: "Moxen's tools",
-    description: "Give Claude Code threads Moxen's own tools (delegate, hand off, task status). Turn off for a provider you do not want orchestrating.",
-    appliesAt: "next-session",
+    key: "providers.claude.orchestration",
+    label: "Delegation tools",
+    description: "Give Claude Code threads Moxen's tools for coordinating threads: delegate a task to another thread, read its status, list the models to delegate to, cancel it. Off for a provider you do not want orchestrating; Moxen's web_fetch is switched on its own.",
     section: "provider:claude",
     group: "Tools",
     kind: { type: "boolean" },
+    defaultValue: undefined,
+    fallback: { resolver: "moxenTools" },
+    appliesAt: "next-session",
+  },
+  {
+    key: "providers.claude.webFetch",
+    label: "Moxen's web_fetch",
+    description: "Give Claude Code threads Moxen's web_fetch, which reads a page as text and loads it in a browser when a plain request cannot (Web tools, on the Turns tab).",
+    section: "provider:claude",
+    group: "Tools",
+    kind: { type: "boolean" },
+    defaultValue: undefined,
+    fallback: { resolver: "moxenTools" },
+    appliesAt: "next-session",
+  },
+  {
+    key: "providers.claude.moxenTools",
+    label: "Moxen's tools",
+    description: "Kept so older configs still load: Moxen's tools all at once. Off turns off both 'Delegation tools' and 'Moxen's web_fetch' while those are unset.",
+    section: "provider:claude",
+    group: "Tools",
+    hidden: true,
+    kind: { type: "boolean" },
     defaultValue: true,
+    appliesAt: "next-session",
   },
   {
     key: "providers.claude.mcpExclude",
@@ -947,14 +970,37 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     fallback: { key: "thinkingEffort" },
   },
   {
-    key: "providers.opencode.moxenTools",
-    label: "Moxen's tools",
-    description: "Give OpenCode threads Moxen's own tools (delegate, hand off, task status). Turn off for a provider you do not want orchestrating.",
-    appliesAt: "next-session",
+    key: "providers.opencode.orchestration",
+    label: "Delegation tools",
+    description: "Give OpenCode threads Moxen's tools for coordinating threads: delegate a task to another thread, read its status, list the models to delegate to, cancel it. Off for a provider you do not want orchestrating; Moxen's web_fetch is switched on its own.",
     section: "provider:opencode",
     group: "Tools",
     kind: { type: "boolean" },
+    defaultValue: undefined,
+    fallback: { resolver: "moxenTools" },
+    appliesAt: "next-session",
+  },
+  {
+    key: "providers.opencode.webFetch",
+    label: "Moxen's web_fetch",
+    description: "Give OpenCode threads Moxen's web_fetch, which reads a page as text and loads it in a browser when a plain request cannot (Web tools, on the Turns tab).",
+    section: "provider:opencode",
+    group: "Tools",
+    kind: { type: "boolean" },
+    defaultValue: undefined,
+    fallback: { resolver: "moxenTools" },
+    appliesAt: "next-session",
+  },
+  {
+    key: "providers.opencode.moxenTools",
+    label: "Moxen's tools",
+    description: "Kept so older configs still load: Moxen's tools all at once. Off turns off both 'Delegation tools' and 'Moxen's web_fetch' while those are unset.",
+    section: "provider:opencode",
+    group: "Tools",
+    hidden: true,
+    kind: { type: "boolean" },
     defaultValue: true,
+    appliesAt: "next-session",
   },
   {
     key: "providers.opencode.mcpExclude",
@@ -1108,14 +1154,37 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     fallback: { key: "thinkingEffort" },
   },
   {
-    key: "providers.harness.moxenTools",
-    label: "Moxen's tools",
-    description: "Give Moxen Harness threads Moxen's own tools (delegate, hand off, task status). Turn off for a provider you do not want orchestrating.",
-    appliesAt: "next-session",
+    key: "providers.harness.orchestration",
+    label: "Delegation tools",
+    description: "Give Moxen Harness threads Moxen's tools for coordinating threads: delegate a task to another thread, read its status, list the models to delegate to, cancel it. Off for a provider you do not want orchestrating; Moxen's web_fetch is switched on its own.",
     section: "provider:harness",
     group: "Tools",
     kind: { type: "boolean" },
+    defaultValue: undefined,
+    fallback: { resolver: "moxenTools" },
+    appliesAt: "next-session",
+  },
+  {
+    key: "providers.harness.webFetch",
+    label: "Moxen's web_fetch",
+    description: "Give Moxen Harness threads Moxen's web_fetch, which reads a page as text and loads it in a browser when a plain request cannot (Web tools, on the Turns tab).",
+    section: "provider:harness",
+    group: "Tools",
+    kind: { type: "boolean" },
+    defaultValue: undefined,
+    fallback: { resolver: "moxenTools" },
+    appliesAt: "next-session",
+  },
+  {
+    key: "providers.harness.moxenTools",
+    label: "Moxen's tools",
+    description: "Kept so older configs still load: Moxen's tools all at once. Off turns off both 'Delegation tools' and 'Moxen's web_fetch' while those are unset.",
+    section: "provider:harness",
+    group: "Tools",
+    hidden: true,
+    kind: { type: "boolean" },
     defaultValue: true,
+    appliesAt: "next-session",
   },
   {
     key: "providers.harness.mcpExclude",
@@ -1570,6 +1639,12 @@ function legacySearchSlot(config: CliConfig, descriptor: SettingDescriptor, fiel
 }
 
 const FALLBACK_RESOLVERS: Readonly<Record<FallbackResolver, (config: CliConfig, descriptor: SettingDescriptor) => SettingEffective | undefined>> = {
+  /** A provider's delegation tools or web_fetch, unset: the older all-at-once `moxenTools` (`moxenToolsOf`), else on. */
+  moxenTools(config, descriptor) {
+    const kind = /^providers\.(claude|opencode|harness)\./.exec(descriptor.key)?.[1] as "claude" | "opencode" | "harness" | undefined;
+    const legacy = kind === undefined ? undefined : config.providers?.[kind]?.moxenTools;
+    return legacy === false ? { value: false, label: "Off", origin: `from providers.${kind}.moxenTools in the config file` } : { value: true, label: "On" };
+  },
   /** The shared browser setting, unset: the Harness's older key when the file has it (`webPolicy`), else When needed. */
   webBrowser(config, descriptor) {
     const legacy = config.providers?.harness?.webBrowser;

@@ -334,6 +334,11 @@ describe("moxen web_fetch", () => {
     expect(legacy.text).toContain("No browser is available");
   });
 
+  it("is left off the list, and refused, for a provider that has it switched off", async () => {
+    expect(moxenToolsFor({ webFetch: false }).map((tool) => tool.name)).not.toContain("web_fetch");
+    expect(await callMoxenTool(api, "t1", "web_fetch", { url: "https://example.com/" }, { webFetch: false })).toMatchObject({ isError: true, text: expect.stringContaining("switched off") });
+  });
+
   it("keeps cloud metadata out even when private networks are allowed", async () => {
     const open = { web: async () => webPolicy({ privateNetwork: true }, undefined, false) };
     const result = await callMoxenTool(api, "t1", "web_fetch", { url: "http://169.254.169.254/latest/meta-data/" }, open);

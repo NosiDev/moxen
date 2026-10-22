@@ -27,12 +27,22 @@ export const MOXEN_MCP_INSTRUCTIONS =
 /** What a delegated task is told: it has no delegation tools, so only what is left is described. */
 export const MOXEN_DELEGATED_MCP_INSTRUCTIONS = "web_fetch reads a web page as text, retrying through a browser for pages built by scripts.";
 
+/** The server's instructions for the tools a session has: the delegation tools, `web_fetch`, both, or neither. */
+export function moxenInstructions(options: { readonly delegated?: boolean; readonly webFetch?: boolean }): string {
+  const web = options.webFetch !== false;
+  if (options.delegated === true) return web ? MOXEN_DELEGATED_MCP_INSTRUCTIONS : "";
+  return web ? MOXEN_MCP_INSTRUCTIONS : MOXEN_MCP_INSTRUCTIONS.replace(/ web_fetch reads a web page as text; it is not part of delegating\.$/, "");
+}
+
 /** How a client asks for the `todos` tool too: the HTTP endpoint's query, the stdio server's flag. */
 export const MOXEN_CHECKLIST_QUERY = "checklist=1";
 export const MOXEN_CHECKLIST_ARG = "--checklist";
 /** How a client asks for the tools of a delegated task (no delegation): the HTTP endpoint's query, the stdio server's flag. */
 export const MOXEN_DELEGATED_QUERY = "delegated=1";
 export const MOXEN_DELEGATED_ARG = "--delegated";
+/** How a client asks for the tools without `web_fetch` (switched off for its provider): the HTTP endpoint's query, the stdio server's flag. */
+export const MOXEN_NO_WEB_FETCH_QUERY = "webfetch=0";
+export const MOXEN_NO_WEB_FETCH_ARG = "--no-web-fetch";
 
 export interface McpSessionOptions {
   readonly api: ClientApi;
@@ -41,8 +51,10 @@ export interface McpSessionOptions {
   readonly version?: string;
   /** Also offer `todos`: the provider keeps no checklist of its own. */
   readonly checklist?: boolean;
-  /** The thread is a delegated task: no delegation tools (it does not delegate again). */
+  /** No delegation tools: the thread is a delegated task (it does not delegate again), or its provider has them off. */
   readonly delegated?: boolean;
+  /** False: no `web_fetch` (switched off for the thread's provider). */
+  readonly webFetch?: boolean;
 }
 
 export interface ServeMcpOptions extends McpSessionOptions {
@@ -80,20 +92,20 @@ export async function answerMcp(options: McpSessionOptions, raw: unknown): Promi
           protocolVersion,
           capabilities: { tools: {} },
           serverInfo: { name: "moxen", version: options.version ?? "0.0.0" },
-          instructions: options.delegated === true ? MOXEN_DELEGATED_MCP_INSTRUCTIONS : MOXEN_MCP_INSTRUCTIONS,
+          instructions: moxenInstructions(options),
         });
       }
       case "ping":
         return reply({});
       case "tools/list":
-        return reply({ tools: moxenToolsFor({ checklist: options.checklist === true, delegated: options.delegated === true }) });
+        return reply({ tools: moxenToolsFor({ checklist: options.checklist === true, delegated: options.delegated === true, webFetch: options.webFetch !== false }) });
       case "tools/call": {
         const name = typeof params.name === "string" ? params.name : "";
         const args =
           params.arguments !== null && typeof params.arguments === "object" && !Array.isArray(params.arguments)
             ? (params.arguments as Record<string, unknown>)
             : {};
-        const result = await callMoxenTool(options.api, options.parentThreadId, name, args, { delegated: options.delegated === true });
+        const result = await callMoxenTool(options.api, options.parentThreadId, name, args, { delegated: options.delegated === true, webFetch: options.webFetch !== false });
         return reply({ content: [{ type: "text", text: result.text }], isError: result.isError });
       }
       default:

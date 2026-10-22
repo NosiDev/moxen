@@ -53,7 +53,7 @@ export const MCP_SERVER_FIELDS: readonly ListField[] = [
   {
     path: "providers",
     label: "Offered to",
-    description: "Which providers get this server: claude, opencode, harness, separated by commas. Unset: all of them. Each provider's page also has an MCP servers setting that switches servers off for that provider; this older limit is kept for files that have it.",
+    description: "Kept so older files still load: which providers got this server. It is read once, as the MCP servers checklist on each provider's tab (a provider it left out has the server switched off there), and never decides anything on its own. Setting it does the same.",
     group: "Who gets it",
     hidden: true,
     kind: { type: "words", separator: "comma" },

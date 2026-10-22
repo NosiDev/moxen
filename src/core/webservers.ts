@@ -8,7 +8,7 @@
  * us, so there is nothing to say about it and the web-tool preference does not
  * cover it.
  */
-import type { McpServerEntry } from "./mcp.js";
+import { moxenToolsOf, type McpServerEntry } from "./mcp.js";
 import { disabledNativeToolNames as parseNameList } from "./nativetools.js";
 import { MCP_PRESETS } from "./providers/harness/presets.js";
 import type { CliConfig } from "./types.js";
@@ -88,7 +88,7 @@ export function webOrderEntries(config: CliConfig, provider: "claude" | "opencod
     ];
   }
   return [
-    { id: "moxen", label: "Moxen's web_fetch", summary: "web_fetch", locked: own?.moxenTools === false ? "Moxen's tools are off for this provider" : null },
+    { id: "moxen", label: "Moxen's web_fetch", summary: "web_fetch", locked: moxenToolsOf(own).webFetch ? null : "Moxen's web_fetch is off for this provider" },
     { id: "exa", label: "Exa", summary: "web_fetch_exa", locked: added("exa", "Exa") },
     native,
   ];
@@ -102,5 +102,5 @@ export function webOrderUnavailable(config: CliConfig, provider: "claude" | "ope
       ? undefined
       : "Needs the Brave Search or Exa server from Moxen's own list (MCP servers → Add), switched on for this provider. Other search servers are not covered.";
   }
-  return entries.some((entry) => entry.locked === null) ? undefined : "Needs Moxen's tools on for this provider, or the Exa server from Moxen's own list.";
+  return entries.some((entry) => entry.locked === null) ? undefined : "Needs Moxen's web_fetch on for this provider, or the Exa server from Moxen's own list.";
 }

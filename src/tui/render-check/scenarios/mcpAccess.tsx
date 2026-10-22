@@ -132,5 +132,16 @@ export async function runMcpAccess(): Promise<void> {
   const server = setup.captureCharFrame();
   console.log(server);
   if (!server.includes("← MCP servers") || !server.includes("Command")) fail("a server did not open with the sidebar narrowed to the MCP servers");
+  // Who gets it, one row per provider, with where that is decided.
+  const serverRows = server.split("\n");
+  const inForce = serverRows.findIndex((row) => row.includes("In force") && row.indexOf("In force") < 28);
+  if (inForce < 0) fail("a server's page has no In force section");
+  await act(async () => setup.mockMouse.click(serverRows[inForce]!.indexOf("In force") + 1, inForce));
+  await settle();
+  const reach = setup.captureCharFrame();
+  console.log(reach);
+  for (const expected of ["Claude Code", "Gets it", "MCP servers on the OpenCode tab"]) {
+    if (!reach.includes(expected)) fail(`a server's page does not say who gets it ("${expected}")`);
+  }
   setup.renderer.destroy();
 }

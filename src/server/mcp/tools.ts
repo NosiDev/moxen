@@ -137,8 +137,8 @@ export const MOXEN_TOOLS: readonly McpTool[] = [
 export const DELEGATION_TOOLS: ReadonlySet<string> = new Set(["delegate", "task_status", "models", "task_cancel"]);
 
 /** The tools one session is offered: all of them, less the delegation ones for a delegated task, plus the checklist where the provider keeps none. */
-export function moxenToolsFor(options: { readonly checklist?: boolean; readonly delegated?: boolean }): readonly McpTool[] {
-  const tools = options.delegated === true ? MOXEN_TOOLS.filter((tool) => !DELEGATION_TOOLS.has(tool.name)) : MOXEN_TOOLS;
+export function moxenToolsFor(options: { readonly checklist?: boolean; readonly delegated?: boolean; readonly webFetch?: boolean }): readonly McpTool[] {
+  const tools = MOXEN_TOOLS.filter((tool) => !(options.delegated === true && DELEGATION_TOOLS.has(tool.name)) && !(options.webFetch === false && tool.name === "web_fetch"));
   return options.checklist === true ? [...tools, TODOS_TOOL] : tools;
 }
 
@@ -252,11 +252,12 @@ export async function callMoxenTool(
   parentThreadId: string,
   name: string,
   args: Record<string, unknown>,
-  options: { readonly sleep?: (ms: number) => Promise<void>; readonly delegated?: boolean; readonly web?: () => Promise<WebPolicy> } = {},
+  options: { readonly sleep?: (ms: number) => Promise<void>; readonly delegated?: boolean; readonly webFetch?: boolean; readonly web?: () => Promise<WebPolicy> } = {},
 ): Promise<ToolResult> {
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   // Hidden from the list, and refused here too: a client can call a tool it was never shown.
   if (options.delegated === true && DELEGATION_TOOLS.has(name)) return { text: `${name} is not available in a delegated task: do the task yourself.`, isError: true };
+  if (options.webFetch === false && name === "web_fetch") return { text: "web_fetch is switched off for this provider.", isError: true };
   try {
     switch (name) {
       case "delegate":

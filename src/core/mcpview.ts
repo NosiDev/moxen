@@ -3,9 +3,9 @@
  * CLI say the same thing. Secret values (`env`, `headers`) never leave here:
  * only their names do.
  */
-import type { ListFieldView, ListItemView } from "./configschema.js";
+import type { ListFieldView, ListItemView, ListResolvedRow } from "./configschema.js";
 import { MCP_SERVER_FIELDS } from "./mcpschema.js";
-import type { McpServerEntry } from "./mcp.js";
+import { parseNameList, type McpServerEntry } from "./mcp.js";
 import type { CliConfig } from "./types.js";
 
 export const HIDDEN = "<hidden>";
@@ -48,8 +48,28 @@ export function describeMcpServers(config: CliConfig): readonly ListItemView[] {
       id: name,
       title: name,
       summary: summary(entry),
-      status: entry.disabled === true ? "Switched off: no provider gets this server." : null,
+      status:
+        entry.disabled === true
+          ? "Switched off: no provider gets this server."
+          : name === MOXEN_SERVER
+            ? "Replaces Moxen's built-in tools (delegate, task status, web_fetch) for every provider that gets it."
+            : null,
       fields: MCP_SERVER_FIELDS.map((field) => fieldView(field.path, entry as unknown as Record<string, unknown>)),
-      resolved: [],
+      resolved: reach(config, name, entry),
     }));
+}
+
+/** The name Moxen's own tools go by; a configured server of that name stands in for them. */
+const MOXEN_SERVER = "moxen";
+
+const PROVIDER_NAMES = { claude: "Claude Code", opencode: "OpenCode", harness: "Moxen Harness" } as const;
+
+/** Who gets a server, one row per provider, with where that is decided: the server's own switch, else that provider's checklist. */
+function reach(config: CliConfig, name: string, entry: McpServerEntry): ListResolvedRow[] {
+  return (Object.keys(PROVIDER_NAMES) as Array<keyof typeof PROVIDER_NAMES>).map((kind) => {
+    const label = PROVIDER_NAMES[kind];
+    if (entry.disabled === true) return { label, value: "No", origin: "this server is switched off" };
+    const excluded = parseNameList(config.providers?.[kind]?.mcpExclude).includes(name);
+    return excluded ? { label, value: "No", origin: `switched off under MCP servers on the ${label} tab` } : { label, value: "Gets it", origin: `MCP servers on the ${label} tab` };
+  });
 }

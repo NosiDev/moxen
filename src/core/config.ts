@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { CliError } from "./errors.js";
-import { parseMcpServers, type McpServerEntry } from "./mcp.js";
+import { parseMcpServers, parseNameList, type McpServerEntry } from "./mcp.js";
 import { normalizeHarnessConfig } from "./providers/harness/profiles.js";
 import { HIDDEN_VALUE, writeListValue } from "./configlist.js";
 import { normalizeHandoffModels } from "./handoffmodels.js";
@@ -229,7 +229,7 @@ export function normalizeConfig(raw: unknown): CliConfig {
   if (updates) result.updates = updates;
   const providers = normalizeProviders(input.providers);
   if (providers) result.providers = providers;
-  return applyEnvironmentOverrides(result);
+  return applyEnvironmentOverrides(retireServerProviders(result));
 }
 
 function asSection(value: unknown, label: string): Record<string, unknown> {
@@ -306,6 +306,8 @@ function normalizeProviders(raw: unknown): ProvidersConfig | undefined {
       "model",
       "thinkingEffort",
       "moxenTools",
+      "orchestration",
+      "webFetch",
       "todos",
       "mcpExclude",
       "disabledNativeTools",
@@ -317,13 +319,13 @@ function normalizeProviders(raw: unknown): ProvidersConfig | undefined {
     if (claude || args || models) result.claude = { ...(claude ?? {}), ...(args ? { launchArgs: args } : {}), ...models };
   }
   if (input.opencode !== undefined) {
-    const opencode = normalizeSection<OpencodeProviderConfig>(input.opencode, "providers.opencode", ["binaryPath", "bundledSkills", "autoCompact", "compactBuffer", "autoHandoff", "autoHandoffTokens", "autoHandoffPercent", "runtimeMode", "model", "thinkingEffort", "moxenTools", "todos", "mcpExclude", "disabledNativeTools", "webSearchOrder", "webFetchOrder", "moxenPrompt"]);
+    const opencode = normalizeSection<OpencodeProviderConfig>(input.opencode, "providers.opencode", ["binaryPath", "bundledSkills", "autoCompact", "compactBuffer", "autoHandoff", "autoHandoffTokens", "autoHandoffPercent", "runtimeMode", "model", "thinkingEffort", "moxenTools", "orchestration", "webFetch", "todos", "mcpExclude", "disabledNativeTools", "webSearchOrder", "webFetchOrder", "moxenPrompt"]);
     const models = handoffModelsOf(input.opencode, "providers.opencode");
     if (opencode || models) result.opencode = { ...opencode, ...models };
   }
   if (input.harness !== undefined) {
     const withProfiles = normalizeHarnessConfig(input.harness);
-    const defaults = normalizeSection<HarnessProviderConfig>(input.harness, "providers.harness", ["runtimeMode", "model", "thinkingEffort", "moxenTools", "todos", "mcpExclude", "autoHandoff", "autoHandoffTokens", "autoHandoffPercent", "slots", "autoCompact", "autoCompactPercent", "autoCompactTokens", "keepRecentTokens", "webSearch", "webSearchKey", "webSearchKeyEnv", "searxngUrl", "webBrowser", "webBrowserPath", "webPrivateNetwork"]);
+    const defaults = normalizeSection<HarnessProviderConfig>(input.harness, "providers.harness", ["runtimeMode", "model", "thinkingEffort", "moxenTools", "orchestration", "webFetch", "todos", "mcpExclude", "autoHandoff", "autoHandoffTokens", "autoHandoffPercent", "slots", "autoCompact", "autoCompactPercent", "autoCompactTokens", "keepRecentTokens", "webSearch", "webSearchKey", "webSearchKeyEnv", "searxngUrl", "webBrowser", "webBrowserPath", "webPrivateNetwork"]);
     const models = handoffModelsOf(input.harness, "providers.harness");
     const section = asSection(input.harness, "providers.harness");
     const keys = normalizeSection<Partial<Record<KeyedSearchBackend, string>>>(section.webSearchKeys, "providers.harness.webSearchKeys", ["exa", "brave"]);
@@ -331,6 +333,32 @@ function normalizeProviders(raw: unknown): ProvidersConfig | undefined {
     if (withProfiles || defaults || models || keys || keyEnvs) result.harness = { ...defaults, ...withProfiles, ...models, ...(keys ? { webSearchKeys: keys } : {}), ...(keyEnvs ? { webSearchKeyEnvs: keyEnvs } : {}) };
   }
   return Object.keys(result).length > 0 ? result : undefined;
+}
+
+/**
+ * A configured server's older `providers` list ("Offered to") is a limit no
+ * page shows. It is read as what it meant: each provider it leaves out gets
+ * the server in its own `mcpExclude` (the checklist on that provider's tab),
+ * and the list is dropped, so nothing hidden decides whether a server is
+ * offered. Older builds read `mcpExclude` too, so the result means the same to them.
+ */
+function retireServerProviders(config: CliConfig): CliConfig {
+  const limited = Object.entries(config.mcpServers ?? {}).filter(([, entry]) => entry.providers !== undefined);
+  if (limited.length === 0) return config;
+  const servers: Record<string, McpServerEntry> = { ...config.mcpServers };
+  const providers: ProvidersConfig = { ...config.providers };
+  for (const [name, entry] of limited) {
+    const { providers: offered, ...rest } = entry;
+    servers[name] = rest as McpServerEntry;
+    if (offered === undefined || offered.length === 0) continue;
+    for (const kind of ["claude", "opencode", "harness"] as const) {
+      if (offered.includes(kind)) continue;
+      const own = providers[kind] ?? {};
+      const excluded = parseNameList(own.mcpExclude);
+      if (!excluded.includes(name)) providers[kind] = { ...own, mcpExclude: [...excluded, name].join(", ") } as never;
+    }
+  }
+  return { ...config, mcpServers: servers, providers };
 }
 
 function envOverride(name: string): string | undefined {

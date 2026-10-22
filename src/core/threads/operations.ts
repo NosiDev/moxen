@@ -33,7 +33,7 @@ import {
 import { APP_NAME } from "../config.js";
 import { CliError } from "../errors.js";
 import { disabledNativeToolNames } from "../nativetools.js";
-import { outOfProcess, parseNameList, resolveMcpServers, routeMcpServers, type McpServerEntry, type McpServerSpec, type OutOfProcessMcpServerSpec } from "../mcp.js";
+import { moxenToolsOf, outOfProcess, parseNameList, resolveMcpServers, routeMcpServers, type McpServerEntry, type McpServerSpec, type OutOfProcessMcpServerSpec } from "../mcp.js";
 import { runProcess } from "../infra/process.js";
 import {
   ensureStoredProject,
@@ -128,7 +128,7 @@ export interface OperationContext {
    * over them by name, so `"moxen": null` there removes them. Delegated
    * threads get none: a subagent does not spawn subagents.
    */
-  readonly builtinMcpServers?: (threadId: string, options?: { readonly delegated: boolean }) => readonly McpServerSpec[];
+  readonly builtinMcpServers?: (threadId: string, options?: { readonly delegated: boolean; readonly webFetch?: boolean }) => readonly McpServerSpec[];
 }
 
 
@@ -179,8 +179,10 @@ async function sessionSetup(
   const delegation = await delegationOf(ctx.store, thread.id);
   const kind = driverKindOfInstance(instanceId);
   const providerConfig = kind === null ? undefined : ctx.config.providers?.[kind];
-  // A delegated thread gets Moxen's tools less the ones that delegate (it does not delegate again); a provider the user turned them off for gets none.
-  const builtin = providerConfig?.moxenTools === false ? [] : (ctx.builtinMcpServers?.(thread.id, { delegated: delegation !== null }) ?? []);
+  // A delegated thread gets Moxen's tools less the ones that delegate (it does not delegate again), and so does a provider
+  // the user turned orchestration off for; `web_fetch` is switched on its own. With both off, the server is left out.
+  const reach = moxenToolsOf(providerConfig);
+  const builtin = !reach.orchestration && !reach.webFetch ? [] : (ctx.builtinMcpServers?.(thread.id, { delegated: delegation !== null || !reach.orchestration, webFetch: reach.webFetch }) ?? []);
   const base: Record<string, McpServerEntry> = {};
   for (const built of builtin) {
     // Layered by name like any configured server, in the form a config entry has.
@@ -211,7 +213,7 @@ async function sessionSetup(
     delegation,
     userInstructions: user,
     checklist: providerConfig?.todos !== false,
-    delegationTools: builtin.some((server) => server.name === "moxen"),
+    delegationTools: reach.orchestration && builtin.some((server) => server.name === "moxen"),
     ...(nativeKind === null ? {} : { web: { provider: nativeKind, disabledNativeTools: nativeConfig?.disabledNativeTools, searchOrder: parseNameList(nativeConfig?.webSearchOrder), fetchOrder: parseNameList(nativeConfig?.webFetchOrder), servers: mcpServers } }),
   });
   // What this provider's conversation was given. With no history behind it (no session handle yet) there

@@ -113,6 +113,10 @@ export interface HarnessProviderConfig {
   autoHandoffModels?: Record<string, number>;
   /** Offer Moxen's own tools (delegate, handoff, task status) to threads on this provider. Unset: yes. */
   moxenTools?: boolean;
+  /** Moxen's delegation tools (delegate, task status, models, cancel). Unset: `moxenTools`, else on. */
+  orchestration?: boolean;
+  /** Moxen's `web_fetch`. Unset: `moxenTools`, else on. */
+  webFetch?: boolean;
   /** MCP servers this provider does not get, as comma-separated names. Unset: it gets every server the server entry itself offers it. Settings key: `providers.<kind>.mcpExclude`. */
   mcpExclude?: string;
   /** Offer the model a to-do list on this provider. Unset: yes. */
@@ -260,6 +264,10 @@ export interface OpencodeProviderConfig {
   autoHandoffModels?: Record<string, number>;
   /** Offer Moxen's own tools (delegate, handoff, task status) to threads on this provider. Unset: yes. */
   moxenTools?: boolean;
+  /** Moxen's delegation tools (delegate, task status, models, cancel). Unset: `moxenTools`, else on. */
+  orchestration?: boolean;
+  /** Moxen's `web_fetch`. Unset: `moxenTools`, else on. */
+  webFetch?: boolean;
   /** MCP servers this provider does not get, as comma-separated names. Unset: it gets every server the server entry itself offers it. Settings key: `providers.<kind>.mcpExclude`. */
   mcpExclude?: string;
   /** Offer the model a to-do list on this provider. Unset: yes. */
@@ -298,6 +306,10 @@ export interface ClaudeProviderConfig {
   autoHandoffModels?: Record<string, number>;
   /** Offer Moxen's own tools (delegate, handoff, task status) to threads on this provider. Unset: yes. */
   moxenTools?: boolean;
+  /** Moxen's delegation tools (delegate, task status, models, cancel). Unset: `moxenTools`, else on. */
+  orchestration?: boolean;
+  /** Moxen's `web_fetch`. Unset: `moxenTools`, else on. */
+  webFetch?: boolean;
   /** MCP servers this provider does not get, as comma-separated names. Unset: it gets every server the server entry itself offers it. Settings key: `providers.<kind>.mcpExclude`. */
   mcpExclude?: string;
   /** Offer the model a to-do list on this provider. Unset: yes. */

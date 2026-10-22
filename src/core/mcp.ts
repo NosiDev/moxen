@@ -243,6 +243,16 @@ function toSpec(name: string, entry: McpServerEntry): McpServerSpec {
 }
 
 /** Names as kept in a setting: comma-separated, blanks and repeats dropped. */
+/**
+ * Which of Moxen's own tools a provider's threads get: the delegation tools
+ * and `web_fetch` are switched apart, each falling back to the older
+ * all-or-nothing `moxenTools` (so `moxenTools: false` still turns both off).
+ */
+export function moxenToolsOf(config: { readonly moxenTools?: boolean; readonly orchestration?: boolean; readonly webFetch?: boolean } | undefined): { readonly orchestration: boolean; readonly webFetch: boolean } {
+  const legacy = config?.moxenTools !== false;
+  return { orchestration: config?.orchestration ?? legacy, webFetch: config?.webFetch ?? legacy };
+}
+
 export function parseNameList(text: string | undefined): string[] {
   return [...new Set((text ?? "").split(",").map((name) => name.trim()).filter((name) => name !== ""))];
 }

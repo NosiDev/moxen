@@ -202,16 +202,18 @@ describe("MCP servers on a provider's page", () => {
   const settings = describeSettings(config);
   const descriptor = (key: string) => settings.find((view) => view.descriptor.key === key)!;
 
-  it("lists every server, and says why one stays out whatever is ticked", () => {
+  it("lists every server, and says why one stays out whatever is ticked; an older 'offered to' limit is ticked out instead", () => {
     const control = settingControl(descriptor("providers.claude.mcpExclude").descriptor, undefined, settings, null);
     expect(control.kind === "servers" && control.servers.map((server) => [server.name, server.locked])).toEqual([
       ["fs", null],
       ["gh", null],
       ["off", "switched off on its own entry"],
     ]);
-    const harness = settingControl(descriptor("providers.harness.mcpExclude").descriptor, "fs", settings, null);
-    expect(harness.kind === "servers" && harness.servers.find((server) => server.name === "gh")?.locked).toBe("only offered to claude");
-    expect(harness.kind === "servers" && harness.excluded).toEqual(["fs"]);
+    // `gh` was offered to Claude Code only: the other providers have it switched off on their own checklist, where it can be seen and changed.
+    const harness = settingControl(descriptor("providers.harness.mcpExclude").descriptor, descriptor("providers.harness.mcpExclude").value, settings, null);
+    expect(harness.kind === "servers" && harness.servers.find((server) => server.name === "gh")?.locked).toBeNull();
+    expect(harness.kind === "servers" && harness.excluded).toEqual(["fs", "gh"]);
+    expect(descriptor("providers.opencode.mcpExclude").value).toBe("gh");
   });
 
   it("summarises how many it gets, counting only the ones it could get", () => {
@@ -222,7 +224,7 @@ describe("MCP servers on a provider's page", () => {
     expect(label("providers.claude.mcpExclude", undefined)).toBe("All 2 servers");
     expect(label("providers.claude.mcpExclude", "fs")).toBe("1 of 2");
     expect(label("providers.claude.mcpExclude", "fs,gh")).toBe("None");
-    expect(label("providers.harness.mcpExclude", undefined)).toBe("The server");
+    expect(label("providers.harness.mcpExclude", String(descriptor("providers.harness.mcpExclude").value))).toBe("None");
   });
 });
 
@@ -245,7 +247,11 @@ describe("a provider's own tools and web preference on its page", () => {
     expect(view(normalizeConfig({}), search).unavailable).toContain("Brave Search or Exa");
     // Moxen's own web_fetch is there for the fetch order unless Moxen's tools are off.
     expect(view(normalizeConfig({}), fetch).unavailable).toBeUndefined();
-    expect(view(normalizeConfig({ providers: { claude: { moxenTools: false } } }), fetch).unavailable).toContain("Moxen's tools on");
+    expect(view(normalizeConfig({ providers: { claude: { moxenTools: false } } }), fetch).unavailable).toContain("Moxen's web_fetch on");
+    expect(view(normalizeConfig({ providers: { claude: { webFetch: false } } }), fetch).unavailable).toContain("Moxen's web_fetch on");
+    // Orchestration off leaves web_fetch, and the order's Moxen row, as they were.
+    expect(view(normalizeConfig({ providers: { claude: { orchestration: false } } }), fetch).unavailable).toBeUndefined();
+    expect(view(normalizeConfig({ providers: { claude: { orchestration: false } } }), fetch).order?.find((entry) => entry.id === "moxen")?.locked).toBeNull();
     const brave = { type: "stdio" as const, command: "npx", args: ["-y", "@brave/brave-search-mcp-server"] };
     expect(view(normalizeConfig({ mcpServers: { search: brave } }), search).unavailable).toBeUndefined();
     // Switched off, limited to another provider, or excluded on this one: not available to it.
