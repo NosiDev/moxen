@@ -1280,29 +1280,21 @@ export function App({
   const compactReady = compactState !== null && compactState.blockers.length === 0;
   const compactKey = openThreadId === null || threadState.contextUsage === null ? null : `compact:${openThreadId}:${threadState.contextUsage.usedTokens}`;
   const [dismissedCompactKey, setDismissedCompactKey] = useState<string | null>(null);
-  const compactSent = useRef<string | null>(null);
   const handoffKey = openThreadId === null ? null : `handoff:${openThreadId}`;
-  const handoffAskedFor = useRef<Set<string>>(new Set());
   const [dismissedHandoffKey, setDismissedHandoffKey] = useState<string | null>(null);
+  // "Automatic" is the server's to do (`actOnLongThread`, after every turn), so a thread no client has open is
+  // handed off or compacted too. What is left here is following an automatic hand-off of the thread on screen.
+  const followedSince = useRef<{ threadId: string | null; since: string }>({ threadId: null, since: new Date().toISOString() });
+  if (followedSince.current.threadId !== openThreadId) followedSince.current = { threadId: openThreadId, since: new Date().toISOString() };
+  const automaticContinuation = useMemo(() => {
+    const row = [...threadState.activities].reverse().find((activity) => activity.kind === "thread.continued");
+    const payload = row?.payload as { threadId?: unknown; automatic?: unknown } | undefined;
+    return row !== undefined && payload?.automatic === true && typeof payload.threadId === "string" && row.createdAt >= followedSince.current.since ? payload.threadId : null;
+  }, [threadState.activities]);
   useEffect(() => {
-    // Once per thread, and only when idle: a failed or refused attempt is not retried in a loop.
-    if (handoffMode !== "auto" || !handoffReady || handoffKey === null || handoffAskedFor.current.has(handoffKey)) return;
-    handoffAskedFor.current.add(handoffKey);
-    usageBanner.continueInNewThread();
+    if (automaticContinuation !== null) setOpenThreadId(automaticContinuation);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [handoffMode, handoffReady, handoffKey]);
-  useEffect(() => {
-    // Once per thread until a compaction resets its usage: a refused or failed /compact is not retried in a loop.
-    const thread = openThreadId === null ? null : `compact:${openThreadId}`;
-    if (compact?.mode !== "auto" || !compactReady || thread === null || compactSent.current === thread) return;
-    compactSent.current = thread;
-    compactSession(() => undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compact?.mode, compactReady, openThreadId]);
-  useEffect(() => {
-    // Below the line again (a compaction worked): the next climb may compact.
-    if (compactState === null) compactSent.current = null;
-  }, [compactState === null]);
+  }, [automaticContinuation]);
   /** What waits over the composer, most urgent first; the banner pages between them. */
   const notices: Notice[] = [];
   if (usageBanner.banner !== null) {

@@ -54,14 +54,19 @@ MCP server sets, skills — rides ahead of the next prompt.
 
 Models make more tool-call mistakes as their window fills, so past
 a share of the model's window (`ui.autoHandoffPercent`, 50 by default; the Hand off at slider offers 25, 50 and 75) a thread should move to a fresh one. Because it is a share, a model with a bigger window hands off later. `ui.autoHandoffTokens` ("Hand off at a fixed size") states it in tokens instead and wins over the share at the same level.
-The TUI watches the open thread's context reading (`tui/model/autohandoff.ts`).
-With `ui.autoHandoff` set to `ask` (the default) a card appears over the composer
-with **Hand off** and **Not now**; with `auto` Moxen sends `thread.continue` itself
-(the same handoff document as "Continue in a new thread") as soon as nothing is
-running that the new thread would lose track of: no turn, no subthread, no
-background task and no queued message. Until then the card names what it waits for
-and the button hands off by hand. It is Moxen that decides, not the model, and it
-fires at most once per thread. `off` turns the card and the automatic hand-off off.
+The rules are in core (`core/threads/longthreads.ts`), and the server applies
+them after every turn settles, background turns included (`actOnLongThread` in
+`core/threads/operations.ts`), so a thread no client has open is looked after
+too. With `ui.autoHandoff` set to `ask` (the default) a client draws a card over
+the composer with **Hand off** and **Not now**; with `auto` the server continues
+the thread itself (the same handoff document as "Continue in a new thread", and
+a `thread.continued` note marked `automatic`, which the TUI follows to the new
+thread) as soon as nothing is running that the new thread would lose track of:
+no turn, no subthread, no background task and no queued message. Until then the
+card names what it waits for and the button hands off by hand. It is Moxen that
+decides, not the model, and it fires at most once per thread. A delegated task is
+never handed off, because its parent waits on that thread; it is compacted
+instead when it can be. `off` turns the card and the automatic hand-off off.
 
 Each provider can override all of it for its own threads: `providers.claude`,
 `providers.opencode` and `providers.harness` take `autoHandoff`,
@@ -80,12 +85,16 @@ share, the global tokens, the global share, then half the window.
 
 By default Moxen, not Claude Code, compacts a Claude Code thread. It starts
 every session with Claude Code's own auto-compaction off
-(`autoCompactEnabled: false`) and watches the same context reading as the
-hand-off, past `providers.claude.autoCompactPercent` of the window (80 by
+(`autoCompactEnabled: false`) and the server watches the same context reading as
+the hand-off, past `providers.claude.autoCompactPercent` of the window (80 by
 default; the Compact at slider offers 50, 65, 80 and 90). `providers.claude.autoCompact`
 says what happens then: `ask` (the default) shows a card with **Compact** and
 **Not now**; `auto` sends `/compact` itself, the same as "Compact now", once no
-turn is running, at most once until the thread drops below the line again; `claude`
+turn is running and nothing is queued. Because Claude Code's own compaction is
+off, `ask` does not wait for an answer forever: a delegated task (no one to ask)
+is compacted at the line, and any thread halfway from the line to a full window
+(90% with the defaults) is compacted unasked, with a notice saying why. Either
+way it happens at most once until the thread drops below the line again; `claude`
 leaves it all to Claude Code, whose own window (`autoCompactWindow`) then applies.
 A hand-off card can show at the same time: with the defaults it comes first, at 50%.
 OpenCode and the Moxen Harness have their own compaction settings and are not

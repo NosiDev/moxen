@@ -415,10 +415,17 @@ export interface ExecuteTurnArgs {
   readonly afterSend?: () => void | Promise<void>;
   /** A usage limit stopped this turn (`resetsAt` when the provider said): the automatic continue hooks in here. */
   readonly onUsageLimit?: (storeTurnId: string, resetsAt: string | null) => void;
+  /** Once the turn has settled and any queued turn is under way: where the server hands off or compacts a long thread unasked. */
+  readonly afterSettle?: () => Promise<void>;
 }
 
 export function executeTurn(args: ExecuteTurnArgs): Promise<void> {
-  return trackRun(runExecuteTurn(args).then(() => runPromotedTurn(args)));
+  return trackRun(
+    runExecuteTurn(args)
+      .then(() => runPromotedTurn(args))
+      // Never the turn's failure: the turn is settled whatever this does.
+      .then(() => args.afterSettle?.().catch(() => undefined)),
+  );
 }
 
 /** Saved attachments as provider images; a file gone from disk is skipped. */
@@ -482,6 +489,7 @@ async function runPromotedTurn(args: ExecuteTurnArgs): Promise<void> {
       workingDirectory: thread.env.path,
       ...(args.onEvent ? { onEvent: args.onEvent } : {}),
       ...(args.onUsageLimit ? { onUsageLimit: args.onUsageLimit } : {}),
+      ...(args.afterSettle ? { afterSettle: args.afterSettle } : {}),
     });
   } catch {
     // Best effort: the turn stays promoted and a later send can see it.
@@ -519,6 +527,8 @@ export async function ensureDriverSession(
     readonly moxenSkills?: "project" | "served" | "none";
     /** Watch the session for what happens between turns (`watchDriverSession`). */
     readonly store?: ThreadStore;
+    /** After a turn the provider starts itself settles (`ExecuteTurnArgs.afterSettle`). */
+    readonly afterSettle?: () => Promise<void>;
   } = {},
 ): Promise<void> {
   const hasSession = await Effect.runPromise(driver.hasSession(thread.id)).catch(() => false);
@@ -550,7 +560,7 @@ export async function ensureDriverSession(
   );
   // What a provider loaded when it started (or resumed) is what its rules were then: a later edit is news to it.
   await captureRuleBaseline(driver, thread.id, driverKey(selection.instanceId), cwd);
-  if (options.store) watchDriverSession(options.store, driver, thread.id, cwd);
+  if (options.store) watchDriverSession(options.store, driver, thread.id, cwd, options.afterSettle);
 }
 
 const watching = new WeakMap<TurnDriver, Map<string, () => void>>();
@@ -584,7 +594,7 @@ function subagentPayload(event: Extract<ProviderRuntimeEvent, { type: "subagent.
  * - background tasks starting and ending, and the live set of them, become
  *   activity rows the transcript and the tasks panel read.
  */
-export function watchDriverSession(store: ThreadStore, driver: TurnDriver, threadId: string, cwd: string): void {
+export function watchDriverSession(store: ThreadStore, driver: TurnDriver, threadId: string, cwd: string, afterSettle?: () => Promise<void>): void {
   let byThread = watching.get(driver);
   if (!byThread) {
     byThread = new Map();
@@ -621,7 +631,7 @@ export function watchDriverSession(store: ThreadStore, driver: TurnDriver, threa
     // A compaction makes the provider read its rule files again: what it holds now is what is on disk.
     if (event.type === "session.notice" && event.notice === "compacted") void refreshRuleBaseline(driver, threadId);
     if (event.type === "turn.started" && event.origin === "background") {
-      void runBackgroundTurn(store, driver, threadId, event.turnId, cwd);
+      void runBackgroundTurn(store, driver, threadId, event.turnId, cwd, afterSettle);
       return;
     }
     if (event.type === "background.task") {
@@ -675,6 +685,7 @@ async function runBackgroundTurn(
   threadId: string,
   driverTurnId: string,
   cwd: string,
+  afterSettle?: () => Promise<void>,
 ): Promise<void> {
   try {
     const thread = await store.readThreadRecord(threadId);
@@ -689,6 +700,7 @@ async function runBackgroundTurn(
       driverTurnId,
       ...(turn.modelSelection ? { modelSelection: turn.modelSelection } : {}),
       workingDirectory: cwd,
+      ...(afterSettle ? { afterSettle } : {}),
     });
   } catch {
     // Best effort: a background turn that cannot be recorded still runs in

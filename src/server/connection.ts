@@ -39,7 +39,6 @@ import { duplicateListItem } from "../core/configlist.js";
 import { describeSettings, listTarget } from "../core/configschema.js";
 import { HarnessDriver } from "../core/providers/harness/driver.js";
 import { mergeProbed, probeSettledSomething, runProbe, testProfile } from "../core/providers/harness/probe.js";
-import { buildHandoff, continuedTitle } from "../core/threads/handoff.js";
 import { readCommitDetail, readCommitDiff, readOverview } from "../core/git/history.js";
 import {
   commentOnRequest,
@@ -91,6 +90,7 @@ import { onScheduledTurnDue } from "../core/threads/schedule.js";
 import {
   armPendingScheduledTurns,
   cancelTask,
+  continueThread,
   delegate,
   recordChecklist,
   describeTask,
@@ -896,44 +896,13 @@ export class DirectConnection implements ClientApi {
     return { ...answer, provider };
   }
 
-  /**
-   * A new thread that carries on from `threadId`: same project, model,
-   * modes and checkout — the work so far is on that disk — opened with a
-   * handoff document built from the old thread's ledger. The old thread is
-   * left as it is, with a note pointing at its continuation.
-   */
+  /** A new thread that carries on from `threadId`, opened with a handoff of it (`continueThread`). */
   private async continueThread(command: CommandOf<"thread.continue">): Promise<CommandResult<"thread.continue">> {
-    const { store } = await this.context();
-    const source = await store.readThreadRecord(command.threadId);
-    if (!source) throw new CliError("THREAD_NOT_FOUND", `No thread ${command.threadId}.`, { exitCode: 2 });
-    const project = (await listStoredProjects(this.storeRoot)).find((candidate) => candidate.id === source.projectId);
-    const handoff = await buildHandoff(store, source.id, { projectTitle: project?.title ?? null });
-    const title = continuedTitle(source.title);
-    const created = await createThread(store, {
-      projectId: source.projectId,
-      title,
-      modelSelection: source.modelSelection,
-      runtimeMode: source.runtimeMode,
-      interactionMode: source.interactionMode,
-      env: source.env,
+    const continued = await continueThread(await this.context(), {
+      threadId: command.threadId,
+      ...(command.scheduledFor !== undefined ? { scheduledFor: command.scheduledFor } : {}),
     });
-    await this.turnStart({
-      type: "thread.turn.start",
-      threadId: created.id,
-      message: { text: handoff },
-      ...(command.scheduledFor !== undefined ? { scheduledFor: command.scheduledFor, scheduleReason: "user" as const } : {}),
-    });
-    await store.appendLedger(source.id, "activity", {
-      id: store.newId(),
-      threadId: source.id,
-      turnId: null,
-      kind: "thread.continued",
-      summary: `Continued in "${title}"`,
-      payload: { threadId: created.id, title, scheduledFor: command.scheduledFor ?? null },
-      createdAt: store.nowIso(),
-    });
-    store.emit(source.id, "thread-continued");
-    return { threadId: created.id, title, scheduledFor: command.scheduledFor ?? null, accepted: true };
+    return { ...continued, accepted: true };
   }
 
   private async threadCreate(command: CommandOf<"thread.create">): Promise<CommandResult<"thread.create">> {

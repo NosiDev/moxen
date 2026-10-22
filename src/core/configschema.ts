@@ -769,7 +769,7 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     key: "providers.claude.autoCompact",
     label: "Compact long threads",
     description:
-      "Who compacts a thread as it fills. Ask or Automatic: Moxen turns Claude Code's own auto-compaction off and sends /compact itself once the thread passes the share below, asking first with a card or on its own. Claude Code: it decides, as before.",
+      "Who compacts a thread as it fills. Ask or Automatic: Moxen turns Claude Code's own compaction off and compacts past the share below, open or not. Ask offers a card, but a delegated task, or a thread halfway to full, is compacted unasked. Claude Code: it decides.",
     section: "provider:claude",
     group: "Long threads",
     kind: { type: "enum", choices: [choice("ask", "Ask"), choice("auto", "Automatic"), choice("claude", "Claude Code")] },

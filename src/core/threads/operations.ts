@@ -55,7 +55,7 @@ import type {
   WorkspaceMode,
   WorkspaceResolution,
 } from "../types.js";
-import type { ProviderImage, ProviderRuntimeEvent } from "../providers/spi.js";
+import { isCompactCommand, type ProviderImage, type ProviderRuntimeEvent } from "../providers/spi.js";
 import { driverKindOfInstance } from "../types.js";
 import { driverKey, ensureDriverSession, executeTurn, imagesOf, type TurnDriver } from "./execute.js";
 import { pendingRuleUpdate, withRuleUpdate, type PendingRuleUpdate } from "./rulefiles.js";
@@ -81,10 +81,12 @@ import {
   type SendTurnResult,
 } from "./threads.js";
 import { armScheduledTurn } from "./schedule.js";
+import { buildHandoff, continuedTitle } from "./handoff.js";
+import { COMPACT_PROMPT, planLongThreadAction, type LongThreadAction, type LongThreadSnapshot } from "./longthreads.js";
 import { USAGE_CONTINUE_GRACE_MS, USAGE_CONTINUE_PROMPT } from "./views.js";
 import { reportHeadline, taskNotificationText, type TaskNotification } from "./notify.js";
 import { CHECKPOINT_REF_NAMESPACE, diffCheckpointStat, restoreWorktreeTo } from "../checkpoints/git.js";
-import type { SendTurnInput, StoredThread, StoredTurn } from "./types.js";
+import type { SendTurnInput, StoredActivity, StoredThread, StoredTurn } from "./types.js";
 import {
   delegatedStatusOf,
   delegatedWorkStateOf,
@@ -303,7 +305,7 @@ async function runRecoveredTurn(ctx: OperationContext, threadId: string, turn: S
   try {
     driver = ctx.driverFor(selection.instanceId);
     setup = await sessionSetup(ctx, thread, selection.instanceId);
-    await ensureDriverSession(driver, thread, { modelSelection: selection, ...sessionStart(setup) });
+    await ensureDriverSession(driver, thread, { modelSelection: selection, ...sessionStart(setup), ...longThreadHook(ctx, threadId) });
   } catch (cause) {
     const error = cause instanceof Error ? cause.message : String(cause);
     await failTurn(store, threadId, turn.id, { error: error.slice(0, 500) }).catch(() => undefined);
@@ -321,6 +323,7 @@ async function runRecoveredTurn(ctx: OperationContext, threadId: string, turn: S
     modelSelection: selection,
     workingDirectory: thread.env.path,
     ...usageLimitHook(ctx, threadId),
+    ...longThreadHook(ctx, threadId),
   })
     // A delegated task resumed after a usage limit (or recovered after a crash)
     // still owes its parent the report when it finally ends.
@@ -409,6 +412,160 @@ export async function scheduleUsageContinue(
   return sent.turn;
 }
 
+// -- long threads --------------------------------------------------------------
+
+/** The runner hook that hands off or compacts a long thread once a turn settles, when the settings say to do it unasked. */
+function longThreadHook(ctx: OperationContext, threadId: string): { afterSettle: () => Promise<void> } {
+  return { afterSettle: async () => void (await actOnLongThread(ctx, threadId)) };
+}
+
+/**
+ * Hand off or compact `threadId` now if `planLongThreadAction` says the
+ * server should, without anyone asking. Returns what it did. Called after
+ * every turn settles, so a thread no client has open is looked after too.
+ */
+export async function actOnLongThread(ctx: OperationContext, threadId: string): Promise<LongThreadAction | null> {
+  const snapshot = await readLongThreadSnapshot(ctx.store, threadId);
+  if (snapshot === null) return null;
+  const action = planLongThreadAction(ctx.config, snapshot);
+  if (action === null) return null;
+  if (action.kind === "handoff") {
+    await continueThread(ctx, { threadId, automatic: true });
+    return action;
+  }
+  if (action.reason !== "auto") {
+    // An "ask" Moxen did not wait for: say why, so the card that never got an answer is accounted for.
+    await ctx.store.appendLedger(threadId, "activity", {
+      id: ctx.store.newId(),
+      threadId,
+      turnId: null,
+      kind: "notice",
+      summary: action.reason === "delegated" ? "Compacting: a delegated task has no one to ask" : "Compacting: the thread is nearly full",
+      payload: { notice: "other", detail: "Claude Code's own compaction is off while Moxen compacts, so Moxen does it rather than let the next turn hit the limit." },
+      createdAt: ctx.store.nowIso(),
+    });
+    ctx.store.emit(threadId, "activity");
+  }
+  await startTurn(ctx, { threadId, prompt: COMPACT_PROMPT, onEvent: () => undefined });
+  return action;
+}
+
+/** How many background tasks the latest `background.tasks` row lists. */
+function runningBackgroundTasks(activities: readonly StoredActivity[]): number {
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const activity = activities[index]!;
+    if (activity.kind !== "background.tasks") continue;
+    const payload = activity.payload as { tasks?: unknown } | null | undefined;
+    return Array.isArray(payload?.tasks) ? payload.tasks.length : 0;
+  }
+  return 0;
+}
+
+/** The latest context reading the turn runner recorded (`context-window.updated`). */
+function latestUsage(activities: readonly StoredActivity[]): { usedTokens: number | null; maxTokens: number | null } {
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const activity = activities[index]!;
+    if (activity.kind !== "context-window.updated") continue;
+    const payload = activity.payload as { usedTokens?: unknown; maxTokens?: unknown } | null | undefined;
+    return {
+      usedTokens: typeof payload?.usedTokens === "number" ? payload.usedTokens : null,
+      maxTokens: typeof payload?.maxTokens === "number" ? payload.maxTokens : null,
+    };
+  }
+  return { usedTokens: null, maxTokens: null };
+}
+
+/** Read a thread back from the store as `planLongThreadAction` takes it. Null when the thread is gone. */
+export async function readLongThreadSnapshot(store: ThreadStore, threadId: string): Promise<LongThreadSnapshot | null> {
+  const thread = await store.readThreadRecord(threadId);
+  if (!thread) return null;
+  const [turns, messages, activities, delegations] = await Promise.all([
+    store.readTurns(threadId),
+    store.readMessages(threadId),
+    store.readActivities(threadId),
+    store.readDelegations().catch(() => []),
+  ]);
+  const children = delegations.filter((row) => row.parentThreadId === threadId && row.status === "running");
+  const lastTurn = turns.filter((turn) => turn.status !== "queued").at(-1);
+  const lastPrompt = lastTurn === undefined ? undefined : messages.find((message) => message.id === lastTurn.messageId);
+  const promptOf = (turnId: string): string => messages.find((message) => message.turnId === turnId && message.role === "user")?.text ?? "";
+  const lastCompact = turns.findLastIndex((turn) => turn.status !== "queued" && isCompactCommand(promptOf(turn.id)));
+  const sinceCompact = lastCompact === -1 ? null : new Set(turns.slice(lastCompact).map((turn) => turn.id));
+  const selection = lastTurn?.modelSelection ?? thread.modelSelection;
+  return {
+    instanceId: selection.instanceId,
+    model: selection.model,
+    ...latestUsage(activities),
+    hasReply: messages.some((message) => message.role === "assistant"),
+    turnRunning: turns.some((turn) => turn.status === "running"),
+    runningSubthreads: children.length,
+    runningBackgroundTasks: runningBackgroundTasks(activities),
+    queuedMessages: turns.filter((turn) => turn.status === "queued" && typeof turn.scheduledFor !== "string").length,
+    delegated: delegations.some((row) => row.childThreadId === threadId),
+    lastWasCompact: lastPrompt !== undefined && isCompactCommand(lastPrompt.text),
+    usedSinceCompact: sinceCompact === null ? null : activities.flatMap((activity) => {
+      const used = (activity.payload as { usedTokens?: unknown } | null | undefined)?.usedTokens;
+      return activity.kind === "context-window.updated" && activity.turnId !== null && sinceCompact.has(activity.turnId) && typeof used === "number" ? [used] : [];
+    }),
+    continued: activities.some((activity) => activity.kind === "thread.continued"),
+  };
+}
+
+export interface ContinueThreadRequest {
+  readonly threadId: string;
+  /** Start the new thread's first turn at this time rather than now (after a usage limit resets). */
+  readonly scheduledFor?: string;
+  /** The server did it on its own (hand-off set to Automatic), not a client. */
+  readonly automatic?: boolean;
+}
+
+export interface ContinuedThread {
+  readonly threadId: string;
+  readonly title: string;
+  readonly scheduledFor: string | null;
+}
+
+/**
+ * A new thread that carries on from `threadId`: same project, model,
+ * modes and checkout — the work so far is on that disk — opened with a
+ * handoff document built from the old thread's ledger. The old thread is
+ * left as it is, with a note pointing at its continuation.
+ */
+export async function continueThread(ctx: OperationContext, request: ContinueThreadRequest): Promise<ContinuedThread> {
+  const { store } = ctx;
+  const source = await store.readThreadRecord(request.threadId);
+  if (!source) throw new CliError("THREAD_NOT_FOUND", `No thread ${request.threadId}.`, { exitCode: 2 });
+  const project = (await listStoredProjects(ctx.storeRoot)).find((candidate) => candidate.id === source.projectId);
+  const handoff = await buildHandoff(store, source.id, { projectTitle: project?.title ?? null });
+  const title = continuedTitle(source.title);
+  const created = await createThread(store, {
+    projectId: source.projectId,
+    title,
+    modelSelection: source.modelSelection,
+    runtimeMode: source.runtimeMode,
+    interactionMode: source.interactionMode,
+    env: source.env,
+  });
+  await startTurn(ctx, {
+    threadId: created.id,
+    prompt: handoff,
+    ...(request.scheduledFor !== undefined ? { scheduledFor: request.scheduledFor, scheduleReason: "user" as const } : {}),
+    // Noop subscriber: the driver's shared pump exists before any client subscribes.
+    onEvent: () => undefined,
+  });
+  await store.appendLedger(source.id, "activity", {
+    id: store.newId(),
+    threadId: source.id,
+    turnId: null,
+    kind: "thread.continued",
+    summary: `Continued in "${title}"`,
+    payload: { threadId: created.id, title, scheduledFor: request.scheduledFor ?? null, automatic: request.automatic === true },
+    createdAt: store.nowIso(),
+  });
+  store.emit(source.id, "thread-continued");
+  return { threadId: created.id, title, scheduledFor: request.scheduledFor ?? null };
+}
+
 /** The delegation that created this thread, with its parent's title, if it is a delegated task. */
 async function delegationOf(
   store: ThreadStore,
@@ -495,7 +652,7 @@ export async function startTurn(ctx: OperationContext, input: StartTurnInput): P
   let startFailure: unknown = null;
   try {
     setup = await sessionSetup(ctx, sent.thread, turnModel.instanceId);
-    await ensureDriverSession(driver, sent.thread, { modelSelection: turnModel, ...sessionStart(setup) });
+    await ensureDriverSession(driver, sent.thread, { modelSelection: turnModel, ...sessionStart(setup), ...longThreadHook(ctx, sent.thread.id) });
   } catch (cause) {
     startFailure = cause;
   }
@@ -528,6 +685,7 @@ export async function startTurn(ctx: OperationContext, input: StartTurnInput): P
     workingDirectory: sent.thread.env.path,
     ...(onEvent ? { onEvent } : {}),
     ...usageLimitHook(ctx, thread.id),
+    ...longThreadHook(ctx, thread.id),
   }).catch(() => undefined);
   return { ...sent, run };
 }
@@ -664,6 +822,7 @@ export async function revertThread(
     await ensureDriverSession(driver, thread, {
       modelSelection: entry.selection,
       ...sessionStart(await sessionSetup(ctx, thread, entry.instanceId)),
+      ...longThreadHook(ctx, threadId),
     });
     await Effect.runPromise(driver.rollbackThread(threadId, entry.prompts));
     rolledBack.push(key);

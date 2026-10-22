@@ -46,7 +46,8 @@ const DEPTH: Record<Layer, number> = { core: 0, server: 1, cli: 2, tui: 2 };
  * the vocabulary all three layers speak — that is exactly why they moved
  * down out of `cli/`. `catalog/selection` (how flags and config resolve to
  * a model) and `threads/views` (what "busy" or "settled" means for a
- * thread envelope) are pure rules over values a client already holds —
+ * thread envelope) and `threads/longthreads` (when a long thread hands
+ * off or compacts) are pure rules over values a client already holds —
  * no store, no drivers — so a client may apply them to what `ClientApi`
  * returned. `catalog/direct` is *not*: it probes live providers, so it is
  * an operation. `core/syntax` is the vendored tree-sitter grammars plus
@@ -66,6 +67,8 @@ const KERNEL_PREFIXES = [
   // Static starting points for the guided add flows (server types, MCP servers): data, not an operation.
   "src/core/providers/harness/presets",
   "src/core/threads/views",
+  // When a long thread hands off or compacts: pure rules over config and a reading, like `threads/views`. The server acts on them; a client only draws the card.
+  "src/core/threads/longthreads",
   "src/core/attachments",
   "src/core/syntax",
   "src/core/infra/",
