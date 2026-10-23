@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { normalizeConfig } from "../../config.js";
 import { describeSettings, parseSettingValue, readSetting, settingDescriptor, writeSetting } from "../../configschema.js";
-import { autoCompactThreshold } from "../../providers/harness/compactsettings.js";
+import { autoCompactThreshold, loopCompactThreshold } from "../../providers/harness/compactsettings.js";
 import { resolveCompactionSettings } from "../../providers/harness/profiles.js";
 import type { CliConfig, HarnessProfileConfig } from "../../types.js";
 import {
@@ -195,6 +195,54 @@ describe("the Harness", () => {
     expect(resolveCompactionSettings(tab, profile, "m")).toMatchObject({ fraction: null, tokens: 20_000 });
     expect(resolveCompactionSettings(tab, profile, "other")).toMatchObject({ fraction: 0.5, tokens: null });
     expect(resolveCompactionSettings(tab, { ...profile, compaction: { tokens: 12_000 } }, "m")).toMatchObject({ tokens: 12_000 });
+  });
+});
+
+describe("the global Compaction", () => {
+  it("applies where a provider's tab leaves it unset, below the provider's own and its older key", () => {
+    const global: Config = { longThreads: { compaction: "auto" } };
+    expect(compactionModeFor(global, "claude")).toEqual({ value: "auto", key: "longThreads.compaction" });
+    expect(compactionModeFor(global, "opencode").value).toBe("auto");
+    expect(compactionModeFor({ ...global, providers: { opencode: { compaction: "provider" } } }, "opencode")).toEqual({ value: "provider", key: "providers.opencode.compaction" });
+    expect(compactionModeFor({ ...global, providers: { claude: { autoCompact: "claude" } } }, "claude")).toEqual({ value: "provider", key: "providers.claude.autoCompact" });
+    // Unset everywhere: each provider's own default, as before.
+    expect(["claude", "opencode", "harness"].map((kind) => compactionModeFor({}, kind as "claude").value)).toEqual(["ask", "provider", "auto"]);
+  });
+
+  it("is the Harness's automatic compaction when it says the provider's own", () => {
+    expect(compactionModeFor({ longThreads: { compaction: "provider" } }, "harness").value).toBe("auto");
+    expect(compactionModeFor({ longThreads: { compaction: "ask" } }, "harness").value).toBe("ask");
+    expect(driverProviders({ longThreads: { compaction: "ask" } })?.harness?.compaction).toBe("ask");
+  });
+});
+
+describe("the Moxen Harness on ask", () => {
+  const config = (over: Record<string, unknown> = {}): Config =>
+    normalizeConfig({ providers: { harness: { compaction: "ask", profiles: [{ id: "local", baseUrl: "http://localhost:1234/v1", models: [{ id: "m", contextWindow: 200_000 }], ...over }] } } });
+  const harnessSnapshot = (over: Partial<LongThreadSnapshot> = {}) => snapshot({ instanceId: "harness/local", model: "m", maxTokens: 200_000, ...over });
+
+  it("offers the card at its own line: the one its loop would compact at", () => {
+    expect(longThreadPolicy(config(), "harness/local", "m").compact).toEqual({ mode: "ask", line: { tokens: 140_000 } });
+    // A profile that switches compaction on or off itself is not asked about.
+    expect(longThreadPolicy(config({ compaction: { auto: true } }), "harness/local", "m").compact).toBeNull();
+    // An unknown profile, or a window nobody knows, places no line.
+    expect(longThreadPolicy(config(), "harness/gone", "m").compact).toBeNull();
+    expect(longThreadPolicy(normalizeConfig({ providers: { harness: { compaction: "ask", profiles: [{ id: "local", baseUrl: "http://x/v1", models: [{ id: "m" }] }] } } }), "harness/local", "m").compact).toBeNull();
+  });
+
+  it("leaves a thread past the line to the card, but compacts a delegated one and one past the hard line", () => {
+    expect(planLongThreadAction(config(), harnessSnapshot({ usedTokens: 150_000 }))).toBeNull();
+    expect(planLongThreadAction(config(), harnessSnapshot({ usedTokens: 150_000, delegated: true }))).toEqual({ kind: "compact", reason: "delegated" });
+    expect(planLongThreadAction(config(), harnessSnapshot({ usedTokens: 175_000 }))).toEqual({ kind: "compact", reason: "hard-line" });
+  });
+
+  it("has the loop compact by itself only at the hard line", () => {
+    const tab = driverProviders(config())?.harness;
+    const settings = resolveCompactionSettings(tab, tab!.profiles![0]!, "m");
+    expect(settings).toMatchObject({ auto: true, ask: true });
+    expect(autoCompactThreshold(200_000, settings)).toBe(140_000);
+    expect(loopCompactThreshold(200_000, settings)).toBe(170_000);
+    expect(loopCompactThreshold(200_000, { ...settings, ask: false })).toBe(140_000);
   });
 });
 

@@ -27,10 +27,10 @@ const profile = (window: number, compaction: Record<string, unknown> = {}) => ({
 
 type Step = ModelEvent[] | Error;
 
-function driverWith(script: Step[], window = 262_144, compaction: Record<string, unknown> = {}, sessionsDir = path.join(dir, "sessions")) {
+function driverWith(script: Step[], window = 262_144, compaction: Record<string, unknown> = {}, sessionsDir = path.join(dir, "sessions"), tab: Record<string, unknown> = {}) {
   const requests: ChatRequest[] = [];
   const driver = new HarnessDriver({
-    config: profile(window, compaction),
+    config: { ...profile(window, compaction), ...tab },
     sessionsDir,
     // Nothing from the real home directory or the package: a test sees only its own skills.
     home: dir,
@@ -227,6 +227,20 @@ describe("automatic compaction", () => {
     expect(requests).toHaveLength(4);
     await send(driver, "fourth question");
     expect(String(requests.at(-1)!.messages[1]!.content)).toContain("Fix the parser.");
+  });
+
+  it("on ask, leaves a turn past the line to the card, and compacts by itself only past the hard line", async () => {
+    const asking = driverWith([answer(long(3000)), answer(long(3000)), answer(long(3000), full())], window(), {}, path.join(dir, "sessions"), { compaction: "ask" });
+    await start(asking.driver);
+    await send(asking.driver, "first question");
+    await send(asking.driver, "second question");
+    expect(await send(asking.driver, "third question")).toMatchObject({ status: "completed" });
+    expect(notices(asking.events)).toEqual([]);
+    expect(asking.requests).toHaveLength(3);
+    // The card's Compact is a /compact turn, which the Harness answers as on any setting.
+    asking.script.unshift(summary());
+    await send(asking.driver, "/compact");
+    expect(notices(asking.events)).toEqual([expect.objectContaining({ notice: "compacted" })]);
   });
 
   it("compacts in the middle of a long tool loop, before the next request", async () => {

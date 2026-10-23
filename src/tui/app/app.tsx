@@ -223,7 +223,7 @@ export function App({
   const providerVersions = useProviderVersions(client, picker === "settings");
   const providerUpdates = useProviderUpdates(client, toasts.push, providerVersions.reload);
   const ui = uiFromSnapshot(settings.snapshot) ?? launchUi;
-  const longThreadConfig: LongThreadConfig = longThreadConfigFromSnapshot(settings.snapshot) ?? {
+  const longThreadConfig: LongThreadConfig = longThreadConfigFromSnapshot(settings.snapshot, launchProviders?.harness?.profiles) ?? {
     ...(launchUi ? { ui: launchUi } : {}),
     ...(launchProviders ? { providers: launchProviders } : {}),
     ...(launchLongThreads ? { longThreads: launchLongThreads } : {}),

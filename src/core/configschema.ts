@@ -330,7 +330,7 @@ const COMPACTION_TEXT: Readonly<Record<LongThreadKind, { readonly own: string; r
   harness: {
     own: "Automatic",
     description:
-      "Compact the thread on its own past 'Compact at', between turns and in the middle of a long one, and when the server refuses a prompt as too long. Off leaves /compact and the rescue for a refused prompt.",
+      "Who compacts a thread as it fills. Automatic: past 'Compact at', between turns and in the middle of a long one, and when the server refuses a prompt as too long. Asking offers a card at the line instead, but a delegated task, or a thread halfway from the line to full, is compacted unasked. Off leaves /compact and the rescue for a refused prompt.",
   },
 };
 
@@ -509,7 +509,7 @@ function longThreadSettings(kind: LongThreadKind): SettingDescriptor[] {
       kind: {
         type: "enum",
         choices: modes.map((mode) =>
-          kind === "harness" ? choice(mode, mode === "auto" ? "Automatic" : "Off") : choice(mode, mode === "provider" ? COMPACTION_TEXT[kind].own : COMPACTION_CHOICE_LABEL[mode]),
+          kind === "harness" ? choice(mode, mode === "auto" ? "Automatic" : mode === "ask" ? "Moxen asks" : "Off") : choice(mode, mode === "provider" ? COMPACTION_TEXT[kind].own : COMPACTION_CHOICE_LABEL[mode]),
         ),
       },
       defaultValue: undefined,
@@ -525,7 +525,7 @@ function longThreadSettings(kind: LongThreadKind): SettingDescriptor[] {
       kind: { type: "line", presets: LINE_PRESETS },
       defaultValue: undefined,
       fallback: { resolver: "compactLine" },
-      visibleWhen: { key: compactionKey, in: kind === "claude" ? ["", "provider", "ask", "auto"] : kind === "opencode" ? ["ask", "auto"] : ["", "auto"] },
+      visibleWhen: { key: compactionKey, in: kind === "claude" ? ["", "provider", "ask", "auto"] : kind === "opencode" ? ["", "ask", "auto"] : ["", "ask", "auto"] },
     },
     {
       key: `providers.${kind}.compactAtModels`,
@@ -535,7 +535,7 @@ function longThreadSettings(kind: LongThreadKind): SettingDescriptor[] {
       group,
       kind: { type: "string", placeholder: "model=400k", multiline: true, source: "handoff-models", providerKind: kind },
       defaultValue: undefined,
-      visibleWhen: { key: compactionKey, in: kind === "claude" ? ["", "provider", "ask", "auto"] : kind === "opencode" ? ["ask", "auto"] : ["", "auto"] },
+      visibleWhen: { key: compactionKey, in: kind === "claude" ? ["", "provider", "ask", "auto"] : kind === "opencode" ? ["", "ask", "auto"] : ["", "ask", "auto"] },
     },
     ...(kind === "harness"
       ? [
@@ -547,7 +547,7 @@ function longThreadSettings(kind: LongThreadKind): SettingDescriptor[] {
             group,
             kind: { type: "integer", min: 2_000, max: 100_000, presets: [4_096, 8_192, 12_288, 16_384, 24_576, 32_768, 49_152, 65_536] },
             defaultValue: 16_384,
-            visibleWhen: { key: compactionKey, in: ["", "auto"] },
+            visibleWhen: { key: compactionKey, in: ["", "ask", "auto"] },
           } satisfies SettingDescriptor,
         ]
       : []),
@@ -893,6 +893,24 @@ const SETTINGS_IN_WRITTEN_ORDER: readonly SettingDescriptor[] = [
     kind: { type: "line", presets: LINE_PRESETS },
     defaultValue: undefined,
     fallback: { resolver: "handoffLine" },
+  },
+  {
+    key: "longThreads.compaction",
+    label: "Compaction",
+    description: "Who compacts a thread as it fills. Asking offers a card past 'Compact at', but a delegated task, or a thread halfway from the line to full, is compacted unasked. Each provider can change it.",
+    section: "long-threads",
+    kind: {
+      type: "enum",
+      choices: [
+        choice("provider", "The provider's own", "Claude Code and OpenCode compact by themselves; the Moxen Harness's own is automatic."),
+        choice("ask", COMPACTION_CHOICE_LABEL.ask),
+        choice("auto", COMPACTION_CHOICE_LABEL.auto),
+        choice("off", COMPACTION_CHOICE_LABEL.off),
+      ],
+    },
+    defaultValue: undefined,
+    fallback: { text: "Each provider's own default" },
+    appliesAt: "server-restart",
   },
   {
     key: "longThreads.compactAt",

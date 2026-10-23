@@ -7,8 +7,8 @@
 import { cachedSecret, isSecretRef, primeSecret } from "../../secrets.js";
 import { CliError } from "../../errors.js";
 import type { HarnessModelConfig, HarnessProbedConfig, HarnessProfileConfig, HarnessProviderConfig } from "../../types.js";
-import { parseLine } from "../../threads/longthreads.js";
-import { DEFAULT_COMPACTION, type CompactionSettings } from "./compactsettings.js";
+import { parseLine } from "../../threads/lines.js";
+import { autoCompactThreshold, DEFAULT_COMPACTION, type CompactionSettings } from "./compactsettings.js";
 import { parseQuirkOverrides, resolveQuirks, type ModelQuirks, type ResolveQuirksInput } from "./quirks.js";
 
 const PROFILE_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -221,7 +221,9 @@ export function resolveCompactionSettings(config: HarnessProviderConfig | undefi
   const modelTokens = model === undefined ? undefined : config?.compactAtModels?.[model];
   const line = own?.tokens !== undefined ? { tokens: own.tokens } : own?.fraction !== undefined ? { fraction: own.fraction } : modelTokens !== undefined ? { tokens: modelTokens } : tabLine(config);
   return {
-    auto: own?.auto ?? (config?.compaction !== undefined ? config.compaction === "auto" : config?.autoCompact) ?? DEFAULT_COMPACTION.auto,
+    auto: own?.auto ?? (config?.compaction !== undefined ? config.compaction !== "off" : config?.autoCompact) ?? DEFAULT_COMPACTION.auto,
+    // A profile that switches compaction on or off itself is not asked about: it says what it wants.
+    ask: own?.auto === undefined && config?.compaction === "ask",
     fraction: line !== null && "fraction" in line ? line.fraction : null,
     tokens: line !== null && "tokens" in line ? line.tokens : null,
     keepRecentTokens: own?.keepRecentTokens ?? config?.keepRecentTokens ?? DEFAULT_COMPACTION.keepRecentTokens,
@@ -324,4 +326,23 @@ export function readProfileApiKey(profile: HarnessProfileConfig, env: NodeJS.Pro
   if (!profile.apiKeyEnv) return undefined;
   const value = env[profile.apiKeyEnv];
   return value !== undefined && value.trim() !== "" ? value.trim() : undefined;
+}
+
+/**
+ * Where a Harness thread on "ask" is offered compaction: the threshold its
+ * loop would use (profile, model, tab, window), as tokens. Null when it does
+ * not ask (its profile decides, or compaction is automatic or off), or the
+ * window is unknown, so no line can be placed.
+ */
+export function harnessAskLine(config: HarnessProviderConfig | undefined, instanceId: string, modelId: string): { readonly tokens: number } | null {
+  let target: ResolvedHarnessTarget;
+  try {
+    target = resolveHarnessTarget(config, instanceId, modelId);
+  } catch {
+    return null;
+  }
+  const settings = resolveCompactionSettings(config, target.profile, target.model.id);
+  if (!settings.ask) return null;
+  const tokens = autoCompactThreshold(target.model.contextWindow, settings);
+  return tokens === null ? null : { tokens };
 }

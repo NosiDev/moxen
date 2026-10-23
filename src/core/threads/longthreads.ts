@@ -16,6 +16,8 @@
  * while Claude Code's own compaction was switched off for it.
  */
 import { driverKindOfInstance } from "../types.js";
+import { harnessAskLine } from "../providers/harness/profiles.js";
+import { compactHardTokens, lineInput, lineText, lineTokens, parseLine, type ThresholdLine } from "./lines.js";
 import type { CliConfig, ProvidersConfig } from "../types.js";
 
 export type AutoHandoffMode = "off" | "ask" | "auto";
@@ -64,55 +66,9 @@ export function autoHandoffState(input: AutoHandoffInput): AutoHandoffState | nu
   return { usedPercent, usedTokens: input.usedTokens, blockers };
 }
 
-// -- the line a thread passes ------------------------------------------------
+// -- the line a thread passes: see `lines.ts` ----------------------------------
 
-/**
- * Where hand-off or compaction kicks in: a share of the model's window
- * (`70%`) or a size (`256K`), one value with one meaning on every tab. The
- * file keeps it as text (`"70%"`, `"32K"`); a bare number is tokens. K and M
- * count in powers of two, as every token window on the settings page does.
- */
-export type ThresholdLine = { readonly percent: number } | { readonly tokens: number };
-
-export const LINE_PERCENT_MIN = 10;
-export const LINE_PERCENT_MAX = 95;
-export const LINE_TOKENS_MIN = 4_096;
-export const LINE_TOKENS_MAX = 2_000_000;
-
-/** The line in `raw` (text or a token count), or null when it is not one or is out of range. */
-export function parseLine(raw: unknown): ThresholdLine | null {
-  if (typeof raw === "number") return Number.isInteger(raw) && raw >= LINE_TOKENS_MIN && raw <= LINE_TOKENS_MAX ? { tokens: raw } : null;
-  if (typeof raw !== "string") return null;
-  const match = /^(\d+(?:\.\d+)?)\s*(%|k|m)?$/i.exec(raw.trim());
-  if (match === null) return null;
-  const amount = Number(match[1]);
-  const unit = match[2]?.toLowerCase();
-  if (unit === "%") return Number.isInteger(amount) && amount >= LINE_PERCENT_MIN && amount <= LINE_PERCENT_MAX ? { percent: amount } : null;
-  const tokens = Math.round(amount * (unit === "k" ? 1_024 : unit === "m" ? 1_048_576 : 1));
-  return tokens >= LINE_TOKENS_MIN && tokens <= LINE_TOKENS_MAX ? { tokens } : null;
-}
-
-/** The line as the file and `config set` take it: `70%`, `32K`, or a plain count when it is not a whole K. */
-export function lineText(line: ThresholdLine): string {
-  if ("percent" in line) return `${line.percent}%`;
-  return line.tokens % 1_048_576 === 0 ? `${line.tokens / 1_048_576}M` : line.tokens % 1_024 === 0 ? `${line.tokens / 1_024}K` : String(line.tokens);
-}
-
-/** The line as a page writes it: "70% of the window", "32K tokens". */
-export function lineLabel(line: ThresholdLine): string {
-  return "percent" in line ? `${line.percent}% of the window` : `${lineText(line)} tokens`;
-}
-
-/** The line in tokens for a window; null for a share when the window is unknown. */
-export function lineTokens(line: ThresholdLine, maxTokens: number | null): number | null {
-  if ("tokens" in line) return line.tokens;
-  return maxTokens !== null && maxTokens > 0 ? Math.floor((maxTokens * line.percent) / 100) : null;
-}
-
-/** The pair `autoHandoffState` takes: a size needs no window, a share does. */
-export function lineInput(line: ThresholdLine): { percent: number; tokens: number | null } {
-  return "percent" in line ? { percent: line.percent, tokens: null } : { percent: 0, tokens: line.tokens };
-}
+export { LINE_PERCENT_MAX, LINE_PERCENT_MIN, LINE_TOKENS_MAX, LINE_TOKENS_MIN, compactHardTokens, lineInput, lineLabel, lineText, lineTokens, parseLine, type ThresholdLine } from "./lines.js";
 
 // -- what is in force, most specific first ------------------------------------
 
@@ -121,15 +77,23 @@ export const LONG_THREAD_KINDS: readonly LongThreadKind[] = ["claude", "opencode
 
 /**
  * Who compacts a long thread: the provider itself, Moxen asking first, Moxen
- * on its own, or nobody. The Moxen Harness is Moxen, so it only has on and
- * off; both CLIs run `/compact` as a turn, so the server can drive either.
+ * on its own, or nobody. The Moxen Harness is Moxen, so its own compaction is
+ * its "auto"; on "ask" it offers the same card, and every provider runs
+ * `/compact` as a turn, so the server can drive any of them.
  */
 export type CompactionMode = "provider" | "ask" | "auto" | "off";
 export const COMPACTION_MODES: Readonly<Record<LongThreadKind, readonly CompactionMode[]>> = {
   claude: ["provider", "ask", "auto", "off"],
   opencode: ["provider", "ask", "auto", "off"],
-  harness: ["auto", "off"],
+  harness: ["ask", "auto", "off"],
 };
+/** What the global Compaction means on each provider: the Harness's own compaction is its automatic one. */
+const GLOBAL_COMPACTION_ON: Readonly<Record<LongThreadKind, (mode: CompactionMode) => CompactionMode>> = {
+  claude: (mode) => mode,
+  opencode: (mode) => mode,
+  harness: (mode) => (mode === "provider" ? "auto" : mode),
+};
+const isCompactionMode = (value: unknown): value is CompactionMode => value === "provider" || value === "ask" || value === "auto" || value === "off";
 export const DEFAULT_COMPACTION_MODE: Readonly<Record<LongThreadKind, CompactionMode>> = { claude: "ask", opencode: "provider", harness: "auto" };
 
 export const DEFAULT_AUTO_COMPACT_PERCENT = 80;
@@ -198,8 +162,8 @@ export function handoffLineFor(config: LongThreadConfig, kind: LongThreadKind | 
   );
 }
 
-/** Who compacts on `kind`: its tab, else what the older switch meant, else the provider's default. */
-export function compactionModeFor(config: Pick<CliConfig, "providers">, kind: LongThreadKind): Sourced<CompactionMode> {
+/** Who compacts on `kind`: its tab, else what the older switch there meant, else the global setting, else the provider's default. */
+export function compactionModeFor(config: Pick<CliConfig, "providers" | "longThreads">, kind: LongThreadKind): Sourced<CompactionMode> {
   const own = config.providers?.[kind];
   const set = own?.compaction;
   const legacy = (): CompactionMode | undefined => {
@@ -214,6 +178,7 @@ export function compactionModeFor(config: Pick<CliConfig, "providers">, kind: Lo
     [
       [`providers.${kind}.compaction`, set !== undefined && COMPACTION_MODES[kind].includes(set) ? set : undefined],
       [`providers.${kind}.autoCompact`, legacy()],
+      ["longThreads.compaction", isCompactionMode(config.longThreads?.compaction) ? GLOBAL_COMPACTION_ON[kind](config.longThreads.compaction) : undefined],
     ],
     DEFAULT_COMPACTION_MODE[kind],
   );
@@ -262,12 +227,19 @@ export interface LongThreadPolicy {
 export function longThreadPolicy(config: LongThreadConfig, instanceId: string | undefined, model?: string): LongThreadPolicy {
   const kind = kindOf(instanceId);
   const handoff = { mode: handoffModeFor(config, kind).value, line: handoffLineFor(config, kind, model).value };
-  // The Harness compacts inside its own loop; only the CLIs are compacted from outside, by a `/compact` turn.
-  if (kind === undefined || kind === "harness") return { handoff, compact: null };
+  if (kind === undefined) return { handoff, compact: null };
   const mode = compactionModeFor(config, kind).value;
+  if (kind === "harness") {
+    // On "auto" the Harness compacts inside its own loop. On "ask" its line is the loop's own threshold (profile, model, tab, window).
+    if (mode !== "ask" || instanceId === undefined || model === undefined) return { handoff, compact: null };
+    const line = harnessAskLine(driverProviders(config)?.harness, instanceId, model);
+    return { handoff, compact: line === null ? null : { mode: "ask", line } };
+  }
   if (mode !== "ask" && mode !== "auto") return { handoff, compact: null };
   return { handoff, compact: { mode, line: compactLineFor(config, kind, model)?.value ?? DEFAULT_COMPACT_LINE } };
 }
+
+const harnessCompaction = (mode: CompactionMode): "ask" | "auto" | "off" => (mode === "off" ? "off" : mode === "ask" ? "ask" : "auto");
 
 /**
  * The providers section as the drivers read it, with the long-thread rule
@@ -304,7 +276,7 @@ export function driverProviders(config: LongThreadConfig): ProvidersConfig | und
     opencode: { ...opencodeRest, ...(opencodeAuto !== undefined ? { autoCompact: opencodeAuto } : {}) },
     harness: {
       ...providers?.harness,
-      compaction: compactionModeFor(config, "harness").value === "off" ? "off" : "auto",
+      compaction: harnessCompaction(compactionModeFor(config, "harness").value),
       ...(harnessLine !== null ? { compactAt: lineText(harnessLine.value) } : {}),
     },
   };
@@ -408,11 +380,4 @@ export function compactsFirst(policy: LongThreadPolicy, maxTokens: number | null
   const compactAt = lineTokens(policy.compact.line, maxTokens);
   const handoffAt = lineTokens(policy.handoff.line, maxTokens);
   return compactAt !== null && handoffAt !== null && compactAt < handoffAt;
-}
-
-/** The hard line in tokens for a compaction line (see `compactHardLine`); null when the window is unknown. */
-function compactHardTokens(line: ThresholdLine, maxTokens: number | null): number | null {
-  if (maxTokens === null || maxTokens <= 0) return null;
-  const at = lineTokens(line, maxTokens)!;
-  return Math.min(Math.floor(maxTokens * 0.95), at + Math.ceil((maxTokens - at) / 2));
 }

@@ -86,7 +86,7 @@ has the same "Long threads" group, and the global Long threads tab holds the def
 
 | Row | Key | Values |
 | -- | -- | -- |
-| Compaction | `providers.<kind>.compaction` | `provider`, `ask`, `auto`, `off` (the Moxen Harness: `auto`, `off`) |
+| Compaction | `providers.<kind>.compaction`, default `longThreads.compaction` | `provider`, `ask`, `auto`, `off` (the Moxen Harness: `ask`, `auto`, `off`) |
 | Compact at | `providers.<kind>.compactAt`, default `longThreads.compactAt` | a line |
 | Compact at, per model | `providers.<kind>.compactAtModels` | `model=tokens` pairs |
 | Kept word for word | `providers.harness.keepRecentTokens` | tokens (Harness only) |
@@ -137,8 +137,14 @@ compacts. "Compact at, per model" is the same editor as hand-off's: a model
 listed there compacts at its own size, the others at Compact at. With Claude
 Code compacting by itself, each size becomes that model's auto-compact window
 (100K to 1M) when its session starts; on the Moxen Harness a profile's own
-compaction size still wins for its models. The Moxen Harness compacts inside its own loop, so it only has
-`auto` and `off` (see [providers](providers.md)).
+compaction size still wins for its models. The Moxen Harness compacts inside its own loop: its own
+compaction is `auto` (so a global `provider` means `auto` there). On `ask` it
+offers the same card at the line its loop would use (the profile's, the
+model's, its tab's, or its rule by window size), and the loop compacts unasked
+only past the hard line, so a long turn never runs into the wall (see
+[providers](providers.md)). Left unset on every tab, each provider keeps its own
+default: Claude Code asks, OpenCode compacts by itself, the Moxen Harness by
+itself.
 
 **Both lines.** Hand-off is offered first when its line is lower than
 compaction's. Past both, the lower line acts first: compaction set below the

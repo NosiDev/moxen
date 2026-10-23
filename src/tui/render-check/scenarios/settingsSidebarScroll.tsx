@@ -70,6 +70,13 @@ export async function runSettingsSidebarScroll(): Promise<void> {
   // A long Default is the one shortened: the global "Compact at" keeps its whole label and two spaces before its value.
   for (let step = 0; step < 3; step += 1) await act(async () => setup.mockInput.pressTab());
   await settle();
+  // Compaction is chosen here too, like Hand off: the row sits on the global tab, above Compact at.
+  for (let step = 0; step < 4; step += 1) {
+    if (/│\s+Compaction {2,}\S/.test(setup.captureCharFrame())) break;
+    await act(async () => setup.mockInput.pressArrow("down"));
+    await settle();
+  }
+  if (!/│\s+Compaction {2,}Default/.test(setup.captureCharFrame())) fail("the global Long threads tab has no Compaction row");
   for (let step = 0; step < 4; step += 1) {
     if (setup.captureCharFrame().includes("Compact at  ")) break;
     await act(async () => setup.mockInput.pressArrow("down"));

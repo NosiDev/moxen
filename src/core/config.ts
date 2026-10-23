@@ -228,7 +228,7 @@ export function normalizeConfig(raw: unknown): CliConfig {
   if (skills) result.skills = skills;
   const web = normalizeSection<WebConfig>(input.web, "web", ["browser", "browserPath", "privateNetwork"]);
   if (web) result.web = web;
-  const longThreads = normalizeSection<LongThreadsConfig>(input.longThreads, "longThreads", ["handoff", "handoffAt", "compactAt"]);
+  const longThreads = normalizeSection<LongThreadsConfig>(input.longThreads, "longThreads", ["handoff", "handoffAt", "compaction", "compactAt"]);
   if (longThreads) result.longThreads = longThreads;
   const ui = normalizeSection<UiConfig>(input.ui, "ui", ["backdrop", "modelScenes", "hideBinaryDiffs", "defaultSidePanel", "contextRefreshSeconds", "usageRefreshSeconds", "autoHandoff", "autoHandoffPercent", "autoHandoffTokens"]);
   if (ui) result.ui = ui;

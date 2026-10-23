@@ -86,6 +86,8 @@ export interface UiConfig {
 /** The global hand-off and compaction lines; each provider's tab can override them. The older `ui.autoHandoff*` keys are read where these are unset. */
 export interface LongThreadsConfig {
   handoff?: "off" | "ask" | "auto";
+  /** Who compacts on every provider whose tab leaves its Compaction unset: the provider itself, Moxen asking first, Moxen on its own, or nobody. */
+  compaction?: "provider" | "ask" | "auto" | "off";
   /** A share (`"50%"`) or a size (`"256K"`). */
   handoffAt?: string;
   compactAt?: string;
@@ -117,7 +119,7 @@ export interface ProvidersConfig {
 /** Moxen Harness: our own agent loop against endpoints the user configures. */
 export interface HarnessProviderConfig {
   /** Whether the Harness compacts on its own. Unset: `autoCompact`, else on. */
-  compaction?: "auto" | "off";
+  compaction?: "ask" | "auto" | "off";
   /** Hand off long threads on this provider: ask, on its own, or never. Unset: `autoHandoff` here, else the global one (`core/threads/longthreads.ts`). */
   handoff?: "off" | "ask" | "auto";
   /** Where this provider's threads are handed off: a share (`"50%"`) or a size (`"256K"`). Unset: the older keys here, else the global line. */

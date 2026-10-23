@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { ClientApi, CommandResult, SettingsSnapshot } from "../../../server/api.js";
 import type { DiscoverResult } from "../../../core/types.js";
-import type { HarnessApiFormat, UiConfig } from "../../../core/types.js";
+import type { HarnessApiFormat, HarnessProviderConfig, UiConfig } from "../../../core/types.js";
 
 /**
  * The settings page's state: one read on open, one write per edit, and
@@ -267,7 +267,12 @@ export function uiFromSnapshot(snapshot: SettingsSnapshot | null): UiConfig | nu
  * a snapshot into the shape of the config, older keys included, so the card
  * on screen follows the same precedence as the server. Null before a snapshot exists.
  */
-export function longThreadConfigFromSnapshot(snapshot: SettingsSnapshot | null): LongThreadConfig | null {
+/**
+ * The long-thread keys rebuilt from a snapshot. A Moxen Harness thread on
+ * "ask" is offered compaction at its loop's own line, which its profile
+ * decides; the snapshot does not carry profiles, so the caller's are kept.
+ */
+export function longThreadConfigFromSnapshot(snapshot: SettingsSnapshot | null, harnessProfiles?: HarnessProviderConfig["profiles"]): LongThreadConfig | null {
   if (snapshot === null) return null;
   const out: Record<string, Record<string, unknown>> = {};
   for (const view of snapshot.settings) {
@@ -277,6 +282,10 @@ export function longThreadConfigFromSnapshot(snapshot: SettingsSnapshot | null):
     let cursor: Record<string, unknown> = out;
     for (const segment of path) cursor = (cursor[segment] ??= {}) as Record<string, unknown>;
     cursor[leaf] = (leaf === "autoHandoffModels" || leaf === "compactAtModels") && typeof view.value === "string" ? handoffModelsFromText(view.value) : view.value;
+  }
+  if (harnessProfiles !== undefined) {
+    const providers = (out.providers ??= {}) as Record<string, Record<string, unknown>>;
+    providers.harness = { ...providers.harness, profiles: harnessProfiles };
   }
   return out as LongThreadConfig;
 }

@@ -57,7 +57,7 @@ import type {
 } from "../spi.js";
 import { BackgroundShells, type BackgroundEvent, type BackgroundTask } from "./background.js";
 import { compact, leadLength, MAX_CONSECUTIVE_FAILURES, type CompactReason, type Summarise } from "./compact.js";
-import { autoCompactThreshold } from "./compactsettings.js";
+import { autoCompactThreshold, loopCompactThreshold } from "./compactsettings.js";
 import { contextBreakdownOf, contextUsageOf, estimateTokens, messagesTokens, type ContextInput } from "./context.js";
 import { runTurn, type Authorization, type CompactionReport, type LoopEvent, type TurnConfig } from "./loop.js";
 import { CANCELLED_MESSAGE, classificationOf, declinedMessage, decidePermission, sessionAllowKey } from "./permissions.js";
@@ -574,7 +574,7 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
       toolContext: { cwd: session.workingDirectory, readState: session.readState, artifactDir: session.artifactDir, acceptsImages: target.quirks.images === "native", secretEnv: this.secretEnvNames(), background: session.background },
       authorize: (call, intent) => this.authorize(session, turn, call, intent),
       compaction: {
-        threshold: autoCompactThreshold(target.model.contextWindow, resolveCompactionSettings(this.config, target.profile, target.model.id)),
+        threshold: loopCompactThreshold(target.model.contextWindow, resolveCompactionSettings(this.config, target.profile, target.model.id)),
         contextWindow: target.model.contextWindow ?? null,
         run: (reason) => this.compactSession(session, turn, target, reason),
       },
@@ -949,7 +949,7 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
       toolContext: { cwd: session.workingDirectory, readState: unit.readState, artifactDir: session.artifactDir, acceptsImages: target.quirks.images === "native", secretEnv: this.secretEnvNames(), background: session.background },
       authorize: (call, intent) => this.authorize(session, owner, call, intent),
       compaction: {
-        threshold: autoCompactThreshold(target.model.contextWindow, resolveCompactionSettings(this.config, target.profile, target.model.id)),
+        threshold: loopCompactThreshold(target.model.contextWindow, resolveCompactionSettings(this.config, target.profile, target.model.id)),
         contextWindow: target.model.contextWindow ?? null,
         run: (reason) => this.compactUnit(unit, session, owner, target, reason, signal, undefined, "Subagent: "),
       },
@@ -1383,9 +1383,12 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
     }
   }
 
-  /** After a turn: if the conversation has grown past the threshold, make room now rather than at the start of the next one. */
+  /**
+   * After a turn: if the conversation has grown past the threshold, make room now rather than at the start of the next one.
+   * On "ask" that is the server's to offer (`planLongThreadAction`), so only the hard line is acted on here.
+   */
   private async compactAfterTurn(session: HarnessSession, turn: HarnessTurn, target: ResolvedHarnessTarget): Promise<void> {
-    const threshold = autoCompactThreshold(target.model.contextWindow, resolveCompactionSettings(this.config, target.profile, target.model.id));
+    const threshold = loopCompactThreshold(target.model.contextWindow, resolveCompactionSettings(this.config, target.profile, target.model.id));
     if (threshold === null || session.closed || turn.controller.signal.aborted) return;
     const used = session.lastUsage ? session.lastUsage.inputTokens + session.lastUsage.outputTokens : messagesTokens(session.transcript.messages);
     if (used < threshold) return;
