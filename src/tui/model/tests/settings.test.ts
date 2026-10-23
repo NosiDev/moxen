@@ -286,12 +286,12 @@ describe("per-model hand-off sizes on a provider's page", () => {
 
   it("lists the provider's visible models with their sizes, then overrides the catalog no longer has", () => {
     expect(handoffModelEntries([claude, other], "claude", "opus=500000, gone=300000")).toEqual([
-      { slug: "opus", name: "Opus", tokens: 500_000 },
-      { slug: "sonnet", name: "Sonnet", tokens: null },
-      { slug: "gone", name: "gone", tokens: 300_000 },
+      { slug: "opus", name: "Opus", tokens: 500_000, offered: true },
+      { slug: "sonnet", name: "Sonnet", tokens: null, offered: true },
+      { slug: "gone", name: "gone (not offered)", tokens: 300_000, offered: false },
     ]);
-    // Before the catalog arrives the overrides are still there to see and clear.
-    expect(handoffModelEntries(null, "claude", "opus=500000")).toEqual([{ slug: "opus", name: "opus", tokens: 500_000 }]);
+    // Before the catalog arrives the overrides are still there to see and clear, and none is called gone.
+    expect(handoffModelEntries(null, "claude", "opus=500000")).toEqual([{ slug: "opus", name: "opus", tokens: 500_000, offered: true }]);
   });
 
   it("writes one model's size and leaves the others, and removes it with null", () => {

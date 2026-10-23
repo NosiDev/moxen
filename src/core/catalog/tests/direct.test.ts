@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { selectModel, selectProvider } from "../summary.js";
 import { buildDirectProviders } from "../direct.js";
+import type { LoadedServedModels } from "../../providers/opencode/catalog.js";
 import { tempDir } from "../../testing/tmp.js";
 
 function binDir(names: string[]): string {
@@ -118,29 +119,60 @@ describe("buildDirectProviders", () => {
     expect(section?.models).toEqual([]);
   });
 
-  it("keeps OpenCode's own free tier without a login: its zero-cost models only", async () => {
-    const providers = await buildDirectProviders({
-      env: { PATH: binDir(["opencode"]) },
-      storeRoot: tmpStore(),
-      modelsDev: async () => ({
-        catalog: [
-          {
-            id: "opencode",
-            name: "OpenCode Zen",
-            env: ["OPENCODE_API_KEY"],
-            models: [
-              { id: "free-one", name: "Free", reasoningOptions: [], cost: { input: 0, output: 0 } },
-              { id: "paid-one", name: "Paid", reasoningOptions: [], cost: { input: 3, output: 15 } },
-            ],
-          },
+  const ZEN = {
+    catalog: [
+      {
+        id: "opencode",
+        name: "OpenCode Zen",
+        env: ["OPENCODE_API_KEY"],
+        models: [
+          { id: "free-one", name: "Free", reasoningOptions: [], cost: { input: 0, output: 0 } },
+          { id: "retired-free", name: "Retired", reasoningOptions: [], cost: { input: 0, output: 0 } },
+          { id: "paid-one", name: "Paid", reasoningOptions: [], cost: { input: 3, output: 15 } },
         ],
-        source: "live" as const,
-      }),
-    });
-    const zen = providers.find((entry) => entry.instanceId === "opencode/opencode");
+      },
+    ],
+    source: "live" as const,
+  };
+  const zenOf = async (env: NodeJS.ProcessEnv, served: () => Promise<LoadedServedModels>) =>
+    (await buildDirectProviders({ env: { PATH: binDir(["opencode"]), ...env }, storeRoot: tmpStore(), modelsDev: async () => ZEN, opencodeServed: served })).find((entry) => entry.instanceId === "opencode/opencode");
+
+  it("keeps OpenCode's own free tier without a login: zero-cost models it still serves", async () => {
+    const zen = await zenOf({}, async () => ({ ids: new Set(["free-one", "paid-one"]), source: "live" }));
     expect(zen?.enabled).toBe(true);
-    expect(zen?.status).toBe("free models only (connect it for all 2)");
+    expect(zen?.status).toBe("free models only (connect it for all 3)");
     expect(zen?.models.map((model) => model.slug)).toEqual(["opencode/free-one"]);
+  });
+
+  it("falls back to every zero-cost model when OpenCode's list cannot be read, and says so", async () => {
+    const zen = await zenOf({}, async () => ({ ids: null, source: "none" }));
+    expect(zen?.models.map((model) => model.slug)).toEqual(["opencode/free-one", "opencode/retired-free"]);
+    expect(zen?.status).toMatch(/could not be read, so some may be retired$/);
+    const stale = await zenOf({}, async () => ({ ids: new Set(["free-one"]), source: "stale" }));
+    expect(stale?.models.map((model) => model.slug)).toEqual(["opencode/free-one"]);
+    expect(stale?.status).toMatch(/out of date$/);
+  });
+
+  it("offers no free tier under OPENCODE_DISABLE_FREE_MODELS, and asks nothing of the network", async () => {
+    let asked = false;
+    const zen = await zenOf({ OPENCODE_DISABLE_FREE_MODELS: "1" }, async () => {
+      asked = true;
+      return { ids: null, source: "none" };
+    });
+    expect(zen?.enabled).toBe(false);
+    expect(zen?.models).toEqual([]);
+    expect(zen?.status).toMatch(/OPENCODE_DISABLE_FREE_MODELS/);
+    expect(asked).toBe(false);
+  });
+
+  it("lists everything once connected, without reading the served list", async () => {
+    let asked = false;
+    const zen = await zenOf({ OPENCODE_API_KEY: "set" }, async () => {
+      asked = true;
+      return { ids: null, source: "none" };
+    });
+    expect(zen?.models).toHaveLength(3);
+    expect(asked).toBe(false);
   });
 
   it("prefixes bare source ids with their provider", async () => {

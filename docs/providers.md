@@ -58,6 +58,14 @@ config, so a change to it waits until nothing runs on that server, then restarts
 Moxen does not use OpenCode's free models any way but through OpenCode itself: those are served to OpenCode's own client,
 and Moxen does not imitate it.
 
+Without a login, the pickers offer OpenCode's own provider's free tier only: models models.dev lists at no cost that
+OpenCode's inference endpoint (`https://opencode.ai/inference/v1/models`) still serves, so retired free models are
+not offered. The endpoint's list is cached beside the models.dev cache (`~/.moxen/cache/opencode-served-models.json`)
+on the same five-minute freshness; offline, an older copy is used, and with none every free models.dev model is
+offered and the provider's status says some may be retired. `OPENCODE_DISABLE_FREE_MODELS=1` (or `true`), which
+makes OpenCode hide its free models, makes Moxen offer none. A per-model hand-off or compaction size saved for a
+model that is no longer offered stays listed as "not offered", so it can be removed.
+
 ## Moxen Harness
 
 For open models behind llama.cpp, vLLM, Ollama and similar.

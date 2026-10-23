@@ -97,7 +97,7 @@ export async function runHandoffModels(): Promise<void> {
   const list = setup.captureCharFrame();
   console.log("--- hand off per model ---");
   console.log(list);
-  for (const expected of ["Claude Opus 5", "500K", "Claude Sonnet 5", "uses provider setting", "gone-model", "300K"]) {
+  for (const expected of ["Claude Opus 5", "500K", "Claude Sonnet 5", "uses provider setting", "gone-model (not offered)", "300K"]) {
     if (!list.includes(expected)) fail(`the per-model list is missing "${expected}"`);
   }
   if (list.includes("Claude Old")) fail("a hidden model is listed");

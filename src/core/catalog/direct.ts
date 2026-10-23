@@ -25,12 +25,15 @@ import { resolveStoreRoot } from "../threads/store.js";
 import { isModelHidden, loadModelPrefs } from "./prefs.js";
 import {
   effortValuesOf,
-  isFreeModel,
+  freeModelsDisabled,
+  freeTierModels,
   loadModelsDevCatalog,
+  loadServedModels,
   presentApiKeyEnvs,
   readStoredAuthTypes,
   storedAuthTypeFor,
   type LoadedModelsDevCatalog,
+  type LoadedServedModels,
   type ModelsDevModel,
   type ModelsDevProvider,
 } from "../providers/opencode/catalog.js";
@@ -42,6 +45,8 @@ export interface DirectCatalogOptions {
   readonly workingDirectory?: string;
   readonly storeRoot?: string;
   readonly modelsDev?: () => Promise<LoadedModelsDevCatalog>;
+  /** The models OpenCode's own provider serves today (`loadServedModels`); read only when its free tier is offered. */
+  readonly opencodeServed?: () => Promise<LoadedServedModels>;
   /**
    * The `opencode` executable to ask for stored credentials. No setting feeds
    * this today (the OpenCode driver is built with its defaults too), so it is
@@ -80,13 +85,22 @@ function harnessEfforts(values: readonly string[] | undefined): EffortDescriptor
   return [{ id: "effort", label: "Effort", choices: values.map((id) => ({ id, label: id, isDefault: null })), currentValue: null }];
 }
 
+/** What the free-tier status adds about OpenCode's served list when it is not current. */
+const SERVED_NOTE: Readonly<Record<LoadedServedModels["source"], string>> = {
+  cache: "",
+  live: "",
+  stale: "; OpenCode's list of served models is out of date",
+  none: "; OpenCode's list of served models could not be read, so some may be retired",
+};
+
 /**
  * Per-provider `opencode/<id>` entries: categorized, browsable sections.
  * Credentialed providers list everything. Without a credential only
- * OpenCode's own `opencode` provider serves anything — its zero-cost
- * models, upstream's free tier (`isFreeOpencodeModel`); every other
- * provider refuses every request, so it is listed disabled with no models
- * rather than offering a long tail of models the user cannot run.
+ * OpenCode's own `opencode` provider serves anything — its free tier:
+ * zero-cost on models.dev and still served (`freeTierModels`), none at all
+ * under `OPENCODE_DISABLE_FREE_MODELS`; every other provider refuses every
+ * request, so it is listed disabled with no models rather than offering a
+ * long tail of models the user cannot run.
  */
 async function opencodeProviders(
   loaded: LoadedModelsDevCatalog,
@@ -94,8 +108,12 @@ async function opencodeProviders(
   installed: boolean,
   isHidden: (instanceId: string, slug: string) => boolean,
   binaryPath?: string,
+  loadServed: () => Promise<LoadedServedModels> = loadServedModels,
 ): Promise<ProviderSummary[]> {
   const stored = installed ? await readStoredAuthTypes(env, { binaryPath }) : {};
+  const freeOff = freeModelsDisabled(env);
+  const needsServed = installed && !freeOff && loaded.catalog.some((provider) => provider.id.toLowerCase() === "opencode" && storedAuthTypeFor(stored, provider.id) === undefined && presentApiKeyEnvs(provider, env).length === 0);
+  const served: LoadedServedModels = needsServed ? await loadServed().catch((): LoadedServedModels => ({ ids: null, source: "none" })) : { ids: null, source: "none" };
   return loaded.catalog.map((provider: ModelsDevProvider) => {
     const keyEnvs = presentApiKeyEnvs(provider, env);
     const storedType = storedAuthTypeFor(stored, provider.id);
@@ -108,9 +126,10 @@ async function opencodeProviders(
           : keyEnvs.length > 0
             ? "api-key"
             : null;
-    const freeTier = credential === null && provider.id.toLowerCase() === "opencode";
+    const ownProvider = credential === null && provider.id.toLowerCase() === "opencode";
+    const freeTier = ownProvider && !freeOff;
     const connected = credential !== null || freeTier;
-    const models = credential !== null ? provider.models : freeTier ? provider.models.filter(isFreeModel) : [];
+    const models = credential !== null ? provider.models : freeTier ? freeTierModels(provider.models, served.ids) : [];
     const keyHint = provider.env.length > 0 ? provider.env[0] : null;
     return {
       instanceId: `opencode/${provider.id}`,
@@ -121,11 +140,13 @@ async function opencodeProviders(
       status: !installed
         ? "not installed"
         : freeTier
-          ? `free models only (connect it for all ${provider.models.length})`
+          ? `free models only (connect it for all ${provider.models.length})${SERVED_NOTE[served.source]}`
           : !connected
-            ? keyHint !== null
-              ? `not connected (set ${keyHint} or run opencode auth login)`
-              : "not connected (run opencode auth login)"
+            ? ownProvider
+              ? "free models off (OPENCODE_DISABLE_FREE_MODELS); connect it to use it"
+              : keyHint !== null
+                ? `not connected (set ${keyHint} or run opencode auth login)`
+                : "not connected (run opencode auth login)"
             : loaded.source === "live"
               ? null
               : `models.dev ${loaded.source}`,
@@ -269,6 +290,7 @@ export async function buildDirectProviders(options: DirectCatalogOptions = {}): 
     opencodeInstalled,
     (instanceId, slug) => isModelHidden(prefs, instanceId, slug),
     options.opencodeBinaryPath,
+    options.opencodeServed,
   );
   const compat = opencodeCompatInstance(modelsDev, opencodeInstalled);
 

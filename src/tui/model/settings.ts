@@ -74,6 +74,8 @@ export interface HandoffModelEntry {
   readonly name: string;
   /** Tokens it is handed off at, or null when it follows the provider's setting. */
   readonly tokens: number | null;
+  /** False for a model the setting names that the provider does not offer (no longer, or not without a login): listed so its override can be removed. */
+  readonly offered: boolean;
 }
 
 /** The sizes the per-model slider offers; the catalog has no window per model, so these span a small local model (16K) to 1M. */
@@ -106,10 +108,12 @@ export function handoffModelEntries(providers: readonly ProviderSummary[] | null
     for (const model of [...provider.models].sort((a, b) => Number(b.isDefault === true) - Number(a.isDefault === true))) {
       if (model.isHidden || seen.has(model.slug)) continue;
       seen.add(model.slug);
-      out.push({ slug: model.slug, name: model.name, tokens: held[model.slug] ?? null });
+      out.push({ slug: model.slug, name: model.name, tokens: held[model.slug] ?? null, offered: true });
     }
   }
-  for (const [slug, tokens] of Object.entries(held)) if (!seen.has(slug)) out.push({ slug, name: slug, tokens });
+  // Before the catalog arrives nothing is known to be gone.
+  const known = providers !== null;
+  for (const [slug, tokens] of Object.entries(held)) if (!seen.has(slug)) out.push({ slug, name: known ? `${slug} (not offered)` : slug, tokens, offered: !known });
   return out;
 }
 

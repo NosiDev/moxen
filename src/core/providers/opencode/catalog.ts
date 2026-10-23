@@ -462,3 +462,81 @@ async function fetchLiveCatalog(
     clearTimeout(timer);
   }
 }
+
+// -- the models OpenCode's own provider serves today ---------------------------
+
+/**
+ * models.dev keeps a model long after OpenCode stops serving it, so its
+ * zero-cost list overstates the free tier (retired `*-free` models stay
+ * listed). OpenCode's inference endpoint lists what it serves now, free and
+ * paid alike; the free tier is models.dev's zero-cost models that are on it.
+ */
+export const OPENCODE_SERVED_MODELS_URL = "https://opencode.ai/inference/v1/models";
+
+/** Where the served list came from: fresh cache, a fetch now, an out-of-date cache, or nothing (offline, first run). */
+export type ServedModelsSource = "cache" | "live" | "stale" | "none";
+
+export interface LoadedServedModels {
+  /** Model ids (no provider prefix); null when nothing could be read. */
+  readonly ids: ReadonlySet<string> | null;
+  readonly source: ServedModelsSource;
+}
+
+export function defaultServedModelsCachePath(): string {
+  return path.join(appHomeDir(), "cache", "opencode-served-models.json");
+}
+
+/** The ids in an OpenAI-style `{data: [{id}]}` list; null when it is not one. */
+export function parseServedModels(raw: unknown): ReadonlySet<string> | null {
+  const data = asRecord(raw)?.data;
+  if (!Array.isArray(data)) return null;
+  const ids = data.flatMap((entry) => {
+    const id = asString(asRecord(entry)?.id);
+    return id ? [id] : [];
+  });
+  return ids.length > 0 ? new Set(ids) : null;
+}
+
+/** Fresh cache, else a fetch (cached on success), else the cache however old, else nothing; same freshness as models.dev. */
+export async function loadServedModels(options: Omit<LoadModelsDevCatalogOptions, "snapshotText" | "env"> = {}): Promise<LoadedServedModels> {
+  const cachePath = options.cachePath ?? defaultServedModelsCachePath();
+  const now = options.now ?? Date.now;
+  const cached = (): ReadonlySet<string> | null => {
+    const text = defaultReadFile(cachePath);
+    return text === null ? null : parseServedModels(parseJson(text));
+  };
+  if (cacheIsFresh(cachePath, now(), statMtimeMs)) {
+    const ids = cached();
+    if (ids !== null) return { ids, source: "cache" };
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MODELS_DEV_FETCH_TIMEOUT_MS);
+  try {
+    const response = await (options.fetchImpl ?? fetch)(OPENCODE_SERVED_MODELS_URL, { headers: { "User-Agent": "moxen/opencode-models" }, signal: controller.signal });
+    if (response.ok) {
+      const text = await response.text();
+      const ids = parseServedModels(parseJson(text));
+      if (ids !== null) {
+        writeCacheBestEffort(cachePath, text);
+        return { ids, source: "live" };
+      }
+    }
+  } catch {
+    // Offline or refused: an older answer, if any, follows.
+  } finally {
+    clearTimeout(timer);
+  }
+  const ids = cached();
+  return ids !== null ? { ids, source: "stale" } : { ids: null, source: "none" };
+}
+
+/** `OPENCODE_DISABLE_FREE_MODELS=1` (or `true`): OpenCode hides its free models, so Moxen offers none. */
+export function freeModelsDisabled(env: NodeJS.ProcessEnv): boolean {
+  const value = env.OPENCODE_DISABLE_FREE_MODELS?.trim().toLowerCase();
+  return value === "1" || value === "true";
+}
+
+/** The free tier of OpenCode's own provider: zero-cost on models.dev and served today; models.dev alone when the served list is unknown. */
+export function freeTierModels(models: ReadonlyArray<ModelsDevModel>, served: ReadonlySet<string> | null): ModelsDevModel[] {
+  return models.filter((model) => isFreeModel(model) && (served === null || served.has(model.id)));
+}
