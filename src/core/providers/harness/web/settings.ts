@@ -35,7 +35,11 @@ export function usesPerServiceKeys(harness: HarnessProviderConfig | undefined): 
   return Object.keys(harness?.webSearchKeys ?? {}).length > 0 || Object.keys(harness?.webSearchKeyEnvs ?? {}).length > 0;
 }
 
-/** The key a search service uses: its own slot, else (in a file from before there was one per service) the single older slot. */
+/**
+ * The key a search service uses: its own slot, else (in a file from before
+ * there was one per service) the single older slot, which only ever stood for
+ * the service selected, so no other service is handed it.
+ */
 export function searchKeyFor(harness: HarnessProviderConfig | undefined, backend: SearchBackend): { keyRef?: string; keyEnv?: string } {
   if (backend !== "exa" && backend !== "brave") return {};
   const keyed = backend satisfies KeyedSearchBackend;
@@ -44,6 +48,7 @@ export function searchKeyFor(harness: HarnessProviderConfig | undefined, backend
     const keyEnv = harness?.webSearchKeyEnvs?.[keyed];
     return { ...(keyRef ? { keyRef } : {}), ...(keyEnv ? { keyEnv } : {}) };
   }
+  if (harness?.webSearch !== keyed) return {};
   return { ...(harness?.webSearchKey ? { keyRef: harness.webSearchKey } : {}), ...(harness?.webSearchKeyEnv ? { keyEnv: harness.webSearchKeyEnv } : {}) };
 }
 

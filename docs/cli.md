@@ -144,11 +144,9 @@ macOS/Linux equivalent (cron):
 moxen config show
 moxen config set projectPolicy existing
 moxen config set workspaceMode folder
-moxen config set openMode browser
 moxen config set threadEnvMode local
 moxen config set provider opencode/openai
 moxen config set model gpt-5.4
-moxen config set speedMode fast
 moxen config set thinkingEffort xhigh
 ```
 
@@ -156,18 +154,20 @@ moxen config set thinkingEffort xhigh
 | --- | --- | --- |
 | `projectPolicy` | `create`, `existing` | `create` |
 | `workspaceMode` | `repo`, `folder` | `repo` |
-| `openMode` | `auto`, `desktop`, `browser`, `none` | `auto` |
-| `threadEnvMode` | `auto`, `local`, `worktree` | `auto` |
+| `openMode` | Older key, kept so configs and scripts load; nothing is opened | `auto` |
+| `threadEnvMode` | `local`, `worktree` (an older `auto` reads as `local`) | `local` |
 | `runtimeMode` | `approval-required`, `auto-accept-edits`, `auto`, `full-access` | `full-access` |
-| `interactionMode` | `default`, `plan` | `default` |
+| `interactionMode` | `default`, `plan`; older key, plan mode is now chosen per thread | `default` |
 | `provider` | Provider instance id for model overrides | Unset (inherits thread/project) |
 | `model` | Model slug for overrides | Unset (inherits thread/project) |
-| `speedMode` | `standard`, `fast` | Unset (inherits thread/project) |
+| `speedMode` | Older key, kept so configs load; no provider reads it | Unset |
 | `thinkingEffort` | Model-supported effort value | Unset (inherits thread/project) |
+
+**Older keys.** Settings reshaped since an older build (for example `ui.autoHandoff`, `providers.claude.autoCompact`, `providers.opencode.compactBuffer`, `installSkills`, `providers.harness.webSearchKey`, `providers.harness.webBrowser`) still load, and `config get` / `config set` still accept them; `config list` lists them too. A newer key wins once it is set; while it is unset, the older key is what applies, and the settings page names it as the Default. Loading a file never rewrites it in the new shape: the file is only written when a setting is changed, and then the older keys stay in it, so an older Moxen build sharing `~/.moxen/config.json` keeps working. The one exception is a value an older build reads the same way, such as `threadEnvMode: "auto"`, saved as `local`.
 
 The settings page files every key under General, Defaults, Sessions, Long threads, Agent context, Interface, Git and forges, one tab per provider (each in the same order: Defaults, Tools, Long threads, Sessions, Setup, then what is particular to it), and MCP servers. Where a setting lives on the page never changes its key.
 
-`projectPolicy: "existing"` makes a missing project a hard error. `workspaceMode: "folder"` uses the exact current folder instead of walking up to the Git root. `threadEnvMode: "auto"` follows project → `moxen.json` → global local/worktree preference. Explicit CLI config values remain overrides.
+`projectPolicy: "existing"` makes a missing project a hard error. `workspaceMode: "folder"` uses the exact current folder instead of walking up to the Git root. Whether a thread from `moxen handover` or `moxen threads create` gets a worktree is decided by the command (`--checkout`), then the project, then its `moxen.json`, then `threadEnvMode`. Explicit CLI config values remain overrides.
 
 `--checkout worktree` provisions a local worktree for the new thread: a `moxen/<id>` branch (named from the thread title: `moxen/<title-slug>`; the thread id only when there is no title) off the current branch (or its origin — new worktrees always start from origin), placed under the store's `worktrees` directory, with the thread rooted there. A repository without a current branch returns `WORKTREE_REQUIRES_BRANCH` instead of silently falling back to the current checkout.
 
