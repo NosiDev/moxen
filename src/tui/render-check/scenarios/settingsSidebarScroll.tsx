@@ -67,6 +67,24 @@ export async function runSettingsSidebarScroll(): Promise<void> {
   console.log(first.join("\n"));
   if (first.some((row) => row.includes("exa"))) fail("on opening: the last MCP server shows, so the sidebar did not need to scroll; make the window shorter");
 
+  // A long Default is the one shortened: the global "Compact at" keeps its whole label and two spaces before its value.
+  for (let step = 0; step < 3; step += 1) await act(async () => setup.mockInput.pressTab());
+  await settle();
+  for (let step = 0; step < 4; step += 1) {
+    if (setup.captureCharFrame().includes("Compact at  ")) break;
+    await act(async () => setup.mockInput.pressArrow("down"));
+    await settle();
+  }
+  const longThreads = setup.captureCharFrame().split("\n");
+  console.log("--- global Long threads, narrow ---");
+  console.log(longThreads.join("\n"));
+  const compactRow = longThreads.find((row) => /│\s+Compact at\b/.test(row));
+  if (compactRow === undefined) fail("the global Long threads tab shows no whole 'Compact at' label");
+  if (!/Compact at {2,}\S/.test(compactRow)) fail(`'Compact at' and its value touch: ${JSON.stringify(compactRow)}`);
+  if (!compactRow.includes("Default (80% of the window)")) fail(`the global Compact at Default is not the plain share: ${JSON.stringify(compactRow)}`);
+  for (let step = 0; step < 3; step += 1) await act(async () => setup.mockInput.pressTab({ shift: true }));
+  await settle();
+
   // Shift-tab from the first section wraps to the last: the sidebar follows it down.
   await act(async () => setup.mockInput.pressTab({ shift: true }));
   await settle();

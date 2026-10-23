@@ -923,12 +923,15 @@ function SettingCard({
   const { descriptor, value, explicit } = item;
   const secret = descriptor.kind.type === "secret";
   const bg = active ? SURFACE.hover : hovered ? SURFACE.border : SURFACE.raised;
-  const shown = `${pending ? "· " : ""}${valueText(item)}`;
+  // The label keeps its room and two spaces before the value; a value too long for the rest (a long Default) is the one shortened.
+  const room = width - 4;
+  const fullValue = `${pending ? "· " : ""}${valueText(item)}`;
+  const shown = truncate(fullValue, Math.max(12, room - descriptor.label.length - 2));
   // When a change applies sits beside the label if both fit, else on a line of its own, so the label is never cut for it.
   const tag = descriptor.appliesAt === undefined || descriptor.appliesAt === "now" ? "" : `  ${APPLIES_AT_TEXT[descriptor.appliesAt].tag}`;
-  const inline = tag !== "" && descriptor.label.length + tag.length <= width - shown.length - 4;
+  const inline = tag !== "" && descriptor.label.length + tag.length <= room - shown.length - 2;
   const note = inline ? tag : "";
-  const labelWidth = Math.max(8, width - shown.length - note.length - 4);
+  const labelWidth = Math.max(8, room - shown.length - note.length - 2);
   const valueColor = item.unavailable !== undefined
     ? COLOR.faint
     : pending
@@ -957,7 +960,7 @@ function SettingCard({
           <text fg={item.unavailable !== undefined ? COLOR.faint : active ? COLOR.bright : COLOR.text} bg={bg} selectable={false}>{truncate(descriptor.label, labelWidth)}</text>
           {note === "" ? null : <text fg={COLOR.faint} bg={bg} selectable={false}>{note}</text>}
         </box>
-        {editing ? null : <text fg={valueColor} bg={bg} selectable={false}>{shown}</text>}
+        {editing ? null : <text fg={valueColor} bg={bg} style={{ marginLeft: 2, flexShrink: 0 }} selectable={false}>{shown}</text>}
       </box>
       {editing ? (
         <TextField

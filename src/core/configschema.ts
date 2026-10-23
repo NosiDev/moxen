@@ -1886,7 +1886,7 @@ const FALLBACK_RESOLVERS: Readonly<Record<FallbackResolver, (config: CliConfig, 
   /** Compact at, unset: the older keys beside it, then the global setting, then 80%; or the provider's own line, which is not one Moxen draws. */
   compactLine(config, descriptor) {
     const kind = longThreadKindOf(descriptor);
-    if (kind === undefined) return { value: lineText(DEFAULT_COMPACT_LINE), label: `${lineLabel(DEFAULT_COMPACT_LINE)} (Moxen Harness: 70%, 60% under 128K)` };
+    if (kind === undefined) return { value: lineText(DEFAULT_COMPACT_LINE), label: lineLabel(DEFAULT_COMPACT_LINE), origin: "the Moxen Harness keeps its own: 70%, 60% under 128K" };
     const mode = compactionModeFor(config, kind).value;
     const found = compactLineFor(config, kind);
     if (found !== null) return sourcedEffective(descriptor, lineText(found.value), found.key);
