@@ -219,11 +219,14 @@ function parseProfile(raw: unknown, label: string): HarnessProfileConfig {
 export function resolveCompactionSettings(config: HarnessProviderConfig | undefined, profile: HarnessProfileConfig, model?: string): CompactionSettings {
   const own = profile.compaction;
   const modelTokens = model === undefined ? undefined : config?.compactAtModels?.[model];
+  // The model's own choice beats the tab's; the Harness's own compaction is its automatic one.
+  const chosen = model === undefined ? undefined : config?.compactionModels?.[model];
+  const tabMode = chosen === undefined ? config?.compaction : chosen === "provider" ? "auto" : chosen;
   const line = own?.tokens !== undefined ? { tokens: own.tokens } : own?.fraction !== undefined ? { fraction: own.fraction } : modelTokens !== undefined ? { tokens: modelTokens } : tabLine(config);
   return {
-    auto: own?.auto ?? (config?.compaction !== undefined ? config.compaction !== "off" : config?.autoCompact) ?? DEFAULT_COMPACTION.auto,
+    auto: own?.auto ?? (tabMode !== undefined ? tabMode !== "off" : config?.autoCompact) ?? DEFAULT_COMPACTION.auto,
     // A profile that switches compaction on or off itself is not asked about: it says what it wants.
-    ask: own?.auto === undefined && config?.compaction === "ask",
+    ask: own?.auto === undefined && tabMode === "ask",
     fraction: line !== null && "fraction" in line ? line.fraction : null,
     tokens: line !== null && "tokens" in line ? line.tokens : null,
     keepRecentTokens: own?.keepRecentTokens ?? config?.keepRecentTokens ?? DEFAULT_COMPACTION.keepRecentTokens,

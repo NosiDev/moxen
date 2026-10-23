@@ -23,7 +23,7 @@ import { readListScalar, resolveListKey, type ListDescriptor, type ListTarget } 
 import { CliError } from "./errors.js";
 import { webOrderEntries, webOrderUnavailable, type WebOrderEntry, type WebRole } from "./webservers.js";
 import { CLAUDE_NATIVE_TOOLS, OPENCODE_NATIVE_TOOLS, type NativeTool } from "./nativetools.js";
-import { formatHandoffModels } from "./handoffmodels.js";
+import { formatHandoffModels, formatModeModels } from "./handoffmodels.js";
 import { numberLabel } from "./configformat.js";
 import {
   COMPACTION_MODES,
@@ -109,7 +109,7 @@ export type SettingKind =
        * instance, a model slug, an effort level). A client offers what the
        * catalog lists rather than a text box; the file still holds the id.
        */
-      readonly source?: "provider" | "model" | "effort" | "mcp-server" | "handoff-models" | "native-tools" | "web-order";
+      readonly source?: "provider" | "model" | "effort" | "mcp-server" | "model-overrides" | "native-tools" | "web-order";
       /** With `source` web-order: which tools the order ranks. */
       readonly web?: WebRole;
       /** With `source` native-tools: the provider's own tools this setting can switch off (`core/nativetools.ts`). */
@@ -527,16 +527,6 @@ function longThreadSettings(kind: LongThreadKind): SettingDescriptor[] {
       fallback: { resolver: "compactLine" },
       visibleWhen: { key: compactionKey, in: kind === "claude" ? ["", "provider", "ask", "auto"] : kind === "opencode" ? ["", "ask", "auto"] : ["", "ask", "auto"] },
     },
-    {
-      key: `providers.${kind}.compactAtModels`,
-      label: "Compact at, per model",
-      description: `Token counts for particular models of this provider. Wins over 'Compact at' for those models; other models follow it.${kind === "harness" ? " A profile's own compaction size still wins for its models." : kind === "claude" ? " While Claude Code compacts by itself, each becomes that model's auto-compact window, kept between 100K and 1M." : ""} Stored as model=tokens pairs (claude-opus-4-5=400k) for the config file and \`moxen config set\`.`,
-      section,
-      group,
-      kind: { type: "string", placeholder: "model=400k", multiline: true, source: "handoff-models", providerKind: kind },
-      defaultValue: undefined,
-      visibleWhen: { key: compactionKey, in: kind === "claude" ? ["", "provider", "ask", "auto"] : kind === "opencode" ? ["", "ask", "auto"] : ["", "ask", "auto"] },
-    },
     ...(kind === "harness"
       ? [
           {
@@ -574,14 +564,25 @@ function longThreadSettings(kind: LongThreadKind): SettingDescriptor[] {
     },
     {
       key: `providers.${kind}.autoHandoffModels`,
-      label: "Hand off at, per model",
-      description: "Token counts for particular models of this provider. Wins over the settings above for those models; other models follow them. Stored as model=tokens pairs (claude-opus-4-5=500k, gpt-5=1m) for the config file and `moxen config set`.",
+      label: "Per model",
+      description: `Particular models of this provider that hand off or compact differently: each can have its own Hand off, Hand off at, Compaction and Compact at; what it leaves alone follows the rows above.${kind === "opencode" ? " OpenCode's own compaction is one switch for its whole server, so a model chooses its Compaction only while that is not OpenCode's." : kind === "harness" ? " A profile's own compaction still wins for its models." : ""} In the config file and \`moxen config set\`, sizes are model=tokens pairs here and in compactAtModels, choices model=choice pairs in handoffModels and compactionModels.`,
       section,
       group,
-      kind: { type: "string", placeholder: "model=500k", multiline: true, source: "handoff-models", providerKind: kind },
+      kind: { type: "string", placeholder: "model=500k", multiline: true, source: "model-overrides", providerKind: kind },
       defaultValue: undefined,
     },
+    ...perModelSettings(kind),
     ...legacyHandoffSettings(kind),
+  ];
+}
+
+/** The per-model maps the "Per model" row edits beside its own (`autoHandoffModels`): set from its editor or `config set`, not shown as rows. */
+function perModelSettings(kind: LongThreadKind): SettingDescriptor[] {
+  const base = { section: `provider:${kind}` as const, group: "Long threads", hidden: true, defaultValue: undefined } as const;
+  return [
+    { ...base, key: `providers.${kind}.compactAtModels`, label: "Compact at, per model", description: "Token counts at which particular models of this provider are compacted, as model=tokens pairs (claude-opus-5=400k). Wins over 'Compact at' for those models.", kind: { type: "string", placeholder: "model=400k", multiline: true } },
+    { ...base, key: `providers.${kind}.handoffModels`, label: "Hand off, per model", description: "Whether particular models of this provider are handed off, as model=choice pairs (claude-opus-5=off): ask, auto or off. Wins over 'Hand off' for those models.", kind: { type: "string", placeholder: "model=off", multiline: true } },
+    { ...base, key: `providers.${kind}.compactionModels`, label: "Compaction, per model", description: `Who compacts particular models of this provider, as model=choice pairs (claude-opus-5=auto): ${COMPACTION_MODES[kind].join(", ")}. Wins over 'Compaction' for those models.`, kind: { type: "string", placeholder: "model=auto", multiline: true } },
   ];
 }
 
@@ -1593,6 +1594,7 @@ export function readSetting(config: CliConfig, key: string): SettingValue {
   if (raw === undefined || raw === null) return settingDescriptor(key)?.defaultValue;
   if (typeof raw === "string" || typeof raw === "boolean" || typeof raw === "number") return raw;
   if ((key.endsWith(".autoHandoffModels") || key.endsWith(".compactAtModels")) && typeof raw === "object") return formatHandoffModels(raw as Record<string, number>);
+  if ((key.endsWith(".handoffModels") || key.endsWith(".compactionModels")) && typeof raw === "object") return formatModeModels(raw as Record<string, string>);
   return undefined;
 }
 

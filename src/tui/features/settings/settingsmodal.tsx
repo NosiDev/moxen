@@ -20,7 +20,7 @@ import { markModalDismissed } from "../../model/modalDismiss.js";
 import { useHover } from "../../hooks/useHover.js";
 import { COLOR, SURFACE, truncate } from "../../theme.js";
 import { splitInlineCode } from "../../model/inlinecode.js";
-import { nextToggleValue, providerVersionLine, settingControl, withHandoffModel, settingValueLabel, updatableProviderOf, type LatestView, type ProviderCheckView, type SettingControl, type SettingOption } from "../../model/settings.js";
+import { nextToggleValue, providerVersionLine, settingControl, withModelOverride, MODEL_OVERRIDE_KEY, settingValueLabel, updatableProviderOf, type LatestView, type ProviderCheckView, type SettingControl, type SettingOption } from "../../model/settings.js";
 import type { LatestVersions, UpdatableProvider } from "../../../core/catalog/update.js";
 import {
   SECTION_LABEL,
@@ -611,11 +611,16 @@ export function SettingsModal({
                 <HandoffModelsEditor
                   title={handoffItem.descriptor.label}
                   description={handoffItem.descriptor.description}
-                  action={handoffItem.control.action}
+                  compaction={handoffItem.control.compaction}
                   models={handoffItem.control.models}
                   width={paneWidth}
                   catalogReady={providers !== null}
-                  onChange={(slug, tokens) => onSet(handoffItem.descriptor.key, withHandoffModel(handoffItem.value, slug, tokens))}
+                  onChange={(field, slug, next) => {
+                    // Each field has its own key beside the row's (`providers.<kind>.compactAtModels`, …).
+                    const key = `${handoffItem.descriptor.key.slice(0, handoffItem.descriptor.key.lastIndexOf(".") + 1)}${MODEL_OVERRIDE_KEY[field]}`;
+                    const current = snapshot.settings.find((view) => view.descriptor.key === key)?.value;
+                    void onSet(key, withModelOverride(field, current, slug, next));
+                  }}
                   onExit={() => setHandoffOpen(null)}
                 />
               ) : accessItem !== undefined && accessItem.control.kind === "order" ? (

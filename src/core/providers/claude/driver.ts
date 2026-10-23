@@ -462,12 +462,13 @@ export class ClaudeDriver implements ProviderAdapter<CliError> {
 
   /**
    * Session-scoped Claude Code settings: the ultracode flag (an old effort choice, or `providers.claude.ultracode`), and the user's auto-compact
-   * window (`providers.claude.autoCompactWindow`, or the session's model's own from `compactAtModels`), and Claude Code's own compaction switched off while Moxen does it (`providers.claude.autoCompact`). One `settings` option holds both, so they are merged.
+   * window (`providers.claude.autoCompactWindow`, or the session's model's own from `compactAtModels`), and Claude Code's own (the session's model's choice first, `compactionModels`) compaction switched off while Moxen does it (`providers.claude.autoCompact`). One `settings` option holds both, so they are merged.
    */
   private sessionSettings(session: ClaudeSession): { settings?: NonNullable<ClaudeQueryOptions["settings"]> } {
     const effort = spawnEffortOptions(session.effort).settings;
     const window = (session.model !== null ? this.settings.autoCompactWindowModels[session.model] : undefined) ?? this.settings.autoCompactWindow;
-    const merged = { ...effort, ...(this.settings.ultracode ? { ultracode: true } : {}), ...(window !== null ? { autoCompactWindow: window } : {}), ...(this.settings.autoCompact !== "claude" ? { autoCompactEnabled: false } : {}) };
+    const autoCompact = (session.model !== null ? this.settings.autoCompactModels[session.model] : undefined) ?? this.settings.autoCompact;
+    const merged = { ...effort, ...(this.settings.ultracode ? { ultracode: true } : {}), ...(window !== null ? { autoCompactWindow: window } : {}), ...(autoCompact !== "claude" ? { autoCompactEnabled: false } : {}) };
     return Object.keys(merged).length > 0 ? { settings: merged as NonNullable<ClaudeQueryOptions["settings"]> } : {};
   }
 

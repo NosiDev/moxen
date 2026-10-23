@@ -75,6 +75,16 @@ describe("claude auto-compact window", () => {
     expect(without.created[0]!.options.settings).toBeUndefined();
   });
 
+  it("lets the session's model choose who compacts: Claude Code's own stays on for it while Moxen compacts the others", async () => {
+    const settings = { autoCompact: "ask", autoCompactModels: { "claude-opus-5": "claude" } } as const;
+    const own = new FakeTransport([[initMessage()]]);
+    await Effect.runPromise(new ClaudeDriver({ transport: own, settings }).startSession({ ...START, modelSelection: { instanceId: "claudeAgent", model: "claude-opus-5" } }));
+    expect(own.created[0]!.options.settings).toBeUndefined();
+    const other = new FakeTransport([[initMessage()]]);
+    await Effect.runPromise(new ClaudeDriver({ transport: other, settings }).startSession({ ...START, modelSelection: { instanceId: "claudeAgent", model: "claude-sonnet-5" } }));
+    expect(other.created[0]!.options.settings).toEqual({ autoCompactEnabled: false });
+  });
+
   it("uses the session's model's own window when it has one, and the provider's for the others", async () => {
     const settings = { autoCompact: "claude", autoCompactWindow: 300_000, autoCompactWindowModels: { "claude-opus-5": 800_000 } } as const;
     const own = new FakeTransport([[initMessage()]]);

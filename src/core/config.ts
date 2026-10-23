@@ -7,7 +7,7 @@ import { CliError } from "./errors.js";
 import { parseMcpServers, parseNameList, type McpServerEntry } from "./mcp.js";
 import { normalizeHarnessConfig } from "./providers/harness/profiles.js";
 import { HIDDEN_VALUE, writeListValue } from "./configlist.js";
-import { normalizeHandoffModels } from "./handoffmodels.js";
+import { normalizeHandoffModels, normalizeModeModels } from "./handoffmodels.js";
 import { SETTING_KEYS, listTarget, parseSettingValue, secretKeyName, settingDescriptor, writeSetting } from "./configschema.js";
 import { isSecretRef, secretRef, writeSecret } from "./secrets.js";
 import type {
@@ -287,15 +287,25 @@ function checkTyped(kind: string, value: unknown, label: string): unknown {
   throw new CliError("INVALID_CONFIG", `${label} must be a string.`);
 }
 
-/** A provider section's per-model hand-off and compaction sizes, as the fields to merge in. */
-function handoffModelsOf(section: unknown, prefix: string): { autoHandoffModels?: Record<string, number>; compactAtModels?: Record<string, number> } | undefined {
+type PerModelFields = Pick<ClaudeProviderConfig, "autoHandoffModels" | "compactAtModels" | "handoffModels" | "compactionModels">;
+
+/** A provider section's per-model hand-off and compaction overrides (sizes and choices), as the fields to merge in. */
+function handoffModelsOf(section: unknown, prefix: string): PerModelFields | undefined {
   const input = asSection(section, prefix);
-  const out: { autoHandoffModels?: Record<string, number>; compactAtModels?: Record<string, number> } = {};
+  const out: PerModelFields = {};
   for (const field of ["autoHandoffModels", "compactAtModels"] as const) {
     const raw = input[field];
     if (raw === undefined || raw === null) continue;
     const map = normalizeHandoffModels(raw, `${prefix}.${field}`);
     if (map) out[field] = map;
+  }
+  if (input.handoffModels !== undefined && input.handoffModels !== null) {
+    const map = normalizeModeModels(input.handoffModels, `${prefix}.handoffModels`, ["ask", "auto", "off"] as const);
+    if (map) out.handoffModels = map;
+  }
+  if (input.compactionModels !== undefined && input.compactionModels !== null) {
+    const map = normalizeModeModels(input.compactionModels, `${prefix}.compactionModels`, ["provider", "ask", "auto", "off"] as const);
+    if (map) out.compactionModels = map;
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }

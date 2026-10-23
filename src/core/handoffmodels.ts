@@ -54,3 +54,34 @@ export function normalizeHandoffModels(raw: unknown, label: string): Record<stri
 export function formatHandoffModels(map: Record<string, number>): string {
   return Object.entries(map).map(([slug, tokens]) => `${slug}=${tokens}`).join(", ");
 }
+
+/**
+ * The per-model choices beside the sizes (`handoffModels`, `compactionModels`):
+ * model slug -> one of `allowed`. Same text form as the sizes, with a choice
+ * where the tokens go (`claude-opus-5=off, gpt-5=ask`).
+ */
+export function normalizeModeModels<T extends string>(raw: unknown, label: string, allowed: readonly T[]): Record<string, T> | undefined {
+  const entries: Array<[string, unknown]> = [];
+  if (typeof raw === "string") {
+    for (const part of raw.split(/[\n,]/)) {
+      const entry = part.trim();
+      if (entry === "") continue;
+      const at = entry.lastIndexOf("=");
+      const slug = at < 0 ? "" : entry.slice(0, at).trim();
+      if (slug === "") throw new CliError("INVALID_CONFIG", `${label} takes model=choice pairs, for example claude-opus-5=off.`);
+      entries.push([slug, entry.slice(at + 1).trim()]);
+    }
+  } else if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) entries.push(...Object.entries(raw));
+  else throw new CliError("INVALID_CONFIG", `${label} must be an object of model slug to a choice.`);
+  const map: Record<string, T> = {};
+  for (const [slug, value] of entries) {
+    if (typeof value !== "string" || !allowed.includes(value as T)) throw new CliError("INVALID_CONFIG", `${label}: ${slug} must be one of ${allowed.join(", ")}.`);
+    map[slug] = value as T;
+  }
+  return Object.keys(map).length > 0 ? map : undefined;
+}
+
+/** The text form of a choice map: `slug=choice`, comma-separated. */
+export function formatModeModels(map: Readonly<Record<string, string>>): string {
+  return Object.entries(map).map(([slug, choice]) => `${slug}=${choice}`).join(", ");
+}

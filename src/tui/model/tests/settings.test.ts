@@ -4,7 +4,7 @@ import type { ProviderSummary } from "../../../core/catalog/summary.js";
 import { describeSettings, restartRequired, settingDescriptor, SETTINGS } from "../../../core/configschema.js";
 import { DEFAULT_CONFIG, normalizeConfig } from "../../../core/config.js";
 import type { CliConfig } from "../../../core/types.js";
-import { configuredDefaultModel, defaultLabel, handoffModelEntries, nextToggleValue, handoffStops, handoffTokensLabel, providerVersionLine, settingControl, settingValueLabel, updatableProviderOf, withHandoffModel, type ProviderCheckView } from "../settings.js";
+import { configuredDefaultModel, defaultLabel, modelOverrideEntries, nextToggleValue, handoffStops, handoffTokensLabel, providerVersionLine, settingControl, settingValueLabel, updatableProviderOf, withModelOverride, type ProviderCheckView } from "../settings.js";
 
 function provider(instanceId: string, models: Array<{ slug: string; name: string; efforts?: string[]; hidden?: boolean }>, enabled = true): ProviderSummary {
   return {
@@ -280,24 +280,27 @@ describe("a provider's own tools and web preference on its page", () => {
   });
 });
 
-describe("per-model hand-off sizes on a provider's page", () => {
+describe("per-model overrides on a provider's page", () => {
   const claude = provider("claudeAgent", [{ slug: "opus", name: "Opus" }, { slug: "sonnet", name: "Sonnet" }, { slug: "old", name: "Old", hidden: true }]);
   const other = provider("codex", [{ slug: "gpt", name: "GPT" }]);
+  const none = { handoff: null, handoffAt: null, compaction: null, compactAt: null };
 
-  it("lists the provider's visible models with their sizes, then overrides the catalog no longer has", () => {
-    expect(handoffModelEntries([claude, other], "claude", "opus=500000, gone=300000")).toEqual([
-      { slug: "opus", name: "Opus", tokens: 500_000, offered: true },
-      { slug: "sonnet", name: "Sonnet", tokens: null, offered: true },
-      { slug: "gone", name: "gone (not offered)", tokens: 300_000, offered: false },
+  it("lists the provider's visible models with all four overrides, then models only the settings name", () => {
+    const values = { handoff: "opus=off", handoffAt: "opus=500000, gone=300000", compaction: "sonnet=auto", compactAt: undefined };
+    expect(modelOverrideEntries([claude, other], "claude", values)).toEqual([
+      { slug: "opus", name: "Opus", ...none, handoff: "off", handoffAt: 500_000, offered: true },
+      { slug: "sonnet", name: "Sonnet", ...none, compaction: "auto", offered: true },
+      { slug: "gone", name: "gone (not offered)", ...none, handoffAt: 300_000, offered: false },
     ]);
     // Before the catalog arrives the overrides are still there to see and clear, and none is called gone.
-    expect(handoffModelEntries(null, "claude", "opus=500000")).toEqual([{ slug: "opus", name: "opus", tokens: 500_000, offered: true }]);
+    expect(modelOverrideEntries(null, "claude", { ...values, handoffAt: "opus=500000", compaction: undefined })).toEqual([{ slug: "opus", name: "opus", ...none, handoff: "off", handoffAt: 500_000, offered: true }]);
   });
 
-  it("writes one model's size and leaves the others, and removes it with null", () => {
-    expect(withHandoffModel("opus=500000", "sonnet", 128_000)).toBe("opus=500000, sonnet=128000");
-    expect(withHandoffModel("opus=500000, sonnet=128000", "opus", null)).toBe("sonnet=128000");
-    expect(withHandoffModel("opus=500000", "opus", null)).toBe("");
+  it("writes one model's field and leaves the others, and removes it with null", () => {
+    expect(withModelOverride("handoffAt", "opus=500000", "sonnet", 128_000)).toBe("opus=500000, sonnet=128000");
+    expect(withModelOverride("compactAt", "opus=500000, sonnet=128000", "opus", null)).toBe("sonnet=128000");
+    expect(withModelOverride("handoff", undefined, "opus", "off")).toBe("opus=off");
+    expect(withModelOverride("compaction", "opus=ask, sonnet=auto", "opus", null)).toBe("sonnet=auto");
   });
 
   it("labels sizes and keeps a hand-set size among the stops", () => {
@@ -310,7 +313,7 @@ describe("per-model hand-off sizes on a provider's page", () => {
   it("counts the overrides on the collapsed row", () => {
     const descriptor = settingDescriptor("providers.claude.autoHandoffModels")!;
     const label = (value: string) => settingValueLabel(descriptor, value, settingControl(descriptor, value, [], [claude]));
-    expect(label("")).toBe("None set");
+    expect(label("")).toBe("None");
     expect(label("opus=500000")).toBe("1 model");
     expect(label("opus=500000, sonnet=100000")).toBe("2 models");
   });

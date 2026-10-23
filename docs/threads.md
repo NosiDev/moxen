@@ -88,11 +88,10 @@ has the same "Long threads" group, and the global Long threads tab holds the def
 | -- | -- | -- |
 | Compaction | `providers.<kind>.compaction`, default `longThreads.compaction` | `provider`, `ask`, `auto`, `off` (the Moxen Harness: `ask`, `auto`, `off`) |
 | Compact at | `providers.<kind>.compactAt`, default `longThreads.compactAt` | a line |
-| Compact at, per model | `providers.<kind>.compactAtModels` | `model=tokens` pairs |
 | Kept word for word | `providers.harness.keepRecentTokens` | tokens (Harness only) |
 | Hand off | `providers.<kind>.handoff`, default `longThreads.handoff` | `ask`, `auto`, `off` |
 | Hand off at | `providers.<kind>.handoffAt`, default `longThreads.handoffAt` | a line |
-| Hand off at, per model | `providers.<kind>.autoHandoffModels` | `model=tokens` pairs |
+| Per model | `providers.<kind>.handoffModels`, `autoHandoffModels`, `compactionModels`, `compactAtModels` | `model=choice` or `model=tokens` pairs |
 
 A **line** is a share of the model's window (`70%`, 10 to 95) or a size
 (`32K`, `256K`, `1M`, or a plain token count; K and M count in powers of
@@ -116,11 +115,21 @@ note marked `automatic`, which the TUI follows) once nothing is running that
 the new thread would lose track of: no turn, no subthread, no background task
 and no queued message. Until then the card names what it waits for. It fires at
 most once per thread, and never for a delegated task, whose parent waits on that
-thread; that one is compacted instead when it can be. "Hand off at, per model"
-lists the provider's models; enter on one picks a size from 16K to 1M, and `d`
-removes it (`config set providers.claude.autoHandoffModels "claude-opus-4-5=500k"`
-takes one `model=tokens` pair per line or comma, `k` and `m` meaning
-thousands and millions).
+thread; that one is compacted instead when it can be.
+
+**Per model.** One row lists the provider's models ("None" until one has
+anything of its own); a model opens a page of four fields, each following the
+provider until set: Hand off (ask, auto, off), Hand off at (a size from 16K to
+1M), Compaction (the provider's choices) and Compact at (a size). `d` lets a
+field follow the provider again, or on the list clears a whole model. In the
+file each field is its own map: `handoffModels` and `compactionModels` take
+`model=choice` pairs, `autoHandoffModels` and `compactAtModels` `model=tokens`
+pairs (`config set providers.claude.handoffModels "claude-opus-5=off"`; one
+pair per line or comma, `k` and `m` meaning thousands and millions). A model's
+own beats the provider's row, which beats the global one. OpenCode's own
+compaction is one switch for its whole server, so there a model chooses its
+Compaction only while that switch is off, and cannot turn it on. On Claude
+Code a model's Compaction and size apply when its session starts.
 
 **Compaction.** `provider` leaves it to the provider: Claude Code's own, which
 takes a size under Compact at as its auto-compact window (100K to 1M), or
@@ -133,11 +142,9 @@ provider's own is off, `ask` does not wait forever: a delegated task is
 compacted at the line, and any thread halfway from the line to a full window is
 compacted unasked, with a notice saying why. A compaction that left the thread
 past its line is not repeated until it has dropped below it once. `off`: nobody
-compacts. "Compact at, per model" is the same editor as hand-off's: a model
-listed there compacts at its own size, the others at Compact at. With Claude
-Code compacting by itself, each size becomes that model's auto-compact window
-(100K to 1M) when its session starts; on the Moxen Harness a profile's own
-compaction size still wins for its models. The Moxen Harness compacts inside its own loop: its own
+compacts. With Claude Code compacting by itself, a model's own Compact at size
+becomes that model's auto-compact window (100K to 1M) when its session starts;
+on the Moxen Harness a profile's own compaction still wins for its models. The Moxen Harness compacts inside its own loop: its own
 compaction is `auto` (so a global `provider` means `auto` there). On `ask` it
 offers the same card at the line its loop would use (the profile's, the
 model's, its tab's, or its rule by window size), and the loop compacts unasked

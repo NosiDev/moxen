@@ -65,17 +65,49 @@ export type SettingControl =
   /** The order a provider's model should try its web tools in: ranked rows first, then the rest. */
   /** `warning`: what the ranked tools still need (a server to add, a switch that is off), said on the closed row too. */
   | { readonly kind: "order"; readonly rows: readonly WebOrderRow[]; readonly warning?: string }
-  /** The models of one provider, each with its own hand-off or compaction size or none: opened in its own editor with a slider per model. */
-  | { readonly kind: "handoff"; readonly models: readonly HandoffModelEntry[]; readonly action: "handed off" | "compacted" };
+  /** The models of one provider, each with its own long-thread overrides or none: opened in its own editor, a page per model. */
+  | { readonly kind: "handoff"; readonly models: readonly ModelOverrideEntry[]; readonly compaction: ModelCompactionChoices };
 
-/** One model as the per-model hand-off editor lists it. */
-export interface HandoffModelEntry {
+/** The four things a model can choose for itself; null follows the provider. */
+export interface ModelOverrides {
+  readonly handoff: string | null;
+  readonly handoffAt: number | null;
+  readonly compaction: string | null;
+  readonly compactAt: number | null;
+}
+export type ModelOverrideField = keyof ModelOverrides;
+
+/** One model as the per-model editor lists it. */
+export interface ModelOverrideEntry extends ModelOverrides {
   readonly slug: string;
   readonly name: string;
-  /** Tokens it is handed off at, or null when it follows the provider's setting. */
-  readonly tokens: number | null;
   /** False for a model the setting names that the provider does not offer (no longer, or not without a login): listed so its override can be removed. */
   readonly offered: boolean;
+}
+
+/** The Compaction choices a model of this provider has, or why it has none (OpenCode while its own compaction is on). */
+export interface ModelCompactionChoices {
+  readonly choices: readonly { readonly value: string; readonly label: string }[];
+  readonly unavailable: string | null;
+}
+
+/** The config key each per-model field is kept in, under `providers.<kind>.`. */
+export const MODEL_OVERRIDE_KEY: Readonly<Record<ModelOverrideField, string>> = {
+  handoff: "handoffModels",
+  handoffAt: "autoHandoffModels",
+  compaction: "compactionModels",
+  compactAt: "compactAtModels",
+};
+
+export const HANDOFF_MODE_CHOICES: readonly { readonly value: string; readonly label: string }[] = [
+  { value: "ask", label: "Ask" },
+  { value: "auto", label: "Automatic" },
+  { value: "off", label: "Off" },
+];
+
+/** A model with anything of its own. */
+export function hasOverrides(entry: ModelOverrides): boolean {
+  return entry.handoff !== null || entry.handoffAt !== null || entry.compaction !== null || entry.compactAt !== null;
 }
 
 /** The sizes the per-model slider offers; the catalog has no window per model, so these span a small local model (16K) to 1M. */
@@ -93,36 +125,65 @@ export function handoffStops(current: number | null): number[] {
   return current === null || HANDOFF_PRESETS.includes(current) ? [...HANDOFF_PRESETS] : [...HANDOFF_PRESETS, current].sort((a, b) => a - b);
 }
 
+/** A `slug=choice` text as a map (the choices are core's to check). */
+function modesFromText(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of text.split(/[\n,]/)) {
+    const at = part.lastIndexOf("=");
+    if (at > 0) out[part.slice(0, at).trim()] = part.slice(at + 1).trim();
+  }
+  return out;
+}
+
+/** The four per-model settings' values, as the page holds them (text), keyed by field. */
+export type ModelOverrideValues = Readonly<Record<ModelOverrideField, SettingValue>>;
+
 /**
- * The models a provider's hand-off editor lists: its catalog models (hidden
- * ones left out, the default first), each with what the setting holds for it,
- * then any model the setting names that the catalog does not, so a stale or
+ * The models a provider's per-model editor lists: its catalog models (hidden
+ * ones left out, the default first), each with what the four settings hold
+ * for it, then any model they name that the catalog does not, so a stale or
  * hand-written override can still be seen and cleared.
  */
-export function handoffModelEntries(providers: readonly ProviderSummary[] | null, kind: "claude" | "opencode" | "harness" | undefined, value: SettingValue): HandoffModelEntry[] {
-  const held = handoffModelsFromText(value === undefined ? "" : String(value));
-  const out: HandoffModelEntry[] = [];
+export function modelOverrideEntries(providers: readonly ProviderSummary[] | null, kind: "claude" | "opencode" | "harness" | undefined, values: ModelOverrideValues): ModelOverrideEntry[] {
+  const text = (field: ModelOverrideField) => (values[field] === undefined ? "" : String(values[field]));
+  const sizes = { handoffAt: handoffModelsFromText(text("handoffAt")), compactAt: handoffModelsFromText(text("compactAt")) };
+  const modes = { handoff: modesFromText(text("handoff")), compaction: modesFromText(text("compaction")) };
+  const of = (slug: string): ModelOverrides => ({
+    handoff: modes.handoff[slug] ?? null,
+    handoffAt: sizes.handoffAt[slug] ?? null,
+    compaction: modes.compaction[slug] ?? null,
+    compactAt: sizes.compactAt[slug] ?? null,
+  });
+  const out: ModelOverrideEntry[] = [];
   const seen = new Set<string>();
   for (const provider of providers ?? []) {
     if (kind !== undefined && driverKindOfInstance(provider.instanceId) !== kind) continue;
     for (const model of [...provider.models].sort((a, b) => Number(b.isDefault === true) - Number(a.isDefault === true))) {
       if (model.isHidden || seen.has(model.slug)) continue;
       seen.add(model.slug);
-      out.push({ slug: model.slug, name: model.name, tokens: held[model.slug] ?? null, offered: true });
+      out.push({ slug: model.slug, name: model.name, ...of(model.slug), offered: true });
     }
   }
   // Before the catalog arrives nothing is known to be gone.
   const known = providers !== null;
-  for (const [slug, tokens] of Object.entries(held)) if (!seen.has(slug)) out.push({ slug, name: known ? `${slug} (not offered)` : slug, tokens, offered: !known });
+  const named = new Set([...Object.keys(modes.handoff), ...Object.keys(sizes.handoffAt), ...Object.keys(modes.compaction), ...Object.keys(sizes.compactAt)]);
+  for (const slug of named) if (!seen.has(slug)) out.push({ slug, name: known ? `${slug} (not offered)` : slug, ...of(slug), offered: !known });
   return out;
 }
 
-/** The setting's text after `slug` is set to `tokens` (null removes its override); other models' overrides stay as they were. */
-export function withHandoffModel(value: SettingValue, slug: string, tokens: number | null): string {
-  const held = handoffModelsFromText(value === undefined ? "" : String(value));
-  if (tokens === null) delete held[slug];
-  else held[slug] = tokens;
-  return handoffModelsToText(held);
+/** A per-model setting's text after `slug`'s `field` is set to `next` (null removes it); other models stay as they were. */
+export function withModelOverride(field: ModelOverrideField, value: SettingValue, slug: string, next: string | number | null): string {
+  const text = value === undefined ? "" : String(value);
+  if (field === "handoffAt" || field === "compactAt") {
+    const held = handoffModelsFromText(text);
+    if (next === null) delete held[slug];
+    else held[slug] = Number(next);
+    return handoffModelsToText(held);
+  }
+  const held = modesFromText(text);
+  if (next === null) delete held[slug];
+  else held[slug] = String(next);
+  return Object.entries(held).map(([model, choice]) => `${model}=${choice}`).join(", ");
 }
 
 /** One web tool in a provider's order: its rank (1 is tried first), or null when it is not ranked. */
@@ -388,7 +449,7 @@ export function settingControl(
         const tools = (kind.tools ?? []).map((tool): McpAccessEntry => ({ name: tool.name, summary: tool.summary, locked: null }));
         return { kind: "tools", tools, excluded: String(value ?? "").split(",").map((name) => name.trim()).filter((name) => name !== "") };
       }
-      if (kind.source === "handoff-models") return { kind: "handoff", models: handoffModelEntries(providers, kind.providerKind, value), action: descriptor.key.endsWith(".compactAtModels") ? "compacted" : "handed off" };
+      if (kind.source === "model-overrides") return modelOverridesControl(descriptor, value, settings, providers, kind.providerKind);
       if (kind.source === undefined) return { kind: "text", multiline: kind.multiline === true, ...(effective ? { effective } : {}) };
       // No catalog yet (still loading): the list would be empty, not wrong.
       options = catalogOptions(kind.source, settings, providers ?? [], kind.providerKind, effective);
@@ -447,8 +508,8 @@ export function settingValueLabel(descriptor: SettingDescriptor, value: SettingV
     return off === 0 ? "All on" : `${off} off`;
   }
   if (control.kind === "handoff") {
-    const set = control.models.filter((model) => model.tokens !== null).length;
-    return set === 0 ? "None set" : `${set} model${set === 1 ? "" : "s"}`;
+    const set = control.models.filter(hasOverrides).length;
+    return set === 0 ? "None" : `${set} model${set === 1 ? "" : "s"}`;
   }
   if (descriptor.kind.type === "boolean") {
     if (control.kind === "toggle" && control.tristate === true && value === undefined) return defaultLabel(control.effective);
@@ -521,4 +582,23 @@ export function providerVersionLine(check: ProviderCheckView | undefined, latest
     return { version, status: `Up to date: ${latest.latest} is the newest${channel}.`, tone: "ok", button: "[ Up to date ]", settled: true };
   }
   return { ...base, version, status: "Could not check for a newer version.", tone: "muted" };
+}
+
+/** The "Per model" row: every model with its four overrides, read from the four settings beside it, and what its Compaction can be. */
+function modelOverridesControl(descriptor: SettingDescriptor, value: SettingValue, settings: readonly SettingView[], providers: readonly ProviderSummary[] | null, kind: "claude" | "opencode" | "harness" | undefined): SettingControl {
+  const prefix = descriptor.key.slice(0, descriptor.key.lastIndexOf(".") + 1);
+  const read = (field: ModelOverrideField) => settings.find((view) => view.descriptor.key === `${prefix}${MODEL_OVERRIDE_KEY[field]}`)?.value;
+  // The row's own key holds the hand-off sizes; the other three sit beside it.
+  const values: ModelOverrideValues = { handoff: read("handoff"), handoffAt: value, compaction: read("compaction"), compactAt: read("compactAt") };
+  const compactionView = settings.find((view) => view.descriptor.key === `${prefix}compaction`);
+  const choices = compactionView !== undefined && compactionView.descriptor.kind.type === "enum" ? compactionView.descriptor.kind.choices.filter((choice) => choice.hidden !== true).map((choice) => ({ value: choice.value, label: choice.label })) : [];
+  // OpenCode's own compaction is one switch for its whole server: while it is on, no model can choose otherwise, and no model can turn it on.
+  const providerMode = String(compactionView?.value ?? compactionView?.effective?.value ?? "");
+  const compaction: ModelCompactionChoices =
+    kind === "opencode"
+      ? providerMode === "provider"
+        ? { choices: [], unavailable: "OpenCode compacts by itself on this provider, for its whole server; set its Compaction to Moxen's or Off for a model to choose." }
+        : { choices: choices.filter((choice) => choice.value !== "provider"), unavailable: null }
+      : { choices, unavailable: null };
+  return { kind: "handoff", models: modelOverrideEntries(providers, kind, values), compaction };
 }

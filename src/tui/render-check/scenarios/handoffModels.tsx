@@ -10,7 +10,8 @@ import { fail } from "../helpers.js";
 /**
  * A provider's "Hand off at, per model" row opens a list of that provider's
  * models; enter on one opens a slider of sizes, and d takes the override away.
- * "Compact at, per model" is the same editor, saying compaction.
+ * Its "Per model" row opens every model; a model opens a page of four fields,
+ * each a choice list or a size slider.
  */
 export async function runHandoffModels(): Promise<void> {
   const model = (slug: string, name: string, isDefault: boolean, isHidden = false) => ({ slug, name, isCustom: false, isDefault, isHidden, efforts: [] });
@@ -87,67 +88,68 @@ export async function runHandoffModels(): Promise<void> {
       return when === undefined || when.in.includes(String(all.find((other) => other.descriptor.key === when.key)?.value ?? ""));
     });
   const place = page.findIndex((view) => view.descriptor.key === "providers.claude.autoHandoffModels");
-  if (place < 0) fail("Claude Code's page has no per-model hand-off setting");
+  if (place < 0) fail("Claude Code's page has no Per model row");
+  if (page.some((view) => view.descriptor.key === "providers.claude.compactAtModels")) fail("the per-model compaction sizes still have a row of their own");
   for (let step = 0; step < place; step += 1) await act(async () => setup.mockInput.pressArrow("down"));
   await settle();
   const shown = setup.captureCharFrame();
-  if (!shown.split("\n").some((line) => line.includes("Hand off at, per model") && line.includes("2 models"))) fail("the 'Hand off at, per model' row does not count its 2 overrides");
+  if (!shown.split("\n").some((line) => line.includes("Per model") && line.includes("2 models"))) fail("the 'Per model' row does not count its 2 models");
   await act(async () => setup.mockInput.pressEnter());
   await settle();
   const list = setup.captureCharFrame();
-  console.log("--- hand off per model ---");
+  console.log("--- per model ---");
   console.log(list);
-  for (const expected of ["Claude Opus 5", "500K", "Claude Sonnet 5", "uses provider setting", "gone-model (not offered)", "300K"]) {
+  for (const expected of ["Claude Opus 5", "hand off at 500K", "compact at 400K", "Claude Sonnet 5", "uses provider setting", "gone-model (not offered)"]) {
     if (!list.includes(expected)) fail(`the per-model list is missing "${expected}"`);
   }
   if (list.includes("Claude Old")) fail("a hidden model is listed");
 
-  // Sonnet is second (the default model leads): enter opens its slider, right moves, enter writes beside the other overrides.
+  // Sonnet is second (the default model leads): its page holds four fields, all following the provider.
+  await act(async () => setup.mockInput.pressArrow("down"));
+  await act(async () => setup.mockInput.pressEnter());
+  await settle();
+  const modelPage = setup.captureCharFrame();
+  console.log("--- a model's page ---");
+  console.log(modelPage);
+  for (const expected of ["Claude Sonnet 5", "Hand off", "Hand off at", "Compaction", "Compact at", "Follows the provider"]) {
+    if (!modelPage.includes(expected)) fail(`the model's page is missing "${expected}"`);
+  }
+  // Hand off: Off, from the choice list (Follows the provider, Ask, Automatic, Off).
+  await act(async () => setup.mockInput.pressEnter());
+  await settle();
+  if (!setup.captureCharFrame().includes("Automatic")) fail("the Hand off choice list is missing Automatic");
+  for (let step = 0; step < 3; step += 1) await act(async () => setup.mockInput.pressArrow("down"));
+  await act(async () => setup.mockInput.pressEnter());
+  await settle();
+  const handoffWrite = written.at(-1);
+  if (handoffWrite?.key !== "providers.claude.handoffModels" || handoffWrite.value !== "claude-sonnet-5=off") fail(`choosing Off wrote ${JSON.stringify(handoffWrite)}`);
+
+  // Hand off at: the slider, one stop right of 200K.
   await act(async () => setup.mockInput.pressArrow("down"));
   await act(async () => setup.mockInput.pressEnter());
   await settle();
   const slider = setup.captureCharFrame();
-  console.log("--- hand off slider ---");
-  console.log(slider);
-  for (const expected of ["Claude Sonnet 5", "16K", "128K", "256K", "750K", "1M", "◆", "Nothing chosen here"]) {
+  for (const expected of ["Claude Sonnet 5", "16K", "1M", "Nothing chosen here"]) {
     if (!slider.includes(expected)) fail(`the size slider is missing "${expected}"`);
   }
   await act(async () => setup.mockInput.pressArrow("right"));
   await act(async () => setup.mockInput.pressEnter());
   await settle();
-  const last = written.at(-1);
-  if (last?.key !== "providers.claude.autoHandoffModels" || last.value !== "claude-opus-5=500000, gone-model=300000, claude-sonnet-5=256000") fail(`picking wrote ${JSON.stringify(last)}`);
-  if (!setup.captureCharFrame().includes("256K")) fail("the list did not show the size just chosen");
+  const sizeWrite = written.at(-1);
+  if (sizeWrite?.key !== "providers.claude.autoHandoffModels" || sizeWrite.value !== "claude-opus-5=500000, gone-model=300000, claude-sonnet-5=256000") fail(`picking a size wrote ${JSON.stringify(sizeWrite)}`);
 
-  // d on a model with an override removes it.
+  // d on a field lets it follow the provider again.
   await act(async () => setup.mockInput.pressKey("d"));
   await settle();
   if (written.at(-1)?.value !== "claude-opus-5=500000, gone-model=300000") fail(`d wrote ${JSON.stringify(written.at(-1))}`);
 
-  // Esc closes the editor and nothing else.
+  // Esc to the list, esc out of the editor.
+  await act(async () => setup.mockInput.pressEscape());
+  await settle();
   await act(async () => setup.mockInput.pressEscape());
   await act(async () => new Promise((resolve) => setTimeout(resolve, 120)));
   await setup.flush();
   const after = setup.captureCharFrame();
   if (!after.includes("Settings") || after.includes("← back") || after.includes("uses provider setting")) fail("esc did not leave only the editor for the settings page");
-
-  // "Compact at, per model" sits above, under "Compact at": the same editor, with its own overrides and words.
-  const compactPlace = page.findIndex((view) => view.descriptor.key === "providers.claude.compactAtModels");
-  if (compactPlace < 0 || compactPlace > place) fail("Claude Code's page has no per-model compaction setting above the hand-off one");
-  for (let step = compactPlace; step < place; step += 1) await act(async () => setup.mockInput.pressArrow("up"));
-  await settle();
-  if (!setup.captureCharFrame().split("\n").some((line) => line.includes("Compact at, per model") && line.includes("1 model"))) fail("the 'Compact at, per model' row does not count its override");
-  await act(async () => setup.mockInput.pressEnter());
-  await settle();
-  const compactList = setup.captureCharFrame();
-  console.log("--- compact per model ---");
-  console.log(compactList);
-  for (const expected of ["Claude Opus 5", "400K", "Claude Sonnet 5", "uses provider setting"]) {
-    if (!compactList.includes(expected)) fail(`the per-model compaction list is missing "${expected}"`);
-  }
-  if (compactList.includes("gone-model")) fail("the compaction list shows the hand-off overrides");
-  await act(async () => setup.mockInput.pressEnter());
-  await settle();
-  if (!setup.captureCharFrame().includes("compacted")) fail("the compaction slider does not say it compacts");
   setup.renderer.destroy();
 }

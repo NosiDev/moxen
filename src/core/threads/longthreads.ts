@@ -126,11 +126,17 @@ const percentLine = (value: number | undefined): ThresholdLine | undefined => (v
 const tokensLine = (value: number | undefined): ThresholdLine | undefined => (value === undefined ? undefined : { tokens: value });
 const textLine = (value: string | undefined): ThresholdLine | undefined => (value === undefined ? undefined : (parseLine(value) ?? undefined));
 
-/** Hand off: the provider's tab, then the global setting, then Ask. */
-export function handoffModeFor(config: LongThreadConfig, kind: LongThreadKind | undefined): Sourced<AutoHandoffMode> {
+/** Hand off: the model's own choice, the provider's tab, then the global setting, then Ask. */
+export function handoffModeFor(config: LongThreadConfig, kind: LongThreadKind | undefined, model?: string): Sourced<AutoHandoffMode> {
   const own = kind === undefined ? undefined : config.providers?.[kind];
   const candidates: Array<readonly [string, unknown]> = [
-    ...(kind === undefined ? [] : ([[`providers.${kind}.handoff`, own?.handoff], [`providers.${kind}.autoHandoff`, own?.autoHandoff]] as const)),
+    ...(kind === undefined
+      ? []
+      : ([
+          [`providers.${kind}.handoffModels`, model === undefined ? undefined : own?.handoffModels?.[model]],
+          [`providers.${kind}.handoff`, own?.handoff],
+          [`providers.${kind}.autoHandoff`, own?.autoHandoff],
+        ] as const)),
     ["longThreads.handoff", config.longThreads?.handoff],
     ["ui.autoHandoff", config.ui?.autoHandoff],
   ];
@@ -162,8 +168,24 @@ export function handoffLineFor(config: LongThreadConfig, kind: LongThreadKind | 
   );
 }
 
-/** Who compacts on `kind`: its tab, else what the older switch there meant, else the global setting, else the provider's default. */
-export function compactionModeFor(config: Pick<CliConfig, "providers" | "longThreads">, kind: LongThreadKind): Sourced<CompactionMode> {
+/**
+ * Who compacts on `kind`: the model's own choice, its tab, else what the
+ * older switch there meant, else the global setting, else the provider's
+ * default. OpenCode's own compaction is one switch for its whole server, so a
+ * model there can only choose while that switch is off, and cannot turn it on.
+ */
+export function compactionModeFor(config: Pick<CliConfig, "providers" | "longThreads">, kind: LongThreadKind, model?: string): Sourced<CompactionMode> {
+  const provider = providerCompactionMode(config, kind);
+  const chosen = model === undefined ? undefined : config.providers?.[kind]?.compactionModels?.[model];
+  if (chosen === undefined || !isCompactionMode(chosen)) return provider;
+  const mode = GLOBAL_COMPACTION_ON[kind](chosen);
+  if (!COMPACTION_MODES[kind].includes(mode)) return provider;
+  if (kind === "opencode" && (mode === "provider" || provider.value === "provider")) return provider;
+  return { value: mode, key: `providers.${kind}.compactionModels` };
+}
+
+/** Who compacts on `kind` for every model without its own choice. */
+function providerCompactionMode(config: Pick<CliConfig, "providers" | "longThreads">, kind: LongThreadKind): Sourced<CompactionMode> {
   const own = config.providers?.[kind];
   const set = own?.compaction;
   const legacy = (): CompactionMode | undefined => {
@@ -193,7 +215,7 @@ export function compactionModeFor(config: Pick<CliConfig, "providers" | "longThr
  * rule by window size when nothing is set.
  */
 export function compactLineFor(config: LongThreadConfig, kind: LongThreadKind, model?: string): Sourced<ThresholdLine> | null {
-  const mode = compactionModeFor(config, kind).value;
+  const mode = compactionModeFor(config, kind, model).value;
   if (mode === "off") return null;
   const own = config.providers?.[kind];
   const ownLine: Array<readonly [string, ThresholdLine | undefined]> = [
@@ -226,9 +248,9 @@ export interface LongThreadPolicy {
 
 export function longThreadPolicy(config: LongThreadConfig, instanceId: string | undefined, model?: string): LongThreadPolicy {
   const kind = kindOf(instanceId);
-  const handoff = { mode: handoffModeFor(config, kind).value, line: handoffLineFor(config, kind, model).value };
+  const handoff = { mode: handoffModeFor(config, kind, model).value, line: handoffLineFor(config, kind, model).value };
   if (kind === undefined) return { handoff, compact: null };
-  const mode = compactionModeFor(config, kind).value;
+  const mode = compactionModeFor(config, kind, model).value;
   if (kind === "harness") {
     // On "auto" the Harness compacts inside its own loop. On "ask" its line is the loop's own threshold (profile, model, tab, window).
     if (mode !== "ask" || instanceId === undefined || model === undefined) return { handoff, compact: null };
@@ -259,8 +281,17 @@ export function driverProviders(config: LongThreadConfig): ProvidersConfig | und
   const harnessLine = compactLineFor(config, "harness");
   const clampWindow = (tokens: number): number => Math.min(1_000_000, Math.max(100_000, tokens));
   const claudeWindow = claudeMode === "provider" && claudeLine !== null && "tokens" in claudeLine.value ? clampWindow(claudeLine.value.tokens) : undefined;
-  const claudeModels = claudeMode === "provider" ? Object.entries(providers?.claude?.compactAtModels ?? {}) : [];
-  const claudeWindows = claudeModels.length > 0 ? Object.fromEntries(claudeModels.map(([model, tokens]) => [model, clampWindow(tokens)])) : undefined;
+  // A model with its own choice or size: who compacts its sessions, and Claude Code's window when that is Claude Code.
+  const claudeModels = [...new Set([...Object.keys(providers?.claude?.compactionModels ?? {}), ...Object.keys(providers?.claude?.compactAtModels ?? {})])];
+  const claudeModes: Record<string, "claude" | "ask" | "auto" | "off"> = {};
+  const claudeWindowsByModel: Record<string, number> = {};
+  for (const model of claudeModels) {
+    const mode = compactionModeFor(config, "claude", model).value;
+    if (mode !== claudeMode) claudeModes[model] = mode === "provider" ? "claude" : mode;
+    const line = mode === "provider" ? compactLineFor(config, "claude", model) : null;
+    if (line !== null && "tokens" in line.value) claudeWindowsByModel[model] = clampWindow(line.value.tokens);
+  }
+  const claudeWindows = Object.keys(claudeWindowsByModel).length > 0 ? claudeWindowsByModel : undefined;
   const { autoCompactWindow: _window, ...claudeRest } = providers?.claude ?? {};
   const { autoCompact: opencodeOwn, ...opencodeRest } = providers?.opencode ?? {};
   // OpenCode's own switch: on its own compaction, what its older key said (else OpenCode's config decides); otherwise off.
@@ -272,6 +303,7 @@ export function driverProviders(config: LongThreadConfig): ProvidersConfig | und
       autoCompact: claudeMode === "provider" ? "claude" : claudeMode,
       ...(claudeWindow !== undefined ? { autoCompactWindow: claudeWindow } : {}),
       ...(claudeWindows !== undefined ? { autoCompactWindowModels: claudeWindows } : {}),
+      ...(Object.keys(claudeModes).length > 0 ? { autoCompactModels: claudeModes } : {}),
     },
     opencode: { ...opencodeRest, ...(opencodeAuto !== undefined ? { autoCompact: opencodeAuto } : {}) },
     harness: {

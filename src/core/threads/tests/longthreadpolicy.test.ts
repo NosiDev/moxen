@@ -216,6 +216,49 @@ describe("the global Compaction", () => {
   });
 });
 
+describe("a model's own choices", () => {
+  it("hand off: the model's choice wins, other models follow the provider", () => {
+    const config: Config = { longThreads: { handoff: "auto" }, providers: { claude: { handoffModels: { big: "off" } } } };
+    expect(handoffModeFor(config, "claude", "big")).toEqual({ value: "off", key: "providers.claude.handoffModels" });
+    expect(handoffModeFor(config, "claude", "small").value).toBe("auto");
+    expect(longThreadPolicy(config, "claudeAgent", "big").handoff.mode).toBe("off");
+    expect(planLongThreadAction({ ...config, longThreads: { handoff: "auto", handoffAt: "50%" } }, snapshot({ model: "big", usedTokens: 150_000 }))).toBeNull();
+  });
+
+  it("compaction: the model's choice wins, with its own line; Claude Code's sessions get it when they start", () => {
+    const config: Config = { providers: { claude: { compaction: "ask", compactionModels: { big: "provider" }, compactAtModels: { big: 600_000 } } } };
+    expect(compactionModeFor(config, "claude", "big")).toEqual({ value: "provider", key: "providers.claude.compactionModels" });
+    expect(longThreadPolicy(config, "claudeAgent", "big").compact).toBeNull();
+    expect(longThreadPolicy(config, "claudeAgent", "small").compact?.mode).toBe("ask");
+    expect(driverProviders(config)?.claude).toMatchObject({ autoCompact: "ask", autoCompactModels: { big: "claude" }, autoCompactWindowModels: { big: 600_000 } });
+  });
+
+  it("OpenCode: a model chooses only while OpenCode's own compaction is off, and cannot turn it on", () => {
+    const own: Config = { providers: { opencode: { compaction: "provider", compactionModels: { big: "auto" } } } };
+    expect(compactionModeFor(own, "opencode", "big").value).toBe("provider");
+    const moxen: Config = { providers: { opencode: { compaction: "ask", compactionModels: { big: "auto", small: "provider" } } } };
+    expect(compactionModeFor(moxen, "opencode", "big").value).toBe("auto");
+    expect(compactionModeFor(moxen, "opencode", "small").value).toBe("ask");
+  });
+
+  it("the Moxen Harness: a model's choice reaches its loop, and its own compaction is its automatic one", () => {
+    const profile = { id: "local", baseUrl: "http://x/v1", models: [{ id: "big", contextWindow: 200_000 }, { id: "small", contextWindow: 200_000 }] } as HarnessProfileConfig;
+    const tab = driverProviders({ providers: { harness: { compaction: "auto", compactionModels: { big: "ask", small: "off" } } } })?.harness;
+    expect(resolveCompactionSettings(tab, profile, "big")).toMatchObject({ auto: true, ask: true });
+    expect(resolveCompactionSettings(tab, profile, "small")).toMatchObject({ auto: false });
+    expect(resolveCompactionSettings(tab, profile, "other")).toMatchObject({ auto: true, ask: false });
+    expect(compactionModeFor({ providers: { harness: { compactionModels: { big: "provider" } } } }, "harness", "big").value).toBe("auto");
+  });
+
+  it("takes model=choice text through `config set`, and refuses a choice that is not one", () => {
+    const descriptor = settingDescriptor("providers.claude.handoffModels")!;
+    const config = normalizeConfig(writeSetting(normalizeConfig({}), descriptor.key, parseSettingValue(descriptor, "big=off, small=ask")));
+    expect(config.providers?.claude?.handoffModels).toEqual({ big: "off", small: "ask" });
+    expect(readSetting(config, descriptor.key)).toBe("big=off, small=ask");
+    expect(() => normalizeConfig({ providers: { claude: { handoffModels: { big: "never" } } } })).toThrow(/ask, auto, off/);
+  });
+});
+
 describe("the Moxen Harness on ask", () => {
   const config = (over: Record<string, unknown> = {}): Config =>
     normalizeConfig({ providers: { harness: { compaction: "ask", profiles: [{ id: "local", baseUrl: "http://localhost:1234/v1", models: [{ id: "m", contextWindow: 200_000 }], ...over }] } } });
@@ -278,12 +321,12 @@ describe("hand-off and compaction together", () => {
 describe("the settings page", () => {
   const view = (config: CliConfig, key: string) => describeSettings(config).find((entry) => entry.descriptor.key === key)!;
 
-  it("shows the same six rows on every provider tab, and hides the older keys", () => {
+  it("shows the same rows on every provider tab, one of them for every per-model override, and hides the older keys", () => {
     for (const kind of ["claude", "opencode", "harness"] as const) {
       const rows = describeSettings(normalizeConfig({}))
         .filter((entry) => entry.descriptor.section === `provider:${kind}` && entry.descriptor.group === "Long threads" && entry.descriptor.hidden !== true)
         .map((entry) => entry.descriptor.label);
-      expect(rows).toEqual(["Compaction", "Compact at", "Compact at, per model", ...(kind === "harness" ? ["Kept word for word"] : []), "Hand off", "Hand off at", "Hand off at, per model"]);
+      expect(rows).toEqual(["Compaction", "Compact at", ...(kind === "harness" ? ["Kept word for word"] : []), "Hand off", "Hand off at", "Per model"]);
     }
   });
 

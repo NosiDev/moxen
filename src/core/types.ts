@@ -128,6 +128,10 @@ export interface HarnessProviderConfig {
   compactAt?: string;
   /** Tokens per model slug where that model's threads compact; beats `compactAt` and everything below it for that model. */
   compactAtModels?: Record<string, number>;
+  /** Hand off, per model slug: beats `handoff` and everything below it for that model. */
+  handoffModels?: Record<string, "off" | "ask" | "auto">;
+  /** Compaction, per model slug: beats `compaction` and everything below it for that model (OpenCode: only while its own is off). */
+  compactionModels?: Record<string, "provider" | "ask" | "auto" | "off">;
   /** Older form of `handoff`. */
   autoHandoff?: "off" | "ask" | "auto";
   /** Tokens of context at which this provider's threads are handed off. Unset: this provider's share, else the global setting. */
@@ -302,6 +306,10 @@ export interface OpencodeProviderConfig {
   compactAt?: string;
   /** Tokens per model slug where that model's threads compact; beats `compactAt` and everything below it for that model. */
   compactAtModels?: Record<string, number>;
+  /** Hand off, per model slug: beats `handoff` and everything below it for that model. */
+  handoffModels?: Record<string, "off" | "ask" | "auto">;
+  /** Compaction, per model slug: beats `compaction` and everything below it for that model (OpenCode: only while its own is off). */
+  compactionModels?: Record<string, "provider" | "ask" | "auto" | "off">;
   /** Older form of `handoff`. */
   autoHandoff?: "off" | "ask" | "auto";
   /** Tokens of context at which this provider's threads are handed off. Unset: this provider's share, else the global setting. */
@@ -362,6 +370,10 @@ export interface ClaudeProviderConfig {
   compactAt?: string;
   /** Tokens per model slug where that model's threads compact; beats `compactAt` and everything below it for that model. */
   compactAtModels?: Record<string, number>;
+  /** Hand off, per model slug: beats `handoff` and everything below it for that model. */
+  handoffModels?: Record<string, "off" | "ask" | "auto">;
+  /** Compaction, per model slug: beats `compaction` and everything below it for that model (OpenCode: only while its own is off). */
+  compactionModels?: Record<string, "provider" | "ask" | "auto" | "off">;
   /** Older form of `handoff`. */
   autoHandoff?: "off" | "ask" | "auto";
   /** Tokens of context at which this provider's threads are handed off. Unset: this provider's share, else the global setting. */
@@ -412,6 +424,8 @@ export interface ClaudeProviderConfig {
   autoCompactWindow?: number;
   /** `autoCompactWindow` per model, filled by `driverProviders` from `compactAtModels` while Claude Code compacts; never read from the file. */
   autoCompactWindowModels?: Record<string, number>;
+  /** `autoCompact` per model, filled by `driverProviders` from `compactionModels`; never read from the file. */
+  autoCompactModels?: Record<string, "claude" | "ask" | "auto" | "off">;
   /** Who compacts a long thread: Claude Code itself ("claude"), or Moxen, which turns Claude Code's off and sends `/compact` past `autoCompactPercent` of the window: asking first ("ask") or on its own ("auto"). Unset: ask. */
   autoCompact?: "claude" | "ask" | "auto" | "off";
   /** With Moxen compacting: the share of the window, 10 to 95, past which a thread is compacted. Unset: 80. */
