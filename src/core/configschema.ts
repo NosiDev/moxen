@@ -519,12 +519,22 @@ function longThreadSettings(kind: LongThreadKind): SettingDescriptor[] {
     {
       key: `providers.${kind}.compactAt`,
       label: "Compact at",
-      description: `Where a thread here is compacted: a share of the model's window or a size, whichever suits its models. ${kind === "harness" ? "At least 16K tokens are always left free, and a share needs the model's contextWindow in its profile. " : ""}${LINES_INTERACT}`,
+      description: `Where a thread here is compacted: a share of the model's window or a size, whichever suits its models. A model below can have its own. ${kind === "harness" ? "At least 16K tokens are always left free, and a share needs the model's contextWindow in its profile. " : ""}${LINES_INTERACT}`,
       section,
       group,
       kind: { type: "line", presets: LINE_PRESETS },
       defaultValue: undefined,
       fallback: { resolver: "compactLine" },
+      visibleWhen: { key: compactionKey, in: kind === "claude" ? ["", "provider", "ask", "auto"] : kind === "opencode" ? ["ask", "auto"] : ["", "auto"] },
+    },
+    {
+      key: `providers.${kind}.compactAtModels`,
+      label: "Compact at, per model",
+      description: `Token counts for particular models of this provider. Wins over 'Compact at' for those models; other models follow it.${kind === "harness" ? " A profile's own compaction size still wins for its models." : kind === "claude" ? " While Claude Code compacts by itself, each becomes that model's auto-compact window, kept between 100K and 1M." : ""} Stored as model=tokens pairs (claude-opus-4-5=400k) for the config file and \`moxen config set\`.`,
+      section,
+      group,
+      kind: { type: "string", placeholder: "model=400k", multiline: true, source: "handoff-models", providerKind: kind },
+      defaultValue: undefined,
       visibleWhen: { key: compactionKey, in: kind === "claude" ? ["", "provider", "ask", "auto"] : kind === "opencode" ? ["ask", "auto"] : ["", "auto"] },
     },
     ...(kind === "harness"
@@ -1564,7 +1574,7 @@ export function readSetting(config: CliConfig, key: string): SettingValue {
   const raw = walk(config, key.split("."));
   if (raw === undefined || raw === null) return settingDescriptor(key)?.defaultValue;
   if (typeof raw === "string" || typeof raw === "boolean" || typeof raw === "number") return raw;
-  if (key.endsWith(".autoHandoffModels") && typeof raw === "object") return formatHandoffModels(raw as Record<string, number>);
+  if ((key.endsWith(".autoHandoffModels") || key.endsWith(".compactAtModels")) && typeof raw === "object") return formatHandoffModels(raw as Record<string, number>);
   return undefined;
 }
 

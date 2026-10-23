@@ -88,6 +88,7 @@ has the same "Long threads" group, and the global Long threads tab holds the def
 | -- | -- | -- |
 | Compaction | `providers.<kind>.compaction` | `provider`, `ask`, `auto`, `off` (the Moxen Harness: `auto`, `off`) |
 | Compact at | `providers.<kind>.compactAt`, default `longThreads.compactAt` | a line |
+| Compact at, per model | `providers.<kind>.compactAtModels` | `model=tokens` pairs |
 | Kept word for word | `providers.harness.keepRecentTokens` | tokens (Harness only) |
 | Hand off | `providers.<kind>.handoff`, default `longThreads.handoff` | `ask`, `auto`, `off` |
 | Hand off at | `providers.<kind>.handoffAt`, default `longThreads.handoffAt` | a line |
@@ -132,7 +133,11 @@ provider's own is off, `ask` does not wait forever: a delegated task is
 compacted at the line, and any thread halfway from the line to a full window is
 compacted unasked, with a notice saying why. A compaction that left the thread
 past its line is not repeated until it has dropped below it once. `off`: nobody
-compacts. The Moxen Harness compacts inside its own loop, so it only has
+compacts. "Compact at, per model" is the same editor as hand-off's: a model
+listed there compacts at its own size, the others at Compact at. With Claude
+Code compacting by itself, each size becomes that model's auto-compact window
+(100K to 1M) when its session starts; on the Moxen Harness a profile's own
+compaction size still wins for its models. The Moxen Harness compacts inside its own loop, so it only has
 `auto` and `off` (see [providers](providers.md)).
 
 **Both lines.** Hand-off is offered first when its line is lower than

@@ -124,6 +124,8 @@ export interface HarnessProviderConfig {
   handoffAt?: string;
   /** Where Moxen compacts this provider's threads, as `handoffAt`. Unset: the older keys here, else `longThreads.compactAt`. */
   compactAt?: string;
+  /** Tokens per model slug where that model's threads compact; beats `compactAt` and everything below it for that model. */
+  compactAtModels?: Record<string, number>;
   /** Older form of `handoff`. */
   autoHandoff?: "off" | "ask" | "auto";
   /** Tokens of context at which this provider's threads are handed off. Unset: this provider's share, else the global setting. */
@@ -296,6 +298,8 @@ export interface OpencodeProviderConfig {
   handoffAt?: string;
   /** Where Moxen compacts this provider's threads, as `handoffAt`. Unset: the older keys here, else `longThreads.compactAt`. */
   compactAt?: string;
+  /** Tokens per model slug where that model's threads compact; beats `compactAt` and everything below it for that model. */
+  compactAtModels?: Record<string, number>;
   /** Older form of `handoff`. */
   autoHandoff?: "off" | "ask" | "auto";
   /** Tokens of context at which this provider's threads are handed off. Unset: this provider's share, else the global setting. */
@@ -354,6 +358,8 @@ export interface ClaudeProviderConfig {
   handoffAt?: string;
   /** Where Moxen compacts this provider's threads, as `handoffAt`. Unset: the older keys here, else `longThreads.compactAt`. */
   compactAt?: string;
+  /** Tokens per model slug where that model's threads compact; beats `compactAt` and everything below it for that model. */
+  compactAtModels?: Record<string, number>;
   /** Older form of `handoff`. */
   autoHandoff?: "off" | "ask" | "auto";
   /** Tokens of context at which this provider's threads are handed off. Unset: this provider's share, else the global setting. */
@@ -402,6 +408,8 @@ export interface ClaudeProviderConfig {
   agentSkills?: boolean;
   /** Tokens at which Claude Code auto-compacts (100000 to 1000000); unset leaves its own default for the model. */
   autoCompactWindow?: number;
+  /** `autoCompactWindow` per model, filled by `driverProviders` from `compactAtModels` while Claude Code compacts; never read from the file. */
+  autoCompactWindowModels?: Record<string, number>;
   /** Who compacts a long thread: Claude Code itself ("claude"), or Moxen, which turns Claude Code's off and sends `/compact` past `autoCompactPercent` of the window: asking first ("ask") or on its own ("auto"). Unset: ask. */
   autoCompact?: "claude" | "ask" | "auto" | "off";
   /** With Moxen compacting: the share of the window, 10 to 95, past which a thread is compacted. Unset: 80. */

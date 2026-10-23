@@ -574,7 +574,7 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
       toolContext: { cwd: session.workingDirectory, readState: session.readState, artifactDir: session.artifactDir, acceptsImages: target.quirks.images === "native", secretEnv: this.secretEnvNames(), background: session.background },
       authorize: (call, intent) => this.authorize(session, turn, call, intent),
       compaction: {
-        threshold: autoCompactThreshold(target.model.contextWindow, resolveCompactionSettings(this.config, target.profile)),
+        threshold: autoCompactThreshold(target.model.contextWindow, resolveCompactionSettings(this.config, target.profile, target.model.id)),
         contextWindow: target.model.contextWindow ?? null,
         run: (reason) => this.compactSession(session, turn, target, reason),
       },
@@ -949,7 +949,7 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
       toolContext: { cwd: session.workingDirectory, readState: unit.readState, artifactDir: session.artifactDir, acceptsImages: target.quirks.images === "native", secretEnv: this.secretEnvNames(), background: session.background },
       authorize: (call, intent) => this.authorize(session, owner, call, intent),
       compaction: {
-        threshold: autoCompactThreshold(target.model.contextWindow, resolveCompactionSettings(this.config, target.profile)),
+        threshold: autoCompactThreshold(target.model.contextWindow, resolveCompactionSettings(this.config, target.profile, target.model.id)),
         contextWindow: target.model.contextWindow ?? null,
         run: (reason) => this.compactUnit(unit, session, owner, target, reason, signal, undefined, "Subagent: "),
       },
@@ -1229,7 +1229,7 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
     try {
       const reply = await this.askAside(target, session, session.transcript.messages, TITLE_INSTRUCTION, {
         maxTokens: Math.min(target.model.maxOutput ?? 4096, 4096),
-        effort: resolveCompactionSettings(this.config, target.profile).effort,
+        effort: resolveCompactionSettings(this.config, target.profile, target.model.id).effort,
       });
       const title = cleanTitle(reply);
       if (title === null) return null;
@@ -1291,7 +1291,7 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
 
   /** The same work for a subagent's own conversation as for the thread's. `label` starts the notice's title. */
   private async compactUnit(unit: CompactionUnit, session: HarnessSession, turn: HarnessTurn, target: ResolvedHarnessTarget, reason: CompactReason, signal: AbortSignal, focus?: string, label = ""): Promise<CompactionReport> {
-    const settings = resolveCompactionSettings(this.config, target.profile);
+    const settings = resolveCompactionSettings(this.config, target.profile, target.model.id);
     const window = target.model.contextWindow ?? null;
     const threshold = autoCompactThreshold(window, settings);
     const transcript = unit.transcript;
@@ -1385,7 +1385,7 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
 
   /** After a turn: if the conversation has grown past the threshold, make room now rather than at the start of the next one. */
   private async compactAfterTurn(session: HarnessSession, turn: HarnessTurn, target: ResolvedHarnessTarget): Promise<void> {
-    const threshold = autoCompactThreshold(target.model.contextWindow, resolveCompactionSettings(this.config, target.profile));
+    const threshold = autoCompactThreshold(target.model.contextWindow, resolveCompactionSettings(this.config, target.profile, target.model.id));
     if (threshold === null || session.closed || turn.controller.signal.aborted) return;
     const used = session.lastUsage ? session.lastUsage.inputTokens + session.lastUsage.outputTokens : messagesTokens(session.transcript.messages);
     if (used < threshold) return;
@@ -1471,7 +1471,7 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
       tools: this.toolsFor(session, null).map((tool) => tool.definition),
       reported: session.lastUsage,
       maxTokens: window,
-      autoCompactThreshold: target ? autoCompactThreshold(window, resolveCompactionSettings(this.config, target.profile)) : null,
+      autoCompactThreshold: target ? autoCompactThreshold(window, resolveCompactionSettings(this.config, target.profile, target.model.id)) : null,
     };
   }
 

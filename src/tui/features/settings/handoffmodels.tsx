@@ -9,7 +9,7 @@ import { sliderLayout } from "../../model/slider.js";
 import { Slider, SliderDefault } from "../../ui/slider.js";
 
 /**
- * The hand-off size of each model of one provider. A list of the provider's
+ * The hand-off or compaction size of each model of one provider. A list of the provider's
  * models, each with its own size or "uses provider setting"; enter opens a
  * slider of sizes for that model, and `d` takes its override away. A choice
  * is applied at once; the setting keeps every other model's override as it was.
@@ -17,6 +17,7 @@ import { Slider, SliderDefault } from "../../ui/slider.js";
 export function HandoffModelsEditor({
   title,
   description,
+  action,
   models,
   width,
   catalogReady,
@@ -25,6 +26,8 @@ export function HandoffModelsEditor({
 }: {
   title: string;
   description: string;
+  /** What happens at the size: "handed off" or "compacted". */
+  action: "handed off" | "compacted";
   models: readonly HandoffModelEntry[];
   width: number;
   /** False while the provider catalog is still loading, so an empty list is not read as "no models". */
@@ -97,7 +100,7 @@ export function HandoffModelsEditor({
         <Back onBack={() => setSliding(null)} />
         <box style={{ flexDirection: "column", flexShrink: 0, paddingTop: 1 }} backgroundColor={SURFACE.raised}>
           <text fg={COLOR.bright} bg={SURFACE.raised} selectable={false}>{truncate(`${title}: ${open.name}`, width)}</text>
-          <text fg={COLOR.dim} bg={SURFACE.raised} wrapMode="word" selectable={false}>{`Tokens of context at which a thread on ${open.slug} is handed off. Nothing chosen: it follows this provider's setting.`}</text>
+          <text fg={COLOR.dim} bg={SURFACE.raised} wrapMode="word" selectable={false}>{`Tokens of context at which a thread on ${open.slug} is ${action}. Nothing chosen: it follows this provider's setting.`}</text>
         </box>
         {track ? (
           <Slider

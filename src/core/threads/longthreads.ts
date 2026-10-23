@@ -220,17 +220,21 @@ export function compactionModeFor(config: Pick<CliConfig, "providers">, kind: Lo
 }
 
 /**
- * Compact at, whatever the unit: the provider's setting, the global one, 80%.
+ * Compact at, whatever the unit: the model's own size, the provider's setting,
+ * the global one, 80%.
  * Null where the line is not Moxen's to draw: off, OpenCode's own compaction
  * (its buffer, `compactBuffer`), Claude Code's own unless its tab names a size
  * (which becomes Claude Code's auto-compact window), and the Harness's own
  * rule by window size when nothing is set.
  */
-export function compactLineFor(config: LongThreadConfig, kind: LongThreadKind): Sourced<ThresholdLine> | null {
+export function compactLineFor(config: LongThreadConfig, kind: LongThreadKind, model?: string): Sourced<ThresholdLine> | null {
   const mode = compactionModeFor(config, kind).value;
   if (mode === "off") return null;
   const own = config.providers?.[kind];
-  const ownLine: Array<readonly [string, ThresholdLine | undefined]> = [[`providers.${kind}.compactAt`, textLine(own?.compactAt)]];
+  const ownLine: Array<readonly [string, ThresholdLine | undefined]> = [
+    [`providers.${kind}.compactAtModels`, model === undefined ? undefined : tokensLine(own?.compactAtModels?.[model])],
+    [`providers.${kind}.compactAt`, textLine(own?.compactAt)],
+  ];
   if (kind === "claude") {
     const claude = config.providers?.claude;
     ownLine.push(mode === "provider" ? ["providers.claude.autoCompactWindow", tokensLine(claude?.autoCompactWindow)] : ["providers.claude.autoCompactPercent", percentLine(claude?.autoCompactPercent)]);
@@ -262,7 +266,7 @@ export function longThreadPolicy(config: LongThreadConfig, instanceId: string | 
   if (kind === undefined || kind === "harness") return { handoff, compact: null };
   const mode = compactionModeFor(config, kind).value;
   if (mode !== "ask" && mode !== "auto") return { handoff, compact: null };
-  return { handoff, compact: { mode, line: compactLineFor(config, kind)?.value ?? DEFAULT_COMPACT_LINE } };
+  return { handoff, compact: { mode, line: compactLineFor(config, kind, model)?.value ?? DEFAULT_COMPACT_LINE } };
 }
 
 /**
@@ -270,6 +274,10 @@ export function longThreadPolicy(config: LongThreadConfig, instanceId: string | 
  * already applied: each driver keeps reading the one field it always has
  * (Claude Code's `autoCompact` and window, OpenCode's switch, the Harness's
  * `compaction` and `compactAt`), now holding what is in force, global line included.
+ * Per-model sizes: Claude Code gets them as windows while it compacts itself
+ * (`autoCompactWindowModels`); the Harness reads `compactAtModels` for the
+ * model it runs (`resolveCompactionSettings`). Where Moxen compacts from
+ * outside, `longThreadPolicy` has the model and needs no driver field.
  */
 export function driverProviders(config: LongThreadConfig): ProvidersConfig | undefined {
   const providers = config.providers;
@@ -277,14 +285,22 @@ export function driverProviders(config: LongThreadConfig): ProvidersConfig | und
   const claudeLine = compactLineFor(config, "claude");
   const opencodeMode = compactionModeFor(config, "opencode").value;
   const harnessLine = compactLineFor(config, "harness");
-  const claudeWindow = claudeMode === "provider" && claudeLine !== null && "tokens" in claudeLine.value ? Math.min(1_000_000, Math.max(100_000, claudeLine.value.tokens)) : undefined;
+  const clampWindow = (tokens: number): number => Math.min(1_000_000, Math.max(100_000, tokens));
+  const claudeWindow = claudeMode === "provider" && claudeLine !== null && "tokens" in claudeLine.value ? clampWindow(claudeLine.value.tokens) : undefined;
+  const claudeModels = claudeMode === "provider" ? Object.entries(providers?.claude?.compactAtModels ?? {}) : [];
+  const claudeWindows = claudeModels.length > 0 ? Object.fromEntries(claudeModels.map(([model, tokens]) => [model, clampWindow(tokens)])) : undefined;
   const { autoCompactWindow: _window, ...claudeRest } = providers?.claude ?? {};
   const { autoCompact: opencodeOwn, ...opencodeRest } = providers?.opencode ?? {};
   // OpenCode's own switch: on its own compaction, what its older key said (else OpenCode's config decides); otherwise off.
   const opencodeAuto = opencodeMode === "provider" ? (opencodeOwn === true ? true : undefined) : false;
   return {
     ...providers,
-    claude: { ...claudeRest, autoCompact: claudeMode === "provider" ? "claude" : claudeMode, ...(claudeWindow !== undefined ? { autoCompactWindow: claudeWindow } : {}) },
+    claude: {
+      ...claudeRest,
+      autoCompact: claudeMode === "provider" ? "claude" : claudeMode,
+      ...(claudeWindow !== undefined ? { autoCompactWindow: claudeWindow } : {}),
+      ...(claudeWindows !== undefined ? { autoCompactWindowModels: claudeWindows } : {}),
+    },
     opencode: { ...opencodeRest, ...(opencodeAuto !== undefined ? { autoCompact: opencodeAuto } : {}) },
     harness: {
       ...providers?.harness,

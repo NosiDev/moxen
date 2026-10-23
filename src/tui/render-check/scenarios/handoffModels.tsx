@@ -10,6 +10,7 @@ import { fail } from "../helpers.js";
 /**
  * A provider's "Hand off at, per model" row opens a list of that provider's
  * models; enter on one opens a slider of sizes, and d takes the override away.
+ * "Compact at, per model" is the same editor, saying compaction.
  */
 export async function runHandoffModels(): Promise<void> {
   const model = (slug: string, name: string, isDefault: boolean, isHidden = false) => ({ slug, name, isCustom: false, isDefault, isHidden, efforts: [] });
@@ -28,7 +29,7 @@ export async function runHandoffModels(): Promise<void> {
       skills: [],
     },
   ];
-  const initial = normalizeConfig({ providers: { claude: { autoHandoffModels: { "claude-opus-5": 500_000, "gone-model": "300k" } } } });
+  const initial = normalizeConfig({ providers: { claude: { autoHandoffModels: { "claude-opus-5": 500_000, "gone-model": "300k" }, compactAtModels: { "claude-opus-5": 400_000 } } } });
   const written: Array<{ key: string; value: string }> = [];
   const Host = () => {
     const [config, setConfig] = useState(initial);
@@ -129,5 +130,24 @@ export async function runHandoffModels(): Promise<void> {
   await setup.flush();
   const after = setup.captureCharFrame();
   if (!after.includes("Settings") || after.includes("← back") || after.includes("uses provider setting")) fail("esc did not leave only the editor for the settings page");
+
+  // "Compact at, per model" sits above, under "Compact at": the same editor, with its own overrides and words.
+  const compactPlace = page.findIndex((view) => view.descriptor.key === "providers.claude.compactAtModels");
+  if (compactPlace < 0 || compactPlace > place) fail("Claude Code's page has no per-model compaction setting above the hand-off one");
+  for (let step = compactPlace; step < place; step += 1) await act(async () => setup.mockInput.pressArrow("up"));
+  await settle();
+  if (!setup.captureCharFrame().split("\n").some((line) => line.includes("Compact at, per model") && line.includes("1 model"))) fail("the 'Compact at, per model' row does not count its override");
+  await act(async () => setup.mockInput.pressEnter());
+  await settle();
+  const compactList = setup.captureCharFrame();
+  console.log("--- compact per model ---");
+  console.log(compactList);
+  for (const expected of ["Claude Opus 5", "400K", "Claude Sonnet 5", "uses provider setting"]) {
+    if (!compactList.includes(expected)) fail(`the per-model compaction list is missing "${expected}"`);
+  }
+  if (compactList.includes("gone-model")) fail("the compaction list shows the hand-off overrides");
+  await act(async () => setup.mockInput.pressEnter());
+  await settle();
+  if (!setup.captureCharFrame().includes("compacted")) fail("the compaction slider does not say it compacts");
   setup.renderer.destroy();
 }

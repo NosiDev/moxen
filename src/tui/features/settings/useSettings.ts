@@ -276,9 +276,9 @@ export function longThreadConfigFromSnapshot(snapshot: SettingsSnapshot | null):
     const leaf = path.pop()!;
     let cursor: Record<string, unknown> = out;
     for (const segment of path) cursor = (cursor[segment] ??= {}) as Record<string, unknown>;
-    cursor[leaf] = leaf === "autoHandoffModels" && typeof view.value === "string" ? handoffModelsFromText(view.value) : view.value;
+    cursor[leaf] = (leaf === "autoHandoffModels" || leaf === "compactAtModels") && typeof view.value === "string" ? handoffModelsFromText(view.value) : view.value;
   }
   return out as LongThreadConfig;
 }
 
-const LONG_THREAD_KEY = /^(longThreads\.\w+|ui\.autoHandoff\w*|providers\.(claude|opencode|harness)\.(handoff|handoffAt|compaction|compactAt|autoHandoff\w*|autoCompact\w*))$/;
+const LONG_THREAD_KEY = /^(longThreads\.\w+|ui\.autoHandoff\w*|providers\.(claude|opencode|harness)\.(handoff|handoffAt|compaction|compactAt|compactAtModels|autoHandoff\w*|autoCompact\w*))$/;

@@ -595,6 +595,7 @@ export function SettingsModal({
                 <HandoffModelsEditor
                   title={handoffItem.descriptor.label}
                   description={handoffItem.descriptor.description}
+                  action={handoffItem.control.action}
                   models={handoffItem.control.models}
                   width={paneWidth}
                   catalogReady={providers !== null}

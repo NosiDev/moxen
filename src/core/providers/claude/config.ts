@@ -21,6 +21,8 @@ export interface ClaudeSettings {
   readonly homePath: string;
   readonly launchArgs: readonly string[];
   readonly autoCompactWindow: number | null;
+  /** `autoCompactWindow` for particular models (`compactAtModels`, already clamped); beats it for those models. */
+  readonly autoCompactWindowModels: Readonly<Record<string, number>>;
   /** Who compacts: Claude Code itself, Moxen (which turns Claude Code's off), or nobody ("off"). */
   readonly autoCompact: "claude" | "ask" | "auto" | "off";
   /** Turn on Ultracode for every session: extended workflow orchestration, on at any effort level. */
@@ -45,6 +47,7 @@ export const DEFAULT_CLAUDE_SETTINGS: ClaudeSettings = {
   homePath: "",
   launchArgs: [],
   autoCompactWindow: null,
+  autoCompactWindowModels: {},
   autoCompact: "ask",
   ultracode: false,
   thinkingDisplay: "summarized",
@@ -59,6 +62,7 @@ export function normalizeClaudeSettings(raw: Partial<ClaudeSettings> = {}): Clau
     homePath: raw.homePath?.trim() ?? "",
     launchArgs: raw.launchArgs ?? [],
     autoCompactWindow: raw.autoCompactWindow ?? null,
+    autoCompactWindowModels: raw.autoCompactWindowModels ?? {},
     autoCompact: raw.autoCompact === "claude" || raw.autoCompact === "auto" || raw.autoCompact === "off" ? raw.autoCompact : "ask",
     ultracode: raw.ultracode ?? false,
     thinkingDisplay: raw.thinkingDisplay === "omitted" ? "omitted" : "summarized",

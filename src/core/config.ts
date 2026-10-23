@@ -287,12 +287,17 @@ function checkTyped(kind: string, value: unknown, label: string): unknown {
   throw new CliError("INVALID_CONFIG", `${label} must be a string.`);
 }
 
-/** A provider section's per-model hand-off thresholds, as the one field to merge in. */
-function handoffModelsOf(section: unknown, prefix: string): { autoHandoffModels: Record<string, number> } | undefined {
-  const raw = asSection(section, prefix).autoHandoffModels;
-  if (raw === undefined || raw === null) return undefined;
-  const map = normalizeHandoffModels(raw, `${prefix}.autoHandoffModels`);
-  return map ? { autoHandoffModels: map } : undefined;
+/** A provider section's per-model hand-off and compaction sizes, as the fields to merge in. */
+function handoffModelsOf(section: unknown, prefix: string): { autoHandoffModels?: Record<string, number>; compactAtModels?: Record<string, number> } | undefined {
+  const input = asSection(section, prefix);
+  const out: { autoHandoffModels?: Record<string, number>; compactAtModels?: Record<string, number> } = {};
+  for (const field of ["autoHandoffModels", "compactAtModels"] as const) {
+    const raw = input[field];
+    if (raw === undefined || raw === null) continue;
+    const map = normalizeHandoffModels(raw, `${prefix}.${field}`);
+    if (map) out[field] = map;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function normalizeProviders(raw: unknown): ProvidersConfig | undefined {

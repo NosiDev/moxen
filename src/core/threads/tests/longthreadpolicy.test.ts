@@ -145,6 +145,31 @@ describe("precedence", () => {
     expect(compactLineFor({ longThreads: { compactAt: "60%" }, providers: { opencode: { compaction: "provider" } } }, "opencode")).toBeNull();
     expect(compactLineFor({ providers: { claude: { compaction: "off", compactAt: "60%" } } }, "claude")).toBeNull();
   });
+
+  it("compact at, per model: that model compacts at its size, the others keep the provider's or the global line", () => {
+    const config: Config = { longThreads: { compactAt: "70%" }, providers: { opencode: { compaction: "auto", compactAtModels: { big: 400_000 } }, claude: { compaction: "auto", compactAt: "60%", compactAtModels: { big: 400_000 } } } };
+    expect(compactLineFor(config, "opencode", "big")).toEqual({ value: { tokens: 400_000 }, key: "providers.opencode.compactAtModels" });
+    expect(compactLineFor(config, "opencode", "small")?.value).toEqual({ percent: 70 });
+    expect(compactLineFor(config, "claude", "small")?.value).toEqual({ percent: 60 });
+    expect(longThreadPolicy(config, "opencode", "big").compact).toEqual({ mode: "auto", line: { tokens: 400_000 } });
+    expect(longThreadPolicy(config, "opencode", "small").compact).toEqual({ mode: "auto", line: { percent: 70 } });
+    // Off stays off for every model; OpenCode compacting by itself draws no line of Moxen's.
+    expect(compactLineFor({ providers: { claude: { compaction: "off", compactAtModels: { big: 400_000 } } } }, "claude", "big")).toBeNull();
+    expect(compactLineFor({ providers: { opencode: { compaction: "provider", compactAtModels: { big: 400_000 } } } }, "opencode", "big")).toBeNull();
+  });
+
+  it("a model's own compaction line below its hand-off line still acts first", () => {
+    const config: Config = { longThreads: { handoffAt: "60%" }, providers: { claude: { compaction: "auto", compactAt: "90%", compactAtModels: { "claude-opus-5": 100_000 } } } };
+    expect(planLongThreadAction(config, snapshot({ usedTokens: 125_000 }))).toEqual({ kind: "compact", reason: "auto" });
+    expect(planLongThreadAction(config, snapshot({ model: "other", usedTokens: 125_000 }))).toBeNull();
+  });
+
+  it("Claude Code compacting by itself gets each model's size as that model's window, kept between 100K and 1M", () => {
+    const providers = driverProviders({ providers: { claude: { compaction: "provider", compactAt: "300K", compactAtModels: { big: 2_000_000, small: 40_000, mid: 500_000 } } } });
+    expect(providers?.claude).toMatchObject({ autoCompact: "claude", autoCompactWindow: 307_200, autoCompactWindowModels: { big: 1_000_000, small: 100_000, mid: 500_000 } });
+    // While Moxen compacts, the model's line goes through the policy instead.
+    expect(driverProviders({ providers: { claude: { compaction: "auto", compactAtModels: { big: 500_000 } } } })?.claude?.autoCompactWindowModels).toBeUndefined();
+  });
 });
 
 describe("the Harness", () => {
@@ -163,6 +188,13 @@ describe("the Harness", () => {
     expect(resolveCompactionSettings(tab, { ...profile, compaction: { fraction: 0.5 } })).toMatchObject({ fraction: 0.5, tokens: null });
     expect(resolveCompactionSettings(tab, profile)).toMatchObject({ fraction: null, tokens: 16_384 });
     expect(resolveCompactionSettings(driverProviders({ providers: { harness: { compaction: "off" } } })?.harness, profile).auto).toBe(false);
+  });
+
+  it("puts the model's own size between the profile's and the tab's line", () => {
+    const tab = driverProviders({ providers: { harness: { compactAt: "50%", compactAtModels: { m: 20_000 } } } })?.harness;
+    expect(resolveCompactionSettings(tab, profile, "m")).toMatchObject({ fraction: null, tokens: 20_000 });
+    expect(resolveCompactionSettings(tab, profile, "other")).toMatchObject({ fraction: 0.5, tokens: null });
+    expect(resolveCompactionSettings(tab, { ...profile, compaction: { tokens: 12_000 } }, "m")).toMatchObject({ tokens: 12_000 });
   });
 });
 
@@ -198,12 +230,12 @@ describe("hand-off and compaction together", () => {
 describe("the settings page", () => {
   const view = (config: CliConfig, key: string) => describeSettings(config).find((entry) => entry.descriptor.key === key)!;
 
-  it("shows the same five rows on every provider tab, and hides the older keys", () => {
+  it("shows the same six rows on every provider tab, and hides the older keys", () => {
     for (const kind of ["claude", "opencode", "harness"] as const) {
       const rows = describeSettings(normalizeConfig({}))
         .filter((entry) => entry.descriptor.section === `provider:${kind}` && entry.descriptor.group === "Long threads" && entry.descriptor.hidden !== true)
         .map((entry) => entry.descriptor.label);
-      expect(rows).toEqual(["Compaction", "Compact at", ...(kind === "harness" ? ["Kept word for word"] : []), "Hand off", "Hand off at", "Hand off at, per model"]);
+      expect(rows).toEqual(["Compaction", "Compact at", "Compact at, per model", ...(kind === "harness" ? ["Kept word for word"] : []), "Hand off", "Hand off at", "Hand off at, per model"]);
     }
   });
 
@@ -213,6 +245,13 @@ describe("the settings page", () => {
     expect(view(config, "providers.claude.compaction").effective).toMatchObject({ value: "provider", label: "Claude Code" });
     expect(view(config, "providers.claude.compactAt").effective?.label).toBe("Claude Code's own, tuned per model");
     expect(view(normalizeConfig({ longThreads: { handoffAt: "40%" } }), "providers.opencode.handoffAt").effective).toEqual({ value: "40%", label: "40% of the window", origin: "from 'Hand off at' on the Long threads tab" });
+  });
+
+  it("takes per-model compaction sizes as model=tokens text and keeps them as a map", () => {
+    const descriptor = settingDescriptor("providers.opencode.compactAtModels")!;
+    const config = normalizeConfig(writeSetting(normalizeConfig({}), descriptor.key, parseSettingValue(descriptor, "big-model=400k, small=64k")));
+    expect(config.providers?.opencode?.compactAtModels).toEqual({ "big-model": 400_000, small: 64_000 });
+    expect(readSetting(config, descriptor.key)).toBe("big-model=400000, small=64000");
   });
 
   it("takes an older key through `config set` and writes the one that replaced it too", () => {

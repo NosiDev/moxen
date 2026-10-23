@@ -211,13 +211,15 @@ function parseProfile(raw: unknown, label: string): HarnessProfileConfig {
 
 /**
  * The compaction settings in force for a profile, most specific first: the
- * profile's own, then the Harness tab (`compaction`, `compactAt`, which
- * `driverProviders` fills from the global line too), then its older keys,
- * then ours. Within a level a size beats a share, as it always has.
+ * profile's own, then the model's size on the Harness tab (`compactAtModels`),
+ * then the tab's line (`compaction`, `compactAt`, which `driverProviders`
+ * fills from the global line too), then its older keys, then ours. Within a
+ * level a size beats a share, as it always has.
  */
-export function resolveCompactionSettings(config: HarnessProviderConfig | undefined, profile: HarnessProfileConfig): CompactionSettings {
+export function resolveCompactionSettings(config: HarnessProviderConfig | undefined, profile: HarnessProfileConfig, model?: string): CompactionSettings {
   const own = profile.compaction;
-  const line = own?.tokens !== undefined ? { tokens: own.tokens } : own?.fraction !== undefined ? { fraction: own.fraction } : tabLine(config);
+  const modelTokens = model === undefined ? undefined : config?.compactAtModels?.[model];
+  const line = own?.tokens !== undefined ? { tokens: own.tokens } : own?.fraction !== undefined ? { fraction: own.fraction } : modelTokens !== undefined ? { tokens: modelTokens } : tabLine(config);
   return {
     auto: own?.auto ?? (config?.compaction !== undefined ? config.compaction === "auto" : config?.autoCompact) ?? DEFAULT_COMPACTION.auto,
     fraction: line !== null && "fraction" in line ? line.fraction : null,

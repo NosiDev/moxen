@@ -65,8 +65,8 @@ export type SettingControl =
   /** The order a provider's model should try its web tools in: ranked rows first, then the rest. */
   /** `warning`: what the ranked tools still need (a server to add, a switch that is off), said on the closed row too. */
   | { readonly kind: "order"; readonly rows: readonly WebOrderRow[]; readonly warning?: string }
-  /** The models of one provider, each with its own hand-off size or none: opened in its own editor with a slider per model. */
-  | { readonly kind: "handoff"; readonly models: readonly HandoffModelEntry[] };
+  /** The models of one provider, each with its own hand-off or compaction size or none: opened in its own editor with a slider per model. */
+  | { readonly kind: "handoff"; readonly models: readonly HandoffModelEntry[]; readonly action: "handed off" | "compacted" };
 
 /** One model as the per-model hand-off editor lists it. */
 export interface HandoffModelEntry {
@@ -384,7 +384,7 @@ export function settingControl(
         const tools = (kind.tools ?? []).map((tool): McpAccessEntry => ({ name: tool.name, summary: tool.summary, locked: null }));
         return { kind: "tools", tools, excluded: String(value ?? "").split(",").map((name) => name.trim()).filter((name) => name !== "") };
       }
-      if (kind.source === "handoff-models") return { kind: "handoff", models: handoffModelEntries(providers, kind.providerKind, value) };
+      if (kind.source === "handoff-models") return { kind: "handoff", models: handoffModelEntries(providers, kind.providerKind, value), action: descriptor.key.endsWith(".compactAtModels") ? "compacted" : "handed off" };
       if (kind.source === undefined) return { kind: "text", multiline: kind.multiline === true, ...(effective ? { effective } : {}) };
       // No catalog yet (still loading): the list would be empty, not wrong.
       options = catalogOptions(kind.source, settings, providers ?? [], kind.providerKind, effective);
