@@ -522,6 +522,14 @@ export function SettingsModal({
     const timer = setTimeout(() => scrollRef.current?.scrollChildIntoView(scrollTarget), scrollTarget.startsWith("settings-edit-") ? 120 : 0);
     return () => clearTimeout(timer);
   }, [scrollTarget]);
+  // Keep the sidebar's active entry in view (tab steps through it, and an opened list nests more entries under it).
+  const sideRef = useRef<ScrollBoxRenderable | null>(null);
+  const sideActive = entries.findIndex((entry) => entryActive(entry));
+  useEffect(() => {
+    if (sideActive < 0) return;
+    const timer = setTimeout(() => sideRef.current?.scrollChildIntoView(`settings-side-${sideActive}`), 0);
+    return () => clearTimeout(timer);
+  }, [sideActive, entries.length]);
   // Coming back from a list editor shows the page again in a new scroll box, still at the top: scroll to the row we left from.
   const showingPage = listOpen === null && handoffOpen === null;
   useEffect(() => {
@@ -564,7 +572,14 @@ export function SettingsModal({
             </text>
           </box>
           <box style={{ flexDirection: "row", flexGrow: 1, marginTop: 1 }}>
-            <box style={{ flexDirection: "column", width: TAB_WIDTH, flexShrink: 0 }}>
+            {/* Taller than the window once the Harness and MCP servers nest their entries: it scrolls, so it never runs over the hint. */}
+            <scrollbox
+              ref={sideRef}
+              style={{ width: TAB_WIDTH, flexShrink: 0 }}
+              stickyStart="top"
+              backgroundColor={SURFACE.raised}
+              verticalScrollbarOptions={{ showArrows: false, trackOptions: { foregroundColor: COLOR.dim, backgroundColor: SURFACE.border } }}
+            >
               {entries.map((entry, at) => {
                 // A category heads its first section; inside an open entry the sidebar is only the way back, so none shows.
                 const category = SECTION_CATEGORY[entry.section];
@@ -575,6 +590,7 @@ export function SettingsModal({
                   <Fragment key={`${entry.section}#${entry.group ?? ""}#${entry.profile ?? ""}#${entry.heading ?? ""}${entry.back === true ? "#back" : ""}`}>
                     {heads ? <CategoryHeading label={category} first={at === 0} width={TAB_WIDTH} /> : null}
                     <SectionTab
+                      id={`settings-side-${at}`}
                       label={entry.label}
                       prefix={entry.prefix}
                       active={entryActive(entry)}
@@ -584,7 +600,7 @@ export function SettingsModal({
                   </Fragment>
                 );
               })}
-            </box>
+            </scrollbox>
             <box
               style={{ flexDirection: "column", flexGrow: 1, paddingLeft: 2 }}
               border={["left"]}
@@ -860,11 +876,11 @@ function CategoryHeading({ label, first, width }: { label: string; first: boolea
   );
 }
 
-function SectionTab({ label, prefix, active, width, onSelect }: { label: string; prefix: string; active: boolean; width: number; onSelect: () => void }) {
+function SectionTab({ id, label, prefix, active, width, onSelect }: { id: string; label: string; prefix: string; active: boolean; width: number; onSelect: () => void }) {
   const { hovered, handlers } = useHover();
   const bg = active ? SURFACE.hover : hovered ? SURFACE.border : SURFACE.raised;
   return (
-    <box style={{ flexDirection: "row", height: 1, flexShrink: 0, marginRight: 1 }} backgroundColor={bg} onMouseDown={onSelect} selectable={false} {...handlers}>
+    <box id={id} style={{ flexDirection: "row", height: 1, flexShrink: 0, marginRight: 1 }} backgroundColor={bg} onMouseDown={onSelect} selectable={false} {...handlers}>
       <text fg={active ? COLOR.accent : COLOR.faint} bg={bg} selectable={false}>{active ? "▌ " : "  "}</text>
       {prefix === "" ? null : <text fg={COLOR.faint} bg={bg} selectable={false}>{prefix}</text>}
       <text fg={active ? COLOR.bright : hovered ? COLOR.text : COLOR.dim} bg={bg} selectable={false}>{truncate(label, width - 3 - prefix.length)}</text>

@@ -32,6 +32,7 @@ import { runSettingsModelList, runSettingsSlider } from "./render-check/scenario
 import { runHarnessProfiles } from "./render-check/scenarios/harnessProfiles.js";
 import { runMcpAccess } from "./render-check/scenarios/mcpAccess.js";
 import { runHandoffModels } from "./render-check/scenarios/handoffModels.js";
+import { runSettingsSidebarScroll } from "./render-check/scenarios/settingsSidebarScroll.js";
 import { runQueueAndSide } from "./render-check/scenarios/queueAndSide.js";
 import { runSidebarTree } from "./render-check/scenarios/sidebarTree.js";
 import { registerSyntaxParsers } from "../core/syntax/register.js";
@@ -94,6 +95,7 @@ await runSettingsModelList();
 await runHarnessProfiles();
 await runMcpAccess();
 await runHandoffModels();
+await runSettingsSidebarScroll();
 await runQueueAndSide();
 await runNoticeBanner();
 await runImageTokens();
