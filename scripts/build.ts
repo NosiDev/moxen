@@ -9,14 +9,23 @@
  * (React, OpenTUI, the grammars) out of the startup path of plain commands.
  */
 import { rm } from "node:fs/promises";
+import { join } from "node:path";
 
-await rm("dist", { recursive: true, force: true });
+// Absolute paths throughout, so the build does not depend on the caller's cwd.
+const root = join(import.meta.dir, "..");
+const outdir = join(root, "dist");
+
+await rm(outdir, { recursive: true, force: true });
 
 const result = await Bun.build({
   // The server and the moxen MCP server are spawned as their own processes
   // (`src/server/client.ts`, `src/server/mcp/main.ts`).
-  entrypoints: ["src/cli/index.ts", "src/server/daemon.ts", "src/server/mcp/entry.ts"],
-  outdir: "dist",
+  entrypoints: [
+    join(root, "src/cli/index.ts"),
+    join(root, "src/server/daemon.ts"),
+    join(root, "src/server/mcp/entry.ts"),
+  ],
+  outdir,
   target: "bun",
   format: "esm",
   splitting: true,
@@ -48,4 +57,4 @@ for (const output of result.outputs) {
   });
   if (rewritten !== source) await Bun.write(output.path, rewritten);
 }
-console.log(`built ${result.outputs.length} files into dist/ (${stripped} file imports rewritten)`);
+console.log(`built ${result.outputs.length} files into ${outdir} (${stripped} file imports rewritten)`);
