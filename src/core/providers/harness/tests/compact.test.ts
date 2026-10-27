@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { compact, chooseCut, isContextOverflow, SHRINK_STEPS, type CompactInput, type Summarise } from "../compact.js";
 import { autoCompactThreshold, DEFAULT_COMPACTION } from "../compactsettings.js";
 import { messagesTokens } from "../context.js";
-import { pruneToolResults, UNEVENTFUL_PLACEHOLDER } from "../prune.js";
 import { ChatHttpError } from "../transport/chat.js";
 import type { TranscriptMessage } from "../types.js";
 
@@ -103,58 +102,6 @@ describe("isContextOverflow", () => {
     expect(isContextOverflow(tooLarge, 95_000, 100_000)).toBe(true);
     expect(isContextOverflow(tooLarge, 95_000, null)).toBe(false);
     expect(isContextOverflow(new ChatHttpError("context length", 400, true, false), 1, 100_000)).toBe(true);
-  });
-});
-
-describe("pruneToolResults", () => {
-  const turn = (id: string, size: number, name = "bash", args = "{}"): TranscriptMessage[] => [calls(call(id, name, args)), result(id, filler(size), name)];
-
-  it("blanks old results outside the protected window, keeps every call paired, and leaves the newest alone", () => {
-    const messages = [sys, user("go"), ...turn("c1", 30_000), ...turn("c2", 30_000), ...turn("c3", 30_000), ...turn("c4", 30_000)];
-    const pruned = pruneToolResults(messages);
-    expect(pruned.applied).toBe(true);
-    expect(pairingIsValid(pruned.messages)).toBe(true);
-    const contents = pruned.messages.filter((m) => m.role === "tool").map((m) => m.content);
-    expect(contents[0]).toMatch(/^\[Old tool output cleared/);
-    expect(contents[3]).toHaveLength(120_000);
-    expect(pruned.savedTokens).toBeGreaterThanOrEqual(20_000);
-  });
-
-  it("drops the picture with the old result it came in", () => {
-    const picture = { name: "a.png", mimeType: "image/png", data: "AAAA" };
-    const withPicture: TranscriptMessage[] = [calls(call("p1", "read")), { role: "tool", toolCallId: "p1", name: "read", content: filler(100), images: Array.from({ length: 20 }, () => picture) }];
-    const pruned = pruneToolResults([sys, user("go"), ...withPicture, ...turn("c2", 30_000), ...turn("c3", 30_000)]);
-    const old = pruned.messages.find((m) => m.role === "tool" && m.toolCallId === "p1");
-    expect(old).toMatchObject({ content: expect.stringMatching(/^\[Old tool output cleared/) });
-    expect(old).not.toHaveProperty("images");
-  });
-
-  it("changes nothing unless it frees 20k tokens, and never touches a result under 50 tokens", () => {
-    const small = [sys, user("go"), ...turn("c1", 10_000), ...turn("c2", 30_000), ...turn("c3", 30_000)];
-    expect(pruneToolResults(small)).toMatchObject({ applied: false, messages: small });
-    const tiny = [sys, user("go"), ...turn("t1", 49), ...turn("c2", 30_000), ...turn("c3", 30_000), ...turn("c4", 30_000)];
-    const pruned = pruneToolResults(tiny);
-    expect(pruned.messages.find((m) => m.role === "tool" && m.toolCallId === "t1")).toMatchObject({ content: filler(49) });
-  });
-
-  it("points at the saved copy when the result says where it is", () => {
-    const saved = `head\n[… 99 characters omitted. The full output is saved at /tmp/art/bash-1.log; read it in pieces with offset and limit.]\ntail${filler(25_000)}`;
-    const messages = [sys, user("go"), calls(call("c1", "bash")), result("c1", saved, "bash"), ...turn("c2", 30_000), ...turn("c3", 30_000)];
-    const old = pruneToolResults(messages).messages.find((m) => m.role === "tool" && m.toolCallId === "c1");
-    expect(old).toMatchObject({ content: expect.stringContaining("saved at /tmp/art/bash-1.log") });
-  });
-
-  it("elides zero-match searches and superseded reads even inside the protected window", () => {
-    const pattern = "some_rather_long_identifier_that_nothing_uses";
-    const grep = [calls(call("g", "grep", JSON.stringify({ pattern }))), result("g", `No matches for ${pattern}.`, "grep")];
-    const read = (id: string): TranscriptMessage[] => [calls(call(id, "read", '{"file_path":"/a"}')), result(id, filler(30_000), "read")];
-    const messages = [sys, user("go"), ...grep, ...read("r1"), ...read("r2")];
-    const pruned = pruneToolResults(messages, { protectTokens: 100_000, minSavingsTokens: 1, minResultTokens: 50 });
-    const byId = new Map(pruned.messages.filter((m) => m.role === "tool").map((m) => [m.toolCallId, m.content]));
-    expect(byId.get("g")).toBe(UNEVENTFUL_PLACEHOLDER);
-    expect(byId.get("r1")).toBe(UNEVENTFUL_PLACEHOLDER);
-    expect(byId.get("r2")).toHaveLength(120_000);
-    expect(pairingIsValid(pruned.messages)).toBe(true);
   });
 });
 
@@ -282,18 +229,14 @@ describe("compact", () => {
     expect(bigger).toMatchObject({ kind: "failed" });
   });
 
-  it("clears old tool output and stops there when that is enough, but a manual compaction always summarises", async () => {
+  it("always summarises, however much of the conversation is old tool output", async () => {
     const bulky: TranscriptMessage[] = [sys, user("go")];
     for (let n = 1; n <= 5; n += 1) bulky.push(calls(call(`c${n}`, "bash")), result(`c${n}`, filler(30_000), "bash"));
     bulky.push(say("done"));
     const asked: string[] = [];
     const model: Summarise = async () => (asked.push("asked"), { text: SUMMARY, finish: "stop" });
     const auto = await compact(input(bulky, model, { threshold: 140_000, reason: "threshold" }));
-    expect(auto.kind).toBe("pruned");
-    if (auto.kind === "pruned") expect(pairingIsValid(auto.messages)).toBe(true);
-    expect(asked).toHaveLength(0);
-    const manual = await compact(input(bulky, model, { reason: "manual" }));
-    expect(manual.kind).toBe("compacted");
+    expect(auto.kind).toBe("compacted");
     expect(asked).toHaveLength(1);
   });
 

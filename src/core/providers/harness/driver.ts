@@ -1357,12 +1357,6 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
       case "failed":
         unit.compactFailures += 1;
         return { status: "failed", message: `Could not compact the conversation: ${outcome.message}` };
-      case "pruned":
-        transcript.replace(outcome.messages);
-        applied();
-        unit.compactFailures = 0;
-        this.publishNotice(session, turn, "compacted", `${label}Old tool output cleared`, `${outcome.prunedCount} results, about ${outcome.savedTokens} tokens. The newest output was kept; run a tool again to see what was cleared.`);
-        return { status: "compacted", message: "" };
       case "compacted": {
         // The dropped history is written first: a crash between the two steps loses nothing.
         transcript.archive(transcript.compactions + 1, outcome.dropped);

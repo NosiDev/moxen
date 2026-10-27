@@ -1,10 +1,9 @@
 /**
- * Compaction: what to do when the conversation no longer fits, in the order
- * that costs least. Clear old tool output (`prune.ts`); failing that, ask the
- * model to summarise the work and rebuild the transcript from the summary, the
- * user's own words and a recent tail kept as real messages; failing that,
- * just trim, so a summariser that is broken (or too small for the job) can
- * never leave a thread stuck.
+ * Compaction: what to do when the conversation no longer fits. Ask the model
+ * to summarise the work and rebuild the transcript from the summary, the
+ * user's own words and a recent tail kept as real messages; failing that, just
+ * trim, so a summariser that is broken (or too small for the job) can never
+ * leave a thread stuck.
  *
  * Everything here is a function of the transcript and a `summarise` callback;
  * it does not touch the transcript on disk, the session or the network. The
@@ -12,7 +11,6 @@
  */
 import { messagesTokens, messageTokens } from "./context.js";
 import { SUMMARY_FRAMING, SUMMARY_NUDGE, TRIMMED_FRAMING, parseSummary, summaryInstruction } from "./compactprompt.js";
-import { pruneToolResults } from "./prune.js";
 import { INSTRUCTIONS_REMINDER_PREFIXES, PLAN_MODE_REMINDER } from "./prompt.js";
 import type { CompactionSettings } from "./compactsettings.js";
 import { ChatHttpError } from "./transport/chat.js";
@@ -170,8 +168,6 @@ export interface CompactInput {
 
 export type CompactOutcome =
   | { readonly kind: "nothing"; readonly message: string }
-  /** Old tool output was cleared and that was enough. */
-  | { readonly kind: "pruned"; readonly messages: readonly TranscriptMessage[]; readonly prunedCount: number; readonly savedTokens: number }
   | {
       readonly kind: "compacted";
       /** The whole new transcript. */
@@ -235,12 +231,6 @@ export async function compact(input: CompactInput): Promise<CompactOutcome> {
   const sizeOf = (list: readonly TranscriptMessage[]): number => scaled(messagesTokens(list)) + input.overheadTokens;
   const beforeTokens = sizeOf(messages);
   const target = input.threshold !== null ? input.threshold * PROGRESS_SHARE : beforeTokens * PROGRESS_SHARE;
-
-  // Cheapest first: if clearing old tool output gets under the target, no summary is needed. A manual /compact asked for one.
-  const pruned = pruneToolResults(messages);
-  if (input.reason !== "manual" && pruned.applied && sizeOf(pruned.messages) <= target) {
-    return { kind: "pruned", messages: pruned.messages, prunedCount: pruned.prunedCount, savedTokens: scaled(pruned.savedTokens) };
-  }
 
   const cut = chooseCut(messages, input.keepRecentTokens);
   if (cut === null) return { kind: "nothing", message: "The conversation is too short to compact." };
