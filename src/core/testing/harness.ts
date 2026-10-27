@@ -10,7 +10,7 @@
  * timeout paths), `failTurns` throws from `sendTurn` (async ledger
  * failure). Pass explicit `drivers` factories to take full control.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -23,6 +23,7 @@ import { CliError } from "../errors.js";
 import type { McpServerSpec } from "../mcp.js";
 import type { ProviderRuntimeEvent } from "../providers/spi.js";
 import { runProcess } from "../infra/process.js";
+import { rmTempAsync } from "./tmp.js";
 import { openThreadStore, type ThreadStore } from "../threads/store.js";
 import { flushTurnRunners } from "../threads/execute.js";
 import type { TurnDriver, TurnDriverFactories, TurnOutcome } from "../threads/execute.js";
@@ -172,7 +173,7 @@ export async function testHarness(options: TestHarnessOptions = {}) {
     else process.env.MOXEN_CONFIG = previousConfig;
     if (previousDefaultModel === undefined) delete process.env.MOXEN_DEFAULT_MODEL;
     else process.env.MOXEN_DEFAULT_MODEL = previousDefaultModel;
-    await rm(root, { recursive: true, force: true });
+    await rmTempAsync(root);
   });
   const work = path.join(root, "work");
   await mkdir(work, { recursive: true });

@@ -165,8 +165,9 @@ export function commandEnv(secretNames: readonly string[] = [], base: NodeJS.Pro
 export function killGroup(pid: number | undefined, signal: NodeJS.Signals, platform: NodeJS.Platform = process.platform): void {
   if (pid === undefined) return;
   if (platform === "win32") {
-    // No process groups: take the tree down by pid. Forceful only on the second, SIGKILL pass.
-    const args = ["/pid", String(pid), "/T", ...(signal === "SIGKILL" ? ["/F"] : [])];
+    // No process groups: take the tree down by pid. Always forceful: without /F, taskkill only
+    // asks windows to close, which a windowless shell or server never answers, so it would live on.
+    const args = ["/pid", String(pid), "/T", "/F"];
     try {
       spawn("taskkill", args, { stdio: "ignore", windowsHide: true }).on("error", () => undefined);
     } catch {

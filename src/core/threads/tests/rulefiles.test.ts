@@ -24,7 +24,7 @@ async function project(files: Record<string, string>): Promise<string> {
   return root;
 }
 
-const names = (files: ReadonlyMap<string, string>, root: string) => [...files.keys()].map((file) => path.relative(root, file)).sort();
+const names = (files: ReadonlyMap<string, string>, root: string) => [...files.keys()].map((file) => path.relative(root, file).split(path.sep).join("/")).sort();
 
 describe("readRuleFiles", () => {
   it("reads CLAUDE.md, and AGENTS.md only when no CLAUDE.md is above the working directory", async () => {

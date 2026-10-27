@@ -118,6 +118,16 @@ export class BackgroundShells {
       end("failed", null);
     });
     child.on("close", (code) => end(entry.stopRequested ? "stopped" : code === 0 ? "completed" : "failed", code));
+    // Something the command started can outlive it and keep the pipes open (on Windows a tree is
+    // killed by parent pid, which an orphan escapes), so "close" never comes. A stop does not wait for it.
+    child.on("exit", (code) => {
+      if (!entry.stopRequested) return;
+      setTimeout(() => {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        end("stopped", code);
+      }, 500).unref();
+    });
     this.#onEvent({ type: "started", task });
     return task;
   }

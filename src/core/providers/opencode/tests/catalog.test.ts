@@ -135,8 +135,9 @@ describe("readStoredAuthTypes", () => {
   it("runs the CLI with --standalone, asynchronously, through the given binary", async () => {
     const dir = tempDir("moxen-auth-list-");
     const log = path.join(dir, "args.log");
-    const bin = path.join(dir, "fake-opencode");
-    fs.writeFileSync(bin, `#!/bin/sh\necho "$@" > "${log}"\necho '[{"id":"xai","connections":[{"type":"key"}]}]'\n`, { mode: 0o755 });
+    const bin = path.join(dir, process.platform === "win32" ? "fake-opencode.cmd" : "fake-opencode");
+    if (process.platform === "win32") fs.writeFileSync(bin, `@echo off\r\necho %* > "${log}"\r\necho [{"id":"xai","connections":[{"type":"key"}]}]\r\n`);
+    else fs.writeFileSync(bin, `#!/bin/sh\necho "$@" > "${log}"\necho '[{"id":"xai","connections":[{"type":"key"}]}]'\n`, { mode: 0o755 });
     const pending = readStoredAuthTypes(process.env, { binaryPath: bin, fresh: true });
     // Not spawnSync: the promise is returned before the child has been read.
     expect(pending).toBeInstanceOf(Promise);

@@ -306,6 +306,15 @@ export async function renderPage(url: string, options: RenderOptions): Promise<R
     cdp?.close();
     stop();
     // The profile folder goes once the browser has had a moment to let go of it.
-    setTimeout(() => fs.rmSync(profile, { recursive: true, force: true }), exited ? 0 : 2500).unref();
+    setTimeout(() => removeProfile(profile, 12), exited ? 0 : 2500).unref();
+  }
+}
+
+/** On Windows the folder can stay locked a little longer: retry, and never let a failed cleanup throw from a timer. */
+function removeProfile(profile: string, retries: number): void {
+  try {
+    fs.rmSync(profile, { recursive: true, force: true });
+  } catch {
+    if (retries > 0) setTimeout(() => removeProfile(profile, retries - 1), 500).unref();
   }
 }

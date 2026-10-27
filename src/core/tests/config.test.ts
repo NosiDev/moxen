@@ -80,9 +80,9 @@ describe("config", () => {
 });
 
 describe("config location", () => {
-  const saved = { HOME: process.env.HOME, XDG: process.env.XDG_CONFIG_HOME, CONFIG: process.env.MOXEN_CONFIG, NO: process.env.MOXEN_NO_CONFIG_MIGRATION };
+  const saved = { HOME: process.env.HOME, PROFILE: process.env.USERPROFILE, APPDATA: process.env.APPDATA, XDG: process.env.XDG_CONFIG_HOME, CONFIG: process.env.MOXEN_CONFIG, NO: process.env.MOXEN_NO_CONFIG_MIGRATION };
   afterEach(() => {
-    for (const [key, value] of [["HOME", saved.HOME], ["XDG_CONFIG_HOME", saved.XDG], ["MOXEN_CONFIG", saved.CONFIG], ["MOXEN_NO_CONFIG_MIGRATION", saved.NO]] as const) {
+    for (const [key, value] of [["HOME", saved.HOME], ["USERPROFILE", saved.PROFILE], ["APPDATA", saved.APPDATA], ["XDG_CONFIG_HOME", saved.XDG], ["MOXEN_CONFIG", saved.CONFIG], ["MOXEN_NO_CONFIG_MIGRATION", saved.NO]] as const) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
@@ -90,22 +90,26 @@ describe("config location", () => {
   const sandbox = () => {
     const home = mkdtempSync(path.join(os.tmpdir(), "moxen-home-"));
     process.env.HOME = home;
+    process.env.USERPROFILE = home;
     delete process.env.XDG_CONFIG_HOME;
     delete process.env.MOXEN_CONFIG;
     delete process.env.MOXEN_NO_CONFIG_MIGRATION;
-    mkdirSync(path.join(home, ".config", "moxen"), { recursive: true });
-    writeFileSync(path.join(home, ".config", "moxen", "config.json"), '{"runtimeMode":"approval-required"}');
+    // Where older builds kept the config: `%APPDATA%` on Windows, `~/.config` elsewhere.
+    process.env.APPDATA = path.join(home, "AppData", "Roaming");
+    mkdirSync(path.join(legacyRoot(home), "moxen"), { recursive: true });
+    writeFileSync(path.join(legacyRoot(home), "moxen", "config.json"), '{"runtimeMode":"approval-required"}');
     return home;
   };
+  const legacyRoot = (home: string) => (process.platform === "win32" ? path.join(home, "AppData", "Roaming") : path.join(home, ".config"));
 
   it("keeps using an old config where it is until a launch copies it", () => {
     const home = sandbox();
-    expect(defaultConfigPath()).toBe(path.join(home, ".config", "moxen", "config.json"));
+    expect(defaultConfigPath()).toBe(path.join(legacyRoot(home), "moxen", "config.json"));
     expect(migrateLegacyConfig()).toBe(true);
     expect(defaultConfigPath()).toBe(path.join(home, ".moxen", "config.json"));
     expect(readFileSync(path.join(home, ".moxen", "config.json"), "utf8")).toContain("approval-required");
     // Copied, not moved: a process still on the old build keeps its file.
-    expect(existsSync(path.join(home, ".config", "moxen", "config.json"))).toBe(true);
+    expect(existsSync(path.join(legacyRoot(home), "moxen", "config.json"))).toBe(true);
     expect(migrateLegacyConfig()).toBe(false);
   });
 

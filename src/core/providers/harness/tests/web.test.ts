@@ -13,6 +13,7 @@ import { extractText } from "../web/htmltext.js";
 import { httpRequest, WebError } from "../web/http.js";
 import { classifyAddress, isLoopbackHost, refusalFor, resolveAllowed } from "../web/netguard.js";
 import { parseDuckDuckGo, searchWeb, type SearchBackend, type SearchContext } from "../web/search.js";
+import { rmTemp } from "../../../testing/tmp.js";
 
 // -- a local site to fetch from (this machine's own address is the one the tool always allows) ------------------------
 
@@ -47,7 +48,7 @@ beforeEach(() => {
   routes = new Map();
   seen.length = 0;
 });
-afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+afterEach(() => rmTemp(dir));
 
 const page = (body: string, title = "A page"): Handler => (_request, response) => {
   response.writeHead(200, { "content-type": "text/html; charset=utf-8" });

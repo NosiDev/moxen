@@ -319,7 +319,8 @@ export function classifyPath(word: string, context: AssessContext): Where {
   for (const startup of STARTUP_FILES) if (isInside(path.join(home, startup), resolved)) return "startup";
   if (isInside(context.cwd, resolved) || (context.allowed ?? []).some((root) => isInside(root, resolved))) return "cwd";
   for (const tmp of tmpRoots) if (isInside(tmp, resolved)) return "tmp";
-  if (resolved === home) return "home";
+  // `path.relative` resolves both sides, so a home given with another case or separator style still matches.
+  if (path.relative(home, resolved) === "") return "home";
   if (SYSTEM_DIRS.some((dir) => isInside(dir, resolved)) || WINDOWS_SYSTEM.test(resolved)) return "system";
   if (isInside(home, resolved)) return "outside";
   return "outside";

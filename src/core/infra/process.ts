@@ -81,23 +81,29 @@ export async function commandExists(command: string): Promise<boolean> {
   return result?.exitCode === 0;
 }
 
-/** Whether `name` resolves to an executable on `PATH` (with `PATHEXT` on Windows). */
-export function binaryOnPath(name: string, env: NodeJS.ProcessEnv = process.env): boolean {
+/** The file `name` resolves to on `PATH` (with `PATHEXT` on Windows), or null. */
+export function resolveOnPath(name: string, env: NodeJS.ProcessEnv = process.env): string | null {
   const raw = env.PATH ?? env.Path ?? "";
   const delimiter = process.platform === "win32" ? ";" : ":";
   const exts = process.platform === "win32"
-    ? (env.PATHEXT ?? ".EXE").split(";").filter((ext) => ext.length > 0)
+    ? (env.PATHEXT ?? process.env.PATHEXT ?? ".EXE").split(";").filter((ext) => ext.length > 0)
     : [""];
   for (const dir of raw.split(delimiter).filter((entry) => entry.length > 0)) {
     for (const ext of process.platform === "win32" ? ["", ...exts] : exts) {
+      const file = path.join(dir, `${name}${ext}`);
       try {
-        if (fs.statSync(path.join(dir, `${name}${ext}`)).isFile()) return true;
+        if (fs.statSync(file).isFile()) return file;
       } catch {
         // Keep scanning.
       }
     }
   }
-  return false;
+  return null;
+}
+
+/** Whether `name` resolves to an executable on `PATH` (with `PATHEXT` on Windows). */
+export function binaryOnPath(name: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  return resolveOnPath(name, env) !== null;
 }
 
 /**

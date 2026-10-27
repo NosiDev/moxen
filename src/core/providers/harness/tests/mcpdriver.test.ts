@@ -18,6 +18,7 @@ import { HarnessDriver } from "../driver.js";
 import type { ChatRequest } from "../transport/chat.js";
 import type { ModelEvent, TranscriptMessage } from "../types.js";
 import { stdioSpec } from "./mcpfixtures.js";
+import { rmTemp } from "../../../testing/tmp.js";
 
 let dir: string;
 let work: string;
@@ -29,7 +30,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await Promise.all(drivers.splice(0).map((driver) => Effect.runPromise(driver.stopAll()).catch(() => {})));
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmTemp(dir);
 });
 
 const selection = { instanceId: "harness/colab", model: "m" };

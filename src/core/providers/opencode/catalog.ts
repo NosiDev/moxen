@@ -29,6 +29,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 
 import { appHomeDir } from "../../config.js";
+import { resolveOnPath } from "../../infra/process.js";
 import { OPENCODE_DEFAULT_BINARY } from "./config.js";
 
 export const MODELS_DEV_DEFAULT_URL = "https://models.opencode.ai";
@@ -271,10 +272,13 @@ export type AuthListRunner = (binary: string, env: NodeJS.ProcessEnv) => Promise
 function defaultAuthListRunner(binary: string, env: NodeJS.ProcessEnv): Promise<string | null> {
   return new Promise((resolve) => {
     try {
+      // A Windows `.cmd` shim (npm installs one) cannot be started directly, only through the shell.
+      const file = process.platform === "win32" && !/[\\/]/.test(binary) ? (resolveOnPath(binary, env) ?? binary) : binary;
+      const shim = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(file);
       const child = execFile(
-        binary,
+        shim ? `"${file}"` : file,
         ["auth", "list", "--format", "json", "--standalone"],
-        { env, encoding: "utf8", timeout: AUTH_LIST_TIMEOUT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
+        { env, encoding: "utf8", timeout: AUTH_LIST_TIMEOUT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024, shell: shim },
         (error, stdout) => resolve(error || typeof stdout !== "string" ? null : stdout),
       );
       child.stdin?.end();

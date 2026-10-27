@@ -8,11 +8,12 @@
  * time, replacing the old version-dependent passthrough).
  * See docs/overview.md.
  */
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
 import { CliError } from "../errors.js";
+import { renameReplacing } from "../infra/atomic.js";
 import type {
   EffectiveThreadEnvMode,
   ModelSelection,
@@ -96,7 +97,7 @@ async function saveAll(root: string, projects: ReadonlyArray<StoredProject>): Pr
     const file = registryFile(root);
     const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
     await writeFile(tmp, JSON.stringify({ version: 1, projects }, null, 2));
-    await rename(tmp, file);
+    await renameReplacing(tmp, file);
   } catch (cause) {
     throw new CliError("STORE_WRITE_FAILED", `Could not write the projects registry at ${registryFile(root)}.`, {
       cause,

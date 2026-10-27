@@ -15,6 +15,7 @@ import { taskOutputTool, taskStopTool } from "../tools/background.js";
 import { ReadState, type ToolContext } from "../tools/types.js";
 import type { ChatRequest } from "../transport/chat.js";
 import type { ModelEvent } from "../types.js";
+import { rmTemp } from "../../../testing/tmp.js";
 
 let dir: string;
 let work: string;
@@ -23,7 +24,7 @@ beforeEach(() => {
   work = path.join(dir, "work");
   fs.mkdirSync(work);
 });
-afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+afterEach(() => rmTemp(dir));
 
 const alive = (pid: number): boolean => {
   try {
@@ -44,6 +45,9 @@ async function gone(pid: number, ms = 6000): Promise<boolean> {
 }
 
 const signal = new AbortController().signal;
+
+/** Prints the pid `process.kill` knows: Git Bash's `$$` is an MSYS pid, and its Windows one is in `/proc`. */
+const PRINT_PID = process.platform === "win32" ? "cat /proc/$$/winpid" : "echo $$";
 
 describe("BackgroundShells", () => {
   const make = () => {
@@ -70,7 +74,7 @@ describe("BackgroundShells", () => {
 
   it("stops the process it spawned and its children, and does not signal anything once it has ended", async () => {
     const { shells } = make();
-    const task = start(shells, "echo $$; (sleep 60 &) ; exec sleep 60");
+    const task = start(shells, `${PRINT_PID}; (sleep 60 &) ; exec sleep 60`);
     const pid = Number((await shells.read(task.id, { waitMs: 5000, signal }))!.output.trim());
     expect(alive(pid)).toBe(true);
     await expect(shells.stop(task.id)).resolves.toBe(true);
@@ -81,7 +85,7 @@ describe("BackgroundShells", () => {
 
   it("ends every running command with the session and starts nothing after, and caps how many run at once", async () => {
     const { shells } = make();
-    const tasks = Array.from({ length: MAX_RUNNING }, () => start(shells, "echo $$; exec sleep 60"));
+    const tasks = Array.from({ length: MAX_RUNNING }, () => start(shells, `${PRINT_PID}; exec sleep 60`));
     expect(() => start(shells, "true")).toThrow(/already running/);
     const pids = await Promise.all(tasks.map(async (task) => Number((await shells.read(task.id, { waitMs: 5000, signal }))!.output.trim())));
     shells.stopAll();
@@ -145,7 +149,7 @@ describe("HarnessDriver background commands", () => {
 
   it("publishes the task events the tasks panel reads, tells the model when a command ends, and kills what is left when the session stops", async () => {
     const { driver, requests, events } = driverWith([
-      call("c1", "bash", { command: "echo $$; exec sleep 60", description: "sleeper", run_in_background: true }),
+      call("c1", "bash", { command: `${PRINT_PID}; exec sleep 60`, description: "sleeper", run_in_background: true }),
       call("c2", "bash", { command: "echo done", description: "quick", run_in_background: true }),
       say("Both started."),
       say("Noted."),
@@ -156,7 +160,7 @@ describe("HarnessDriver background commands", () => {
     await until(() => events.some((event) => event.type === "background.task" && event.status === "completed"));
     const started = events.filter((event) => event.type === "background.task") as Array<Extract<ProviderRuntimeEvent, { type: "background.task" }>>;
     expect(started[0]).toMatchObject({ status: "started", description: "sleeper", taskType: "local_bash", toolUseId: "c1" });
-    expect(driver.backgroundTasks("t1").map((task) => [task.description, task.toolName, task.command])).toEqual([["sleeper", "bash", "echo $$; exec sleep 60"]]);
+    expect(driver.backgroundTasks("t1").map((task) => [task.description, task.toolName, task.command])).toEqual([["sleeper", "bash", `${PRINT_PID}; exec sleep 60`]]);
     expect(events.some((event) => event.type === "background.tasks.changed" && event.tasks.length === 1 && event.tasks[0]!.taskId === driver.backgroundTasks("t1")[0]!.taskId)).toBe(true);
     // The quick one ended on its own; the model is told before its next request, once.
     const next = await Effect.runPromise(driver.sendTurn({ threadId: "t1", prompt: "again" }));
@@ -165,7 +169,12 @@ describe("HarnessDriver background commands", () => {
     expect(told).toHaveLength(1);
 
     const sleeper = driver.backgroundTasks("t1")[0]!;
-    const output = await driver.backgroundTaskOutput("t1", sleeper.taskId);
+    // Git Bash takes a while to start on Windows, so the pid line may not be there yet.
+    let output = await driver.backgroundTaskOutput("t1", sleeper.taskId);
+    for (let waited = 0; output!.lines.length === 0 && waited < 10_000; waited += 100) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      output = await driver.backgroundTaskOutput("t1", sleeper.taskId);
+    }
     const pid = Number(output!.lines[0]);
     expect(alive(pid)).toBe(true);
     await Effect.runPromise(driver.stopSession("t1"));

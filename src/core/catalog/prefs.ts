@@ -4,9 +4,11 @@
  * Lives in the store root (`model-prefs.json`) so test stores stay
  * hermetic. Reads never throw — listing must degrade, not fail.
  */
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+
+import { renameReplacing } from "../infra/atomic.js";
 
 export interface ModelFavorite {
   readonly instanceId: string;
@@ -92,7 +94,7 @@ export async function saveModelPrefs(storeRoot: string, prefs: ModelPrefs): Prom
   const file = prefsFile(storeRoot);
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   await writeFile(tmp, JSON.stringify(prefs, null, 2));
-  await rename(tmp, file);
+  await renameReplacing(tmp, file);
 }
 
 export function isModelHidden(prefs: ModelPrefs, instanceId: string, slug: string): boolean {

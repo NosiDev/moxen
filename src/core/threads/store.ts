@@ -9,11 +9,12 @@
  * writes are atomic (tmp file + rename). Zero new dependencies.
  * See docs/threads.md.
  */
-import { appendFile, mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import { renameReplacing } from "../infra/atomic.js";
 import { appEnv, appHomeDir } from "../config.js";
 import { CliError } from "../errors.js";
 import type { EventBus } from "../events/bus.js";
@@ -162,7 +163,7 @@ export class ThreadStore {
     const file = this.threadFile(thread.id);
     const tmp = `${file}.tmp.${process.pid}.${this.newId()}`;
     await writeFile(tmp, `${JSON.stringify(thread)}\n`, "utf8");
-    await rename(tmp, file);
+    await renameReplacing(tmp, file);
   }
 
   /**
@@ -258,7 +259,7 @@ export class ThreadStore {
     const file = ledgerFile(this.root, threadId, name);
     const tmp = `${file}.tmp.${process.pid}.${this.newId()}`;
     await writeFile(tmp, rows.map((row) => `${JSON.stringify(row)}\n`).join(""), "utf8");
-    await rename(tmp, file);
+    await renameReplacing(tmp, file);
   }
 
   async appendLedger(threadId: string, name: LedgerName, row: unknown): Promise<void> {
@@ -279,7 +280,7 @@ export class ThreadStore {
     const file = ledgerFile(this.root, threadId, "turns");
     const tmp = `${file}.tmp.${process.pid}.${this.newId()}`;
     await writeFile(tmp, next.map((turn) => JSON.stringify(turn)).join("\n") + "\n", "utf8");
-    await rename(tmp, file);
+    await renameReplacing(tmp, file);
     return updated;
   }
 
@@ -336,7 +337,7 @@ export class ThreadStore {
       const file = this.delegationsFile();
       const tmp = `${file}.tmp.${process.pid}.${this.newId()}`;
       await writeFile(tmp, next.map((row) => JSON.stringify(row)).join("\n") + "\n", "utf8");
-      await rename(tmp, file);
+      await renameReplacing(tmp, file);
       return updated;
     });
   }

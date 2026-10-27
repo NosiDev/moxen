@@ -17,8 +17,8 @@ function binDir(names: string[]): string {
 /** A stub `opencode` whose `auth list --format json` prints `list` (v2 shape). */
 function opencodeBin(list: unknown[]): string {
   const dir = tempDir("moxen-bin-");
-  const file = path.join(dir, "opencode");
-  fs.writeFileSync(file, `#!/bin/sh\necho '${JSON.stringify(list)}'\n`, { mode: 0o755 });
+  if (process.platform === "win32") fs.writeFileSync(path.join(dir, "opencode.cmd"), `@echo off\r\necho ${JSON.stringify(list)}\r\n`);
+  else fs.writeFileSync(path.join(dir, "opencode"), `#!/bin/sh\necho '${JSON.stringify(list)}'\n`, { mode: 0o755 });
   return dir;
 }
 
