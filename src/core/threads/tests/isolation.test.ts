@@ -86,7 +86,7 @@ describe("isolation guard and symlinks", () => {
 });
 
 describe("resolveIsolation", () => {
-  const dir = realpathSync(mkdtempSync(path.join(tmpdir(), "moxen-iso-")));
+  const dir = realpathSync.native(mkdtempSync(path.join(tmpdir(), "moxen-iso-")));
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
   it("finds the checkout a real worktree was cut from, and nothing for a shared one", async () => {
