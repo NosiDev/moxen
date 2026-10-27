@@ -1416,6 +1416,12 @@ export class HarnessDriver implements ProviderAdapter<CliError> {
       parked.resolve({ kind: "answered", answers });
     });
 
+  /** The permission mode takes effect at the next permission check, so a running turn follows it from its next tool call. */
+  readonly setRuntimeMode = (threadId: ThreadId, mode: RuntimeMode): void => {
+    const session = this.sessions.get(threadId);
+    if (session && !session.closed) session.runtimeMode = mode;
+  };
+
   /** Hand the running turn more input: the loop reads it as a user message at its next step. */
   readonly steerTurn = (threadId: ThreadId, text: string, images: readonly ProviderImage[] = []): Effect.Effect<void, CliError> =>
     this.attempt("HARNESS_STEER_FAILED", `Could not steer the turn on thread ${threadId}`, () => {

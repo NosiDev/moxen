@@ -709,6 +709,11 @@ export class DirectConnection implements ClientApi {
         return accepted;
       case "thread.runtime-mode.set":
         await updateThreadMeta(await this.store(), command.threadId, { runtimeMode: command.runtimeMode });
+        // A session that is already open follows it too: a running turn from its next tool call.
+        {
+          const thread = await (await this.store()).readThreadRecord(command.threadId).catch(() => null);
+          if (thread) this.driverFor(thread.modelSelection.instanceId).setRuntimeMode?.(command.threadId, command.runtimeMode);
+        }
         return accepted;
       case "thread.user-input.respond":
         await this.userInputRespond(command.threadId, command.requestId, command.answers);

@@ -98,6 +98,12 @@ export interface TurnDriver extends ProviderSessionTitles {
   contextBreakdown?(threadId: string): Promise<ContextBreakdown | null>;
   steerTurn?(threadId: string, text: string, images?: readonly ProviderImage[]): Effect.Effect<void, CliError>;
   /**
+   * The thread's permission mode, changed while a session is running. The session's next permission check uses it,
+   * so a running turn follows it from its next tool call. Absent where the provider takes the mode only when a
+   * turn starts (Claude Code, OpenCode); a no-op when no session is open.
+   */
+  setRuntimeMode?(threadId: string, mode: RuntimeMode): void;
+  /**
    * The MCP servers this thread should have now, given to a session that is
    * already running (it was started with the set of its day). A no-op when
    * nothing changed. Absent where a session's servers cannot change after it starts.

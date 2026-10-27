@@ -153,6 +153,21 @@ describe("HarnessDriver", () => {
       expect(opened(events)).toHaveLength(2);
     });
 
+    it("follows a permission mode changed mid-turn from the next tool call", async () => {
+      const a = path.join(work, "a.txt");
+      const b = path.join(work, "b.txt");
+      const { driver, events } = driverWith([call("c1", "write", { file_path: a, content: "a\n" }), call("c2", "write", { file_path: b, content: "b\n" }), answer("Done.")]);
+      await start(driver, { runtimeMode: "approval-required" });
+      const { turnId } = await run(driver.sendTurn({ threadId: "t1", prompt: "go" }));
+      await until(events, (event) => event.type === "permission.request.opened");
+      driver.setRuntimeMode("t1", "full-access");
+      await run(driver.respondToRequest("t1", opened(events)[0]!.requestId, { kind: "accept" }));
+      await expect(driver.awaitTurn("t1", turnId)).resolves.toMatchObject({ status: "completed" });
+      // The second write was not asked about.
+      expect(opened(events)).toHaveLength(1);
+      expect(fs.readFileSync(b, "utf8")).toBe("b\n");
+    });
+
     it("lets an interrupt resolve a parked approval and gives the call a result", async () => {
       const file = path.join(work, "a.txt");
       const { driver, events } = driverWith([call("c1", "write", { file_path: file, content: "y" })]);
