@@ -77,6 +77,7 @@ export interface TurnConfig {
   /** Swapped out in tests. */
   readonly transport?: (request: ChatRequest) => AsyncIterable<ModelEvent>;
   readonly sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** A cap on model requests in one turn; absent: none, as with OpenCode and Claude Code. Stop a runaway turn with an interrupt. */
   readonly maxRounds?: number;
   readonly maxAttempts?: number;
   /** Thresholds of the repeat guards; absent: the defaults. */
@@ -104,7 +105,7 @@ export interface TurnResult {
   readonly lastUsage: ModelUsage | null;
 }
 
-const DEFAULT_MAX_ROUNDS = 200;
+const DEFAULT_MAX_ROUNDS = Number.POSITIVE_INFINITY;
 const DEFAULT_MAX_ATTEMPTS = 4;
 
 function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
