@@ -12,7 +12,10 @@ credentials, only whether a login exists.
 - A **turn** is one run of the provider within a thread: prompt in, settled
   outcome out. See [Threads and turns](threads.md).
 - A **project** maps folders to stored defaults (default model and more) in
-  `<storeRoot>/projects.json`.
+  `<storeRoot>/projects.json`. A thread can also start with **no project**
+  (`--no-project` on the CLI, "No project" in the TUI's project picker): it
+  runs in its own folder, `<storeRoot>/scratch/<thread id>/`, under one
+  shared "No project" entry, and deleting the thread deletes the folder.
 - Delegated work runs in a **worktree**: its own git checkout, so an agent
   works on its own copy of the code. Its branch is `moxen/<title>`.
   Archiving or deleting the thread removes the checkout (gitignored build

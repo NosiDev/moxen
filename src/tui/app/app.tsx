@@ -113,7 +113,7 @@ import { useContextBreakdown, usePlanUsage, useSidePanel } from "../features/sid
 import { agentThreads, effectiveContextBreakdown, nativeSubagents, planUsageGauges, type SideTab } from "../model/sidepanel.js";
 import { useComposer } from "../features/composer/useComposer.js";
 import { useProviderCatalog } from "../features/pickers/useProviderCatalog.js";
-import { useThreadCreation } from "./hooks/useThreadCreation.js";
+import { NO_PROJECT, useThreadCreation } from "./hooks/useThreadCreation.js";
 import { useThreadExport } from "./hooks/useThreadExport.js";
 import { useThreadOps, type RevertKind } from "./hooks/useThreadOps.js";
 import type { PickerName } from "../features/pickers/pickerTypes.js";
@@ -1234,8 +1234,13 @@ export function App({
       width: toastWidth,
     };
   }, [chatWidth, diffPanel.diffWidth, sidePanelOpen]);
+  const draftingWithoutProject =
+    effectiveProjectId === NO_PROJECT ||
+    shell.projects.some((project) => project.id === effectiveProjectId && project.scratch === true);
   const projectTitle =
-    shell.projects.find((project) => project.id === effectiveProjectId)?.title ?? "this project";
+    effectiveProjectId === NO_PROJECT
+      ? "no project"
+      : (shell.projects.find((project) => project.id === effectiveProjectId)?.title ?? "this project");
 
   /** "Resume with less context" — same trigger as the desktop banner: a
       Claude snapshot holding >= 100k tokens that hasn't refreshed in >= 70
@@ -1839,7 +1844,16 @@ export function App({
                   setPicker("project-new");
                 },
               },
-              ...shell.projects.map((project) => {
+              {
+                key: "project:none",
+                label: "No project",
+                meta: "scratch folder",
+                selected:
+                  effectiveProjectId === NO_PROJECT ||
+                  shell.projects.some((project) => project.id === effectiveProjectId && project.scratch === true),
+                onPick: () => pickCreatingProject(NO_PROJECT),
+              },
+              ...shell.projects.filter((project) => project.scratch !== true).map((project) => {
                 const root = typeof project.workspaceRoot === "string" ? project.workspaceRoot : "";
                 const shortRoot = root.replace(/\\/g, "/").split("/").pop() ?? null;
                 return {
@@ -2277,14 +2291,20 @@ export function App({
               }}
             >
               <box style={{ flexDirection: "row", height: 1, flexShrink: 0, justifyContent: "center" }}>
-                <text fg={COLOR.bright} selectable={false} onMouseDown={openProjectPicker}>{`What should we build in `}</text>
-                <text
-                  fg={COLOR.bright}
-                  attributes={TextAttributes.BOLD | TextAttributes.UNDERLINE}
-                  selectable={false}
-                  onMouseDown={openProjectPicker}
-                >{projectTitle}</text>
-                <text fg={COLOR.bright} selectable={false} onMouseDown={openProjectPicker}>{"?"}</text>
+                {draftingWithoutProject ? (
+                  <text fg={COLOR.bright} selectable={false} onMouseDown={openProjectPicker}>{"What should we build?"}</text>
+                ) : (
+                  <>
+                    <text fg={COLOR.bright} selectable={false} onMouseDown={openProjectPicker}>{`What should we build in `}</text>
+                    <text
+                      fg={COLOR.bright}
+                      attributes={TextAttributes.BOLD | TextAttributes.UNDERLINE}
+                      selectable={false}
+                      onMouseDown={openProjectPicker}
+                    >{projectTitle}</text>
+                    <text fg={COLOR.bright} selectable={false} onMouseDown={openProjectPicker}>{"?"}</text>
+                  </>
+                )}
               </box>
               {requestPanelVisible ? (
                 renderRequestPanel(Math.min(76, Math.max(40, width - SIDEBAR_WIDTH - 8)))
@@ -2320,7 +2340,9 @@ export function App({
               />
               )}
               <box style={{ flexDirection: "row", height: 1, flexShrink: 0, justifyContent: "center", marginTop: 1 }}>
-                <text fg={COLOR.faint} selectable={false}>{"enter creates · click project to change · esc cancels"}</text>
+                <text fg={COLOR.faint} selectable={false}>{draftingWithoutProject
+                  ? "enter creates · click title to pick a project · esc cancels"
+                  : "enter creates · click project to change or go without · esc cancels"}</text>
               </box>
             </box>
           </box>

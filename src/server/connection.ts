@@ -17,6 +17,7 @@
  *   `server.getConfig` payload shape, so `extractProviders` (and the
  *   effort picker) works unmodified.
  */
+import { randomUUID } from "node:crypto";
 import { discoverModels } from "../core/providers/harness/discover.js";
 import { primeProfileKey } from "../core/providers/harness/profiles.js";
 import { exportProfileDocument, freeProfileId, parseProfileDocument } from "../core/providers/harness/profileio.js";
@@ -62,6 +63,7 @@ import { noteMessageId } from "../core/threads/views.js";
 import { driverProviders } from "../core/threads/longthreads.js";
 import type { McpServerSpec } from "../core/mcp.js";
 import { ensureStoredProject, listStoredProjects } from "../core/projects/projects.js";
+import { createScratchDir, ensureScratchProject, removeScratchDir } from "../core/projects/scratch.js";
 import { diffCheckpointRange, diffCheckpointStat } from "../core/checkpoints/git.js";
 import { CliError } from "../core/errors.js";
 import {
@@ -698,7 +700,11 @@ export class DirectConnection implements ClientApi {
         await this.freeWorktree(await archiveThread(await this.store(), command.threadId));
         return accepted;
       case "thread.delete":
-        await this.freeWorktree(await deleteThread(await this.store(), command.threadId));
+        {
+          const deleted = await deleteThread(await this.store(), command.threadId);
+          await this.freeWorktree(deleted);
+          await removeScratchDir(this.storeRoot, deleted.env.path).catch(() => false);
+        }
         return accepted;
       case "thread.meta.update":
         if (command.title !== undefined) await retitleThread(await this.context(), command.threadId, { title: command.title });
@@ -918,9 +924,10 @@ export class DirectConnection implements ClientApi {
 
   private async threadCreate(command: CommandOf<"thread.create">): Promise<CommandResult<"thread.create">> {
     const { store, config } = await this.context();
-    const { projectId } = command;
+    const scratch = command.scratch === true;
+    const projectId = scratch ? (await ensureScratchProject(this.storeRoot)).id : command.projectId;
     const project = (await listStoredProjects(this.storeRoot)).find((candidate) => candidate.id === projectId);
-    if (!project) {
+    if (!project || projectId === undefined) {
       throw new CliError("PROJECT_NOT_FOUND", `No project exists with id ${projectId}.`, {
         exitCode: 3,
         details: { projectId },
@@ -931,14 +938,19 @@ export class DirectConnection implements ClientApi {
     const modelSelection =
       command.modelSelection ??
       resolveModelSelection(project.defaultModelSelection, config, { prompt: "" });
+    const threadId = command.threadId ?? randomUUID();
     const created = await createThread(store, {
-      ...(command.threadId ? { id: command.threadId } : {}),
+      id: threadId,
       projectId,
       title: command.title ?? "New thread",
       modelSelection,
       runtimeMode: command.runtimeMode ?? defaultRuntimeMode(config, modelSelection.instanceId),
       interactionMode: command.interactionMode ?? config.interactionMode,
-      env: { mode: "local", path: project.workspaceRoot, branch: command.branch ?? null },
+      env: {
+        mode: "local",
+        path: scratch ? await createScratchDir(this.storeRoot, threadId) : project.workspaceRoot,
+        branch: scratch ? null : (command.branch ?? null),
+      },
     });
     return { threadId: created.id, accepted: true };
   }

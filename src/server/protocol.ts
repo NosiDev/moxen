@@ -119,7 +119,10 @@ export type CommandBody =
   | { readonly type: "project.create"; readonly workspaceRoot: string; readonly projectId?: string; readonly title?: string }
   | {
       readonly type: "thread.create";
-      readonly projectId: string;
+      /** Required unless `scratch` is set. */
+      readonly projectId?: string;
+      /** Start in a fresh directory of its own, under no project (`core/projects/scratch.ts`). */
+      readonly scratch?: boolean;
       readonly threadId?: string;
       readonly title?: string;
       readonly modelSelection?: ModelSelection;
@@ -712,14 +715,16 @@ export function decodeCommand(value: unknown): Command {
       };
     case "thread.create": {
       const projectId = asString(record.projectId);
-      if (projectId === null) {
+      const scratch = record.scratch === true;
+      if (projectId === null && !scratch) {
         throw new CliError("PROJECT_ID_REQUIRED", "thread.create requires projectId.", { exitCode: 2 });
       }
       const selection = asModelSelection(record.modelSelection);
       return {
         ...meta,
         type,
-        projectId,
+        ...(projectId !== null && !scratch ? { projectId } : {}),
+        ...(scratch ? { scratch: true } : {}),
         ...(asString(record.threadId) ? { threadId: asString(record.threadId) as string } : {}),
         ...(asString(record.title) ? { title: asString(record.title) as string } : {}),
         ...(selection ? { modelSelection: selection } : {}),
@@ -864,6 +869,7 @@ export function decodeCommand(value: unknown): Command {
         ...optionalEnum(record, "interactionMode", ["default", "plan"] as const, type),
         ...decodeModelRequest(record, type),
         ...optionalBoolean(record, "dryRun"),
+        ...optionalBoolean(record, "scratch"),
         ...optionalBoolean(record, "wait"),
       };
     case "thread.delegate":

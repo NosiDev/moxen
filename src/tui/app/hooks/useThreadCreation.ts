@@ -8,6 +8,9 @@ import type { ClientApi } from "../../../server/api.js";
 import type { PickerName } from "../../features/pickers/pickerTypes.js";
 import { threadTitle } from "../utils.js";
 
+/** The draft's project when "No project" is picked: the server starts the thread in a scratch directory. */
+export const NO_PROJECT = "__no-project__";
+
 /**
  * New-thread draft flow: handlers for starting a draft, picking or creating
  * its target project, and sending it as `thread.create` + `thread.turn.start`.
@@ -101,15 +104,16 @@ export function useThreadCreation(params: {
       const modelSelection = creatingModelSelection ?? source?.modelSelection;
       // Left out when nothing chose one: the server starts the thread in its provider's default mode.
       const runtimeMode = creatingRuntimeMode ?? source?.runtimeMode;
+      const scratch = projectId === NO_PROJECT || shellProjects.some((p) => p.id === projectId && p.scratch === true);
       const create = {
         type: "thread.create",
         threadId,
-        projectId,
+        ...(scratch ? { scratch: true } : { projectId }),
         title,
         ...(modelSelection === undefined ? {} : { modelSelection }),
         ...(runtimeMode === undefined ? {} : { runtimeMode }),
         interactionMode,
-        branch: source?.branch ?? null,
+        ...(scratch ? {} : { branch: source?.branch ?? null }),
       } as const;
       const start = {
         type: "thread.turn.start",

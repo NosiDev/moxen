@@ -31,6 +31,8 @@ export type StoredProject = {
   readonly workspaceRoot: string;
   readonly defaultModelSelection: ModelSelection | null;
   readonly defaultThreadEnvMode?: EffectiveThreadEnvMode | null;
+  /** The one shared "No project" entry that threads started without a folder live under (`./scratch.ts`). */
+  readonly scratch?: true;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly deletedAt: string | null;
@@ -122,6 +124,7 @@ export interface EnsureProjectInput {
   readonly title?: string;
   readonly defaultModelSelection?: ModelSelection | null;
   readonly defaultThreadEnvMode?: EffectiveThreadEnvMode | null;
+  readonly scratch?: true;
   readonly now?: () => string;
 }
 
@@ -186,6 +189,7 @@ export async function ensureStoredProject(root: string, input: EnsureProjectInpu
     workspaceRoot: normalized,
     defaultModelSelection: input.defaultModelSelection ?? null,
     ...(input.defaultThreadEnvMode !== undefined ? { defaultThreadEnvMode: input.defaultThreadEnvMode } : {}),
+    ...(input.scratch ? { scratch: true as const } : {}),
     createdAt,
     updatedAt: createdAt,
     deletedAt: null,

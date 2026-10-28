@@ -37,6 +37,8 @@ export interface ThreadCreateOptions extends WorkspaceOptions {
   runtimeMode?: RuntimeMode;
   interactionMode?: InteractionMode;
   dryRun?: boolean;
+  /** No project: a fresh scratch folder instead of `cwd`. */
+  scratch?: boolean;
   drivers?: TurnDriverFactories;
   /** Return at acceptance; otherwise block until the first turn settles. */
   noWait?: boolean;
@@ -58,6 +60,7 @@ export async function createHandoverThread(config: CliConfig, options: ThreadCre
     ...(options.speedMode !== undefined ? { speedMode: options.speedMode } : {}),
     ...(options.thinkingEffort !== undefined ? { thinkingEffort: options.thinkingEffort } : {}),
     ...(options.dryRun !== undefined ? { dryRun: options.dryRun } : {}),
+    ...(options.scratch ? { scratch: true } : {}),
   });
   const { started } = result;
   // Ctrl-C interrupts the first turn but keeps the created thread.

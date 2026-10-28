@@ -170,6 +170,7 @@ function addThreadOptions(command: Command): Command {
       new Option("--mode, --interaction-mode <mode>", "Build/default or Plan mode.")
         .choices(["default", "build", "plan"]),
     )
+    .option("--no-project", "Start without a project, in a fresh scratch folder.")
     .option("--dry-run", "Resolve and print commands without dispatching them.")
     .option("--no-wait", "Return at turn acceptance without waiting for the provider run to settle.");
 }
@@ -292,6 +293,8 @@ interface ThreadCommandOptions extends WorkspaceCommandOptions {
   envMode?: ThreadEnvMode | "current";
   runtimeMode?: RuntimeMode;
   interactionMode?: InteractionMode | "build";
+  /** Commander stores `--no-project` as `project: false`. */
+  project?: boolean;
   provider?: string;
   model?: string;
   speedMode?: SpeedMode;
@@ -351,6 +354,7 @@ function threadCreateOptions(options: ThreadCommandOptions, prompt: string): Thr
     ...(options.model ? { model: options.model } : {}),
     ...(options.speedMode ? { speedMode: options.speedMode } : {}),
     ...(options.thinkingEffort ? { thinkingEffort: options.thinkingEffort } : {}),
+    ...(options.project === false ? { scratch: true } : {}),
     ...(options.dryRun ? { dryRun: true } : {}),
     ...(options.wait === false ? { noWait: true } : {}),
   };
@@ -792,7 +796,7 @@ projects.command("list").action(() =>
   action(async () => {
     const context = await commandContext();
     const result = await listProjects(context.config);
-    const lines = result.projects.map((project) => `${project.id}\t${project.workspaceRoot}\t${project.title}`);
+    const lines = result.projects.filter((project) => project.scratch !== true).map((project) => `${project.id}\t${project.workspaceRoot}\t${project.title}`);
     writeSuccess(result, context, lines.length > 0 ? lines.join("\n") : "No active projects.");
   }),
 );

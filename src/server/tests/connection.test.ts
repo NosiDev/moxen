@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -262,6 +263,34 @@ describe("DirectConnection parked tool approvals", () => {
       const done = await readThread(harness.store, "thread-p");
       return done.turns[0]?.status === "completed";
     });
+  });
+});
+
+describe("DirectConnection scratch threads", () => {
+  it("runs a project-less thread in its own folder and removes the folder with the thread", async () => {
+    const harness = await testHarness();
+    const connection = new DirectConnection({ storeRoot: harness.root, drivers: harness.drivers });
+    try {
+      const { threadId } = (await connection.dispatch({
+        type: "thread.create",
+        commandId: "c-s",
+        threadId: "thread-scratch",
+        scratch: true,
+        title: "Loose",
+        modelSelection: { instanceId: "opencode", model: "gpt-5.4" },
+      })) as { threadId: string };
+      const thread = await harness.store.readThreadRecord(threadId);
+      expect(thread?.env.path).toBe(path.join(harness.root, "scratch", "thread-scratch"));
+      expect(existsSync(thread!.env.path)).toBe(true);
+      const { projects } = await connection.query({ type: "projects.list" });
+      expect(projects.filter((project) => project.scratch === true).map((project) => project.title)).toEqual(["No project"]);
+      expect(thread?.projectId).toBe(projects.find((project) => project.scratch === true)?.id);
+
+      await connection.dispatch({ type: "thread.delete", commandId: "c-sd", threadId });
+      expect(existsSync(thread!.env.path)).toBe(false);
+    } finally {
+      await connection.close();
+    }
   });
 });
 

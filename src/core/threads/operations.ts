@@ -43,6 +43,7 @@ import {
   resolveStoredProject,
   type StoredProject,
 } from "../projects/projects.js";
+import { createScratchDir, ensureScratchProject, scratchDirFor, scratchRoot } from "../projects/scratch.js";
 import { resolveWorkspace } from "../projects/workspace.js";
 import type {
   CliConfig,
@@ -1203,6 +1204,8 @@ export interface HandoverRequest extends WorkspaceQuery, ModelRequest {
   readonly runtimeMode?: RuntimeMode;
   readonly interactionMode?: InteractionMode;
   readonly dryRun?: boolean;
+  /** No project: run in a fresh directory of its own (`core/projects/scratch.ts`); `cwd` is ignored. */
+  readonly scratch?: boolean;
 }
 
 export interface HandoverSettings {
@@ -1247,12 +1250,27 @@ export async function handover(ctx: OperationContext, request: HandoverRequest):
   if (!prompt) throw new CliError("PROMPT_REQUIRED", "A non-empty handover prompt is required.");
   const { config } = ctx;
   const dryRun = request.dryRun === true;
-  const workspace = await resolveWorkspace(request.cwd, request.workspaceMode ?? config.workspaceMode);
-  const fileMode = await projectFileEnvMode(workspace.workspaceRoot);
-  const ensured = await ensureProjectFor(ctx, workspace, request.projectPolicy ?? config.projectPolicy, dryRun);
+  const scratch = request.scratch === true;
+  const threadId = randomUUID();
+  const scratchDir = scratchDirFor(ctx.storeRoot, threadId);
+  const workspace: WorkspaceResolution = scratch
+    ? { inputPath: scratchDir, workspaceRoot: scratchDir, mode: "folder", isGitRepository: false, branch: null }
+    : await resolveWorkspace(request.cwd, request.workspaceMode ?? config.workspaceMode);
+  const fileMode = scratch ? null : await projectFileEnvMode(workspace.workspaceRoot);
+  const ensured: { project: StoredProject; created: boolean; command: ProjectCommand | null } = scratch
+    ? {
+        project: dryRun
+          ? ((await resolveStoredProject(ctx.storeRoot, scratchRoot(ctx.storeRoot))) ??
+            previewProject(scratchRoot(ctx.storeRoot)).project)
+          : await ensureScratchProject(ctx.storeRoot),
+        created: false,
+        command: null,
+      }
+    : await ensureProjectFor(ctx, workspace, request.projectPolicy ?? config.projectPolicy, dryRun);
   const { project } = ensured;
 
-  const globalDefault: EffectiveThreadEnvMode = config.threadEnvMode === "auto" ? "local" : config.threadEnvMode;
+  const globalDefault: EffectiveThreadEnvMode =
+    scratch || config.threadEnvMode === "auto" ? "local" : config.threadEnvMode;
   const projectMode = asEffectiveThreadEnvMode(project.defaultThreadEnvMode);
   const requestMode =
     request.threadEnvMode !== undefined && request.threadEnvMode !== "auto" ? request.threadEnvMode : undefined;
@@ -1281,7 +1299,6 @@ export async function handover(ctx: OperationContext, request: HandoverRequest):
     threadEnvModeSource: envResolution.source,
   };
 
-  const threadId = randomUUID();
   const modelSelection = resolveModelSelection(project.defaultModelSelection, config, {
     prompt,
     ...(request.provider !== undefined ? { provider: request.provider } : {}),
@@ -1342,6 +1359,7 @@ export async function handover(ctx: OperationContext, request: HandoverRequest):
     await removeWorktree();
     throw cause;
   }
+  if (scratch) await createScratchDir(ctx.storeRoot, threadId);
   const created = await createThread(ctx.store, {
     id: threadId,
     projectId: project.id,
